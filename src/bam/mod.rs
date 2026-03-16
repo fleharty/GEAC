@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use rust_htslib::bam::{self, Read};
+use rust_htslib::bam::pileup::Indel;
 use rust_htslib::faidx;
 
 use crate::cli::CollectArgs;
@@ -80,6 +81,7 @@ pub fn collect_alt_bases(args: &CollectArgs) -> Result<Vec<AltBase>> {
         let rev_ref_count = ref_tally.map_or(0, |t| t.rev);
         let overlap_ref_agree = ref_tally.map_or(0, |t| t.overlap_alt_agree);
 
+        // ── SNV records ───────────────────────────────────────────────────────
         for (base, tally) in &bases {
             if *base == ref_base || *base == 'N' {
                 continue;
@@ -109,6 +111,44 @@ pub fn collect_alt_bases(args: &CollectArgs) -> Result<Vec<AltBase>> {
                 overlap_depth,
                 overlap_alt_agree: tally.overlap_alt_agree,
                 overlap_alt_disagree: tally.overlap_alt_disagree,
+                overlap_ref_agree,
+                read_type: args.read_type,
+                pipeline: args.pipeline,
+                variant_called: None,
+                variant_filter: None,
+            });
+        }
+
+        // ── Indel records ─────────────────────────────────────────────────────
+        let indels = tally_indels(&pileup, pos, ref_cache.current_seq(), args.min_map_qual);
+
+        for (_, indel) in &indels {
+            if indel.total == 0 {
+                continue;
+            }
+
+            progress.alt_bases_found.fetch_add(1, Ordering::Relaxed);
+
+            records.push(AltBase {
+                sample_id: sample_id.clone(),
+                chrom: chrom.clone(),
+                pos,
+                ref_allele: indel.ref_allele.clone(),
+                alt_allele: indel.alt_allele.clone(),
+                variant_type: indel.variant_type,
+                total_depth,
+                alt_count: indel.total,
+                ref_count,
+                fwd_depth,
+                rev_depth,
+                fwd_alt_count: indel.fwd,
+                rev_alt_count: indel.rev,
+                fwd_ref_count,
+                rev_ref_count,
+                // TODO: overlap detection for indels
+                overlap_depth: 0,
+                overlap_alt_agree: 0,
+                overlap_alt_disagree: 0,
                 overlap_ref_agree,
                 read_type: args.read_type,
                 pipeline: args.pipeline,
@@ -224,10 +264,8 @@ fn tally_pileup(
                 if *is_rev2 { t2.rev += 1; } else { t2.fwd += 1; }
 
                 if base1 == base2 {
-                    // Both reads agree on this base
                     bases.entry(*base1).or_default().overlap_alt_agree += 1;
                 } else {
-                    // Reads disagree — flag both bases as discordant
                     bases.entry(*base1).or_default().overlap_alt_disagree += 1;
                     bases.entry(*base2).or_default().overlap_alt_disagree += 1;
                 }
@@ -247,6 +285,118 @@ fn tally_pileup(
     }
 
     PileupResult { bases, total_depth, fwd_depth, rev_depth, overlap_depth }
+}
+
+// ── Indel tallying ────────────────────────────────────────────────────────────
+
+/// Per-indel-allele tally at a pileup position.
+struct IndelCount {
+    ref_allele: String,
+    alt_allele: String,
+    variant_type: VariantType,
+    total: i32,
+    fwd: i32,
+    rev: i32,
+}
+
+/// Tally indel alleles at a pileup column.
+///
+/// Insertions and deletions are detected via `alignment.indel()`:
+/// - `Indel::Ins(len)`: insertion of `len` bases after the current position.
+///   The inserted sequence is read from the query at `[qpos+1, qpos+1+len)`.
+/// - `Indel::Del(len)`: deletion of `len` bases starting at the next reference position.
+///   The deleted sequence is read from `chrom_seq` at `[pos+1, pos+1+len)`.
+///
+/// Both types are anchored at the current pileup position `pos`.
+/// Overlap detection for indels is not yet implemented.
+fn tally_indels(
+    pileup: &rust_htslib::bam::pileup::Pileup,
+    pos: i64,
+    chrom_seq: &[u8],
+    min_map_qual: u8,
+) -> HashMap<String, IndelCount> {
+    let mut indels: HashMap<String, IndelCount> = HashMap::new();
+
+    for alignment in pileup.alignments() {
+        if alignment.is_refskip() {
+            continue;
+        }
+
+        let record = alignment.record();
+        if record.mapq() < min_map_qual {
+            continue;
+        }
+
+        match alignment.indel() {
+            Indel::Ins(len) => {
+                let qpos = match alignment.qpos() {
+                    Some(p) => p,
+                    None => continue,
+                };
+
+                // Read inserted bases from query sequence
+                let seq = record.seq();
+                let len = len as usize;
+                if qpos + len >= seq.len() {
+                    continue; // insertion extends past end of read
+                }
+                let inserted: String = (1..=len)
+                    .map(|i| seq[qpos + i].to_ascii_uppercase() as char)
+                    .collect();
+
+                let alt_allele = format!("+{inserted}");
+                let ref_allele = chrom_seq
+                    .get(pos as usize)
+                    .map(|&b| (b as char).to_string())
+                    .unwrap_or_default();
+
+                let entry = indels.entry(alt_allele.clone()).or_insert_with(|| IndelCount {
+                    ref_allele,
+                    alt_allele,
+                    variant_type: VariantType::Insertion,
+                    total: 0,
+                    fwd: 0,
+                    rev: 0,
+                });
+                entry.total += 1;
+                if record.is_reverse() { entry.rev += 1; } else { entry.fwd += 1; }
+            }
+
+            Indel::Del(len) => {
+                // Deleted sequence starts at the next reference position
+                let start = pos as usize + 1;
+                let end = start + len as usize;
+                let deleted: String = chrom_seq
+                    .get(start..end)
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|&b| b as char)
+                    .collect();
+
+                if deleted.len() != len as usize {
+                    continue; // deletion extends past end of cached sequence, skip
+                }
+
+                let alt_allele = format!("-{deleted}");
+                let ref_allele = deleted.clone();
+
+                let entry = indels.entry(alt_allele.clone()).or_insert_with(|| IndelCount {
+                    ref_allele,
+                    alt_allele,
+                    variant_type: VariantType::Deletion,
+                    total: 0,
+                    fwd: 0,
+                    rev: 0,
+                });
+                entry.total += 1;
+                if record.is_reverse() { entry.rev += 1; } else { entry.fwd += 1; }
+            }
+
+            Indel::None => {}
+        }
+    }
+
+    indels
 }
 
 // ── Reference cache ───────────────────────────────────────────────────────────
@@ -302,6 +452,12 @@ impl RefCache {
             .unwrap_or('N');
 
         Ok((self.current_chrom.clone(), base))
+    }
+
+    /// Returns the cached sequence for the current chromosome.
+    /// Must be called after `get()` has loaded the chromosome.
+    fn current_seq(&self) -> &[u8] {
+        &self.current_seq
     }
 }
 
