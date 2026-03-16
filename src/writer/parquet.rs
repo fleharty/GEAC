@@ -44,13 +44,17 @@ fn alt_base_schema() -> Arc<Schema> {
         Field::new("variant_type", DataType::Utf8, false),
         Field::new("total_depth", DataType::Int32, false),
         Field::new("alt_count", DataType::Int32, false),
+        Field::new("ref_count", DataType::Int32, false),
         Field::new("fwd_depth", DataType::Int32, false),
         Field::new("rev_depth", DataType::Int32, false),
         Field::new("fwd_alt_count", DataType::Int32, false),
         Field::new("rev_alt_count", DataType::Int32, false),
+        Field::new("fwd_ref_count", DataType::Int32, false),
+        Field::new("rev_ref_count", DataType::Int32, false),
         Field::new("overlap_depth", DataType::Int32, false),
         Field::new("overlap_alt_agree", DataType::Int32, false),
         Field::new("overlap_alt_disagree", DataType::Int32, false),
+        Field::new("overlap_ref_agree", DataType::Int32, false),
         Field::new("read_type", DataType::Utf8, false),
         Field::new("pipeline", DataType::Utf8, false),
         Field::new("variant_called", DataType::Boolean, true),
@@ -67,13 +71,17 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
     let variant_type: ArrayRef = Arc::new(StringArray::from_iter_values(records.iter().map(|r| r.variant_type.to_string())));
     let total_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.total_depth)));
     let alt_count: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.alt_count)));
+    let ref_count: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.ref_count)));
     let fwd_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.fwd_depth)));
     let rev_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.rev_depth)));
     let fwd_alt_count: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.fwd_alt_count)));
     let rev_alt_count: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.rev_alt_count)));
+    let fwd_ref_count: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.fwd_ref_count)));
+    let rev_ref_count: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.rev_ref_count)));
     let overlap_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.overlap_depth)));
     let overlap_alt_agree: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.overlap_alt_agree)));
     let overlap_alt_disagree: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.overlap_alt_disagree)));
+    let overlap_ref_agree: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.overlap_ref_agree)));
     let read_type: ArrayRef = Arc::new(StringArray::from_iter_values(records.iter().map(|r| r.read_type.to_string())));
     let pipeline: ArrayRef = Arc::new(StringArray::from_iter_values(records.iter().map(|r| r.pipeline.to_string())));
     let variant_called: ArrayRef = Arc::new(BooleanArray::from(
@@ -87,8 +95,9 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
         schema,
         vec![
             sample_id, chrom, pos, ref_allele, alt_allele, variant_type,
-            total_depth, alt_count, fwd_depth, rev_depth, fwd_alt_count, rev_alt_count,
-            overlap_depth, overlap_alt_agree, overlap_alt_disagree,
+            total_depth, alt_count, ref_count,
+            fwd_depth, rev_depth, fwd_alt_count, rev_alt_count, fwd_ref_count, rev_ref_count,
+            overlap_depth, overlap_alt_agree, overlap_alt_disagree, overlap_ref_agree,
             read_type, pipeline, variant_called, variant_filter,
         ],
     )

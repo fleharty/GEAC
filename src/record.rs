@@ -74,20 +74,25 @@ pub struct AltBase {
     // Depth & alt support
     pub total_depth: i32,
     pub alt_count: i32,
+    pub ref_count: i32,
 
     // Strand breakdown
     pub fwd_depth: i32,
     pub rev_depth: i32,
     pub fwd_alt_count: i32,
     pub rev_alt_count: i32,
+    pub fwd_ref_count: i32,
+    pub rev_ref_count: i32,
 
     // Fragment overlap
-    /// Reads at this position that belong to overlapping read pairs
+    /// Number of overlapping fragment pairs at this position
     pub overlap_depth: i32,
     /// Overlapping pairs where both reads support the alt
     pub overlap_alt_agree: i32,
     /// Overlapping pairs where reads disagree (one alt, one ref or other)
     pub overlap_alt_disagree: i32,
+    /// Overlapping pairs where both reads support the ref
+    pub overlap_ref_agree: i32,
 
     // Provenance
     pub read_type: ReadType,

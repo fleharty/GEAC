@@ -73,6 +73,13 @@ pub fn collect_alt_bases(args: &CollectArgs) -> Result<Vec<AltBase>> {
             continue;
         }
 
+        // Extract ref base counts once for use in every alt record at this locus
+        let ref_tally = bases.get(&ref_base);
+        let ref_count = ref_tally.map_or(0, |t| t.total);
+        let fwd_ref_count = ref_tally.map_or(0, |t| t.fwd);
+        let rev_ref_count = ref_tally.map_or(0, |t| t.rev);
+        let overlap_ref_agree = ref_tally.map_or(0, |t| t.overlap_alt_agree);
+
         for (base, tally) in &bases {
             if *base == ref_base || *base == 'N' {
                 continue;
@@ -92,13 +99,17 @@ pub fn collect_alt_bases(args: &CollectArgs) -> Result<Vec<AltBase>> {
                 variant_type: VariantType::Snv,
                 total_depth,
                 alt_count: tally.total,
+                ref_count,
                 fwd_depth,
                 rev_depth,
                 fwd_alt_count: tally.fwd,
                 rev_alt_count: tally.rev,
+                fwd_ref_count,
+                rev_ref_count,
                 overlap_depth,
                 overlap_alt_agree: tally.overlap_alt_agree,
                 overlap_alt_disagree: tally.overlap_alt_disagree,
+                overlap_ref_agree,
                 read_type: args.read_type,
                 pipeline: args.pipeline,
                 variant_called: None,
