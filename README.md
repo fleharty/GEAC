@@ -4,22 +4,20 @@ Collect alt base metrics from duplex/simplex BAM/CRAM files across a sequencing 
 Each sample is processed independently into a Parquet file; samples can then be merged
 into a DuckDB database for cohort-level queries.
 
-## Explorer UI
+## Overview
 
-An interactive web app for browsing and visualising alt base data:
+GEAC is a Rust command-line tool designed for large-scale sequencing cohorts (thousands
+of samples, ~2 MB panels). It performs pileup-based analysis of consensus-called BAM/CRAM
+files (fgbio, DRAGEN, or raw reads) and records every position where an alt allele is
+observed, along with rich per-locus metrics:
 
-```bash
-conda activate geac
-streamlit run app/geac_explorer.py
-```
+- Forward/reverse strand counts for alt and reference alleles
+- Overlapping fragment pair agreement (mate-overlap concordance)
+- Variant type classification (SNV, insertion, deletion, MNV)
+- Optional VCF annotation — whether a variant was called and its filter status
 
-Then open `http://localhost:8501` in your browser. Enter a Parquet or DuckDB
-file path in the text box to load data. Provides:
-
-- Summary statistics (records, samples, positions, mean VAF)
-- Sidebar filters: chromosome, sample, variant type, VAF range, min alt count
-- Data table (expandable)
-- Tabbed plots: VAF distribution, error spectrum, strand bias, overlap agreement
+Each sample produces a Parquet file (~MB scale). Samples are then merged into a DuckDB
+cohort database for efficient SQL queries across thousands of samples.
 
 ## Setup
 
@@ -32,30 +30,80 @@ cargo build --release
 ```
 
 The setup script:
-1. Creates the `geac` conda environment with `htslib`
-2. Installs conda activate hooks so `LIBRARY_PATH`/`PKG_CONFIG_PATH` are set automatically
+1. Creates the `geac` conda environment with `htslib`, Python dependencies, and Streamlit
+2. Installs conda activate hooks so `LIBRARY_PATH`, `PKG_CONFIG_PATH`, and `RUSTFLAGS`
+   (macOS rpath) are set automatically on `conda activate geac`
 3. Installs or updates Rust via `rustup`
+
+After building, optionally add a shell alias so you can run `geac` from anywhere:
+
+```bash
+echo 'alias geac="/path/to/GEAC/target/release/geac"' >> ~/.zshrc
+source ~/.zshrc
+```
 
 ## Usage
 
 ### Collect — process a single sample
 
+Runs a pileup over the BAM/CRAM and writes one row per alt allele per locus to a Parquet file.
+
 ```bash
 geac collect \
   --input sample.bam \
   --reference hg38.fa \
-  --sample-id SAMPLE_001 \
   --output SAMPLE_001.parquet \
   --read-type duplex \
   --pipeline fgbio
 ```
 
+`--sample-id` is optional. If omitted, the SM tag is read from the BAM `@RG` header line.
+If no SM tag is present, the command exits with an error.
+
 Optional flags:
-- `--vcf calls.vcf.gz` — annotate loci with variant calling status
-- `--min-base-qual 1` — minimum base quality (default: 1)
-- `--min-map-qual 20` — minimum mapping quality (default: 20)
-- `--region chr1:1000-2000` — restrict to a genomic region
-- `--threads 4` — parallel processing
+
+| Flag | Default | Description |
+|---|---|---|
+| `--sample-id` | from SM tag | Override the sample identifier |
+| `--vcf calls.vcf.gz` | — | Annotate loci with variant calling status from a VCF |
+| `--min-base-qual` | 1 | Minimum base quality to count a read |
+| `--min-map-qual` | 20 | Minimum mapping quality |
+| `--region chr1:1-1000` | whole genome | Restrict to a genomic region |
+| `--threads` | 1 | Parallel processing threads |
+| `--progress-interval` | 30 | Seconds between progress reports to stderr |
+
+#### Read types and pipelines
+
+`--read-type`: `duplex` | `simplex` | `raw`
+
+`--pipeline`: `fgbio` | `dragen` | `raw`
+
+These values are stored as metadata in the Parquet file and do not change processing behaviour —
+they allow downstream filtering by sequencing strategy.
+
+#### VCF annotation
+
+When `--vcf` is provided, each alt allele record is annotated with:
+- `variant_called` — `true` if a variant overlapping this locus was called, `false` if the
+  locus was covered but no variant called, `null` if no VCF was provided
+- `variant_filter` — the VCF FILTER value (`PASS`, a filter reason, or `null`)
+
+SNVs are matched exactly by chrom/pos/alt allele. Indels are matched by position only,
+since VCF left-aligned representation differs from GEAC's `+seq`/`-seq` notation.
+
+#### Soft-clipped bases
+
+Soft-clipped bases are **not** counted. `rust-htslib` pileup only yields bases that are
+aligned to the reference at each position; soft clips are excluded by design.
+
+#### Overlap detection
+
+For paired-end reads where the two mates overlap the same locus, GEAC detects the overlap
+by grouping pileup reads at a position by query name. If both mates are present at the
+same locus, the pair is counted in `overlap_depth`. If both agree on the alt allele,
+`overlap_alt_agree` is incremented; if they disagree, `overlap_alt_disagree` is incremented.
+This is an integer count (not boolean) because multiple overlapping pairs can cover the same
+locus in a deep pileup.
 
 ### Merge — combine samples into a cohort DuckDB
 
@@ -63,17 +111,64 @@ Optional flags:
 geac merge --output cohort.duckdb samples/*.parquet
 ```
 
+Creates a DuckDB database with:
+- `alt_bases` — all per-sample alt base records
+- `samples` — one-row-per-sample summary (n_alt_loci, total_alt_reads, n_positions, etc.)
+- Indices on `(chrom, pos)` and `sample_id` for fast queries
+
+The output file must not already exist (use a new path or delete the old file first).
+
 ### Query the cohort (DuckDB)
+
+You can query either a merged DuckDB or raw Parquet files directly.
 
 ```sql
 -- Cohort frequency of each alt allele
 SELECT chrom, pos, ref_allele, alt_allele,
        COUNT(DISTINCT sample_id) AS n_samples,
-       SUM(alt_count) AS total_alt_reads
+       SUM(alt_count)            AS total_alt_reads
 FROM read_parquet('samples/*.parquet')
 GROUP BY chrom, pos, ref_allele, alt_allele
 ORDER BY n_samples DESC;
+
+-- Positions with high strand bias in a specific sample
+SELECT chrom, pos, ref_allele, alt_allele,
+       fwd_alt_count, rev_alt_count,
+       ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+FROM alt_bases
+WHERE sample_id = 'SAMPLE_001'
+  AND (fwd_alt_count = 0 OR rev_alt_count = 0)
+  AND alt_count >= 5;
+
+-- Overlap-discordant alt calls (potential errors)
+SELECT chrom, pos, alt_allele, overlap_alt_disagree, overlap_alt_agree
+FROM alt_bases
+WHERE overlap_alt_disagree > overlap_alt_agree;
 ```
+
+## Explorer UI
+
+An interactive Streamlit web app for browsing and visualising alt base data:
+
+```bash
+conda activate geac
+streamlit run app/geac_explorer.py
+```
+
+Then open `http://localhost:8501` in your browser. Enter a Parquet or DuckDB
+file path in the text box to load data.
+
+Features:
+- **Summary statistics** — record count, sample count, chromosome count, position count,
+  total alt reads, mean VAF
+- **Sidebar filters** — chromosome, samples (multi-select), variant type, VAF range,
+  min alt count
+- **Data table** — paginated, sortable, all schema columns
+- **Tabbed plots**
+  - VAF distribution (histogram by variant type)
+  - SNV error spectrum (substitution counts)
+  - Strand bias (forward vs reverse alt read scatter)
+  - Overlap agreement fraction (histogram)
 
 ## Schema
 
@@ -81,22 +176,40 @@ Each Parquet file contains one row per alt allele observed at a locus.
 
 | Column | Type | Description |
 |---|---|---|
-| `sample_id` | string | Sample identifier |
+| `sample_id` | string | Sample identifier (from `--sample-id` or BAM SM tag) |
 | `chrom` | string | Chromosome |
 | `pos` | int64 | 0-based position |
 | `ref_allele` | string | Reference allele |
-| `alt_allele` | string | Alt allele |
-| `variant_type` | string | SNV / insertion / deletion / MNV |
+| `alt_allele` | string | Alt allele (e.g. `T`, `+ACG`, `-2`) |
+| `variant_type` | string | `SNV` / `insertion` / `deletion` / `MNV` |
 | `total_depth` | int32 | Total read depth at position |
-| `alt_count` | int32 | Reads supporting the alt |
+| `alt_count` | int32 | Reads supporting the alt allele |
+| `ref_count` | int32 | Reads supporting the reference allele |
 | `fwd_depth` | int32 | Forward strand depth |
 | `rev_depth` | int32 | Reverse strand depth |
 | `fwd_alt_count` | int32 | Forward strand alt reads |
 | `rev_alt_count` | int32 | Reverse strand alt reads |
-| `overlap_depth` | int32 | Reads in overlapping fragment pairs |
-| `overlap_alt_agree` | int32 | Overlapping pairs where both reads see alt |
-| `overlap_alt_disagree` | int32 | Overlapping pairs where reads disagree |
-| `read_type` | string | raw / simplex / duplex |
-| `pipeline` | string | fgbio / dragen / raw |
-| `variant_called` | bool? | Whether a variant was called here (null if no VCF) |
-| `variant_filter` | string? | PASS, filter reason, or null if not called |
+| `fwd_ref_count` | int32 | Forward strand reference reads |
+| `rev_ref_count` | int32 | Reverse strand reference reads |
+| `overlap_depth` | int32 | Number of reads at this locus that have an overlapping mate |
+| `overlap_alt_agree` | int32 | Overlapping pairs where both mates support the alt |
+| `overlap_alt_disagree` | int32 | Overlapping pairs where mates disagree on the alt |
+| `overlap_ref_agree` | int32 | Overlapping pairs where both mates support the reference |
+| `read_type` | string | `raw` / `simplex` / `duplex` |
+| `pipeline` | string | `fgbio` / `dragen` / `raw` |
+| `variant_called` | bool? | Whether a variant was called here (null if no VCF provided) |
+| `variant_filter` | string? | VCF FILTER value (`PASS`, filter reason, or null) |
+
+## Architecture
+
+```
+geac collect  →  per-sample .parquet
+geac merge    →  cohort .duckdb  (alt_bases + samples tables)
+streamlit run app/geac_explorer.py  →  interactive browser
+```
+
+- **Rust + rust-htslib** for BAM/CRAM pileup processing
+- **Apache Arrow + Parquet** for columnar per-sample storage
+- **DuckDB (bundled)** for cohort-level SQL with no external database server
+- **Streamlit + Altair** for the interactive explorer
+- **conda + bioconda** for the htslib C library dependency
