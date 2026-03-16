@@ -40,8 +40,8 @@ pub fn collect_alt_bases(args: &CollectArgs, vcf_index: Option<&VcfIndex>) -> Re
     };
 
     if let Some(region) = &args.region {
-        // TODO: parse region string and set fetch interval
-        let _ = region;
+        bam.fetch(region.as_str())
+            .with_context(|| format!("failed to fetch region '{region}': check that the region is valid and the BAM is indexed"))?;
     }
 
     let start = Instant::now();
