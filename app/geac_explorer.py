@@ -118,18 +118,29 @@ with st.expander("Data table", expanded=True):
 tab1, tab2, tab3, tab4 = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement"])
 
 with tab1:
-    chart = (
-        alt.Chart(df)
-        .mark_bar(opacity=0.8)
-        .encode(
-            alt.X("vaf:Q", bin=alt.Bin(maxbins=50), title="VAF"),
-            alt.Y("count():Q", title="Count"),
-            alt.Color("variant_type:N", title="Variant type"),
-            tooltip=["variant_type:N", "count():Q"],
-        )
-        .properties(title="VAF Distribution", height=350)
-    )
-    st.altair_chart(chart, use_container_width=True)
+    vaf_col1, vaf_col2, vaf_col3 = st.columns(3)
+    for col, vtype, color in [
+        (vaf_col1, "SNV",       "#4c78a8"),
+        (vaf_col2, "insertion", "#f58518"),
+        (vaf_col3, "deletion",  "#e45756"),
+    ]:
+        subset = df[df["variant_type"] == vtype]
+        with col:
+            if len(subset) == 0:
+                st.info(f"No {vtype}s in current selection.")
+            else:
+                chart = (
+                    alt.Chart(subset)
+                    .mark_bar(opacity=0.8, color=color)
+                    .encode(
+                        alt.X("vaf:Q", bin=alt.Bin(maxbins=50), title="VAF",
+                              scale=alt.Scale(domain=[0, 1])),
+                        alt.Y("count():Q", title="Count"),
+                        tooltip=["count():Q"],
+                    )
+                    .properties(title=f"{vtype} VAF Distribution", height=300)
+                )
+                st.altair_chart(chart, use_container_width=True)
 
 with tab2:
     snvs = df[df["variant_type"] == "SNV"].copy()
