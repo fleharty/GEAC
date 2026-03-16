@@ -1,178 +1,124 @@
-import marimo
+import streamlit as st
+import duckdb
+import altair as alt
+import pandas as pd
 
-__generated_with = "0.10.0"
-app = marimo.App(width="wide", title="GEAC Explorer")
+st.set_page_config(page_title="GEAC Explorer", layout="wide")
+st.title("GEAC Explorer")
+st.markdown(
+    "**Genomic Evidence Atlas of Cohorts** — inspect alt base metrics from "
+    "per-sample Parquet files or a merged cohort DuckDB database."
+)
 
+# ── File input ────────────────────────────────────────────────────────────────
+path = st.text_input(
+    "Data file path",
+    placeholder="/path/to/sample.parquet  or  cohort.duckdb",
+)
 
-@app.cell
-def imports():
-    import marimo as mo
-    import duckdb
-    import altair as alt
-    import pandas as pd
-    return alt, duckdb, mo, pd
+if not path or not path.strip():
+    st.info("Enter a Parquet or DuckDB file path above to begin.")
+    st.stop()
 
+path = path.strip()
 
-@app.cell
-def header(mo):
-    mo.md(
-        """
-        # GEAC Explorer
-        **Genomic Evidence Atlas of Cohorts** — inspect alt base metrics from
-        per-sample Parquet files or a merged cohort DuckDB database.
-        """
-    )
-    return
-
-
-@app.cell
-def file_input(mo):
-    file_path = mo.ui.text(
-        placeholder="e.g. sample.parquet  or  cohort.duckdb",
-        label="Data file (Parquet or DuckDB)",
-        full_width=True,
-    )
-    return (file_path,)
-
-
-@app.cell
-def load_data(file_path, duckdb, mo):
-    mo.stop(
-        not file_path.value.strip(),
-        mo.callout(mo.md("Enter a Parquet or DuckDB file path above to begin."), kind="info"),
-    )
-
-    path = file_path.value.strip()
-
-    if path.endswith(".duckdb"):
-        con = duckdb.connect(path, read_only=True)
-        table_expr = "alt_bases"
+@st.cache_resource
+def open_connection(p: str):
+    if p.endswith(".duckdb"):
+        return duckdb.connect(p, read_only=True), "alt_bases"
     else:
         con = duckdb.connect()
-        table_expr = f"read_parquet('{path}')"
+        return con, f"read_parquet('{p}')"
 
-    return con, table_expr
+try:
+    con, table_expr = open_connection(path)
+except Exception as e:
+    st.error(f"Could not open file: {e}")
+    st.stop()
 
+# ── Summary stats ─────────────────────────────────────────────────────────────
+stats = con.execute(f"""
+    SELECT
+        COUNT(*)                              AS n_records,
+        COUNT(DISTINCT sample_id)             AS n_samples,
+        COUNT(DISTINCT chrom)                 AS n_chroms,
+        COUNT(DISTINCT chrom || ':' || pos)   AS n_positions,
+        SUM(alt_count)                        AS total_alt_reads,
+        ROUND(AVG(alt_count * 1.0 / total_depth), 4) AS mean_vaf
+    FROM {table_expr}
+""").df()
 
-@app.cell
-def summary_stats(con, table_expr, mo):
-    stats = con.execute(f"""
-        SELECT
-            COUNT(*)                              AS n_records,
-            COUNT(DISTINCT sample_id)             AS n_samples,
-            COUNT(DISTINCT chrom)                 AS n_chromosomes,
-            COUNT(DISTINCT chrom || ':' || pos)   AS n_positions,
-            SUM(alt_count)                        AS total_alt_reads,
-            ROUND(AVG(alt_count * 1.0 / total_depth), 4) AS mean_vaf
-        FROM {table_expr}
-    """).df()
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Alt records",      f"{int(stats['n_records'][0]):,}")
+c2.metric("Samples",          f"{int(stats['n_samples'][0]):,}")
+c3.metric("Chromosomes",      f"{int(stats['n_chroms'][0]):,}")
+c4.metric("Positions",        f"{int(stats['n_positions'][0]):,}")
+c5.metric("Total alt reads",  f"{int(stats['total_alt_reads'][0]):,}")
+c6.metric("Mean VAF",         str(stats["mean_vaf"][0]))
 
-    mo.hstack([
-        mo.stat(str(int(stats["n_records"][0])),     label="Alt records"),
-        mo.stat(str(int(stats["n_samples"][0])),     label="Samples"),
-        mo.stat(str(int(stats["n_chromosomes"][0])), label="Chromosomes"),
-        mo.stat(str(int(stats["n_positions"][0])),   label="Positions"),
-        mo.stat(str(int(stats["total_alt_reads"][0])), label="Total alt reads"),
-        mo.stat(str(stats["mean_vaf"][0]),           label="Mean VAF"),
-    ], justify="start")
-    return
+# ── Filters (sidebar) ─────────────────────────────────────────────────────────
+st.sidebar.header("Filters")
 
+chroms = con.execute(f"SELECT DISTINCT chrom FROM {table_expr} ORDER BY chrom").df()["chrom"].tolist()
+samples = con.execute(f"SELECT DISTINCT sample_id FROM {table_expr} ORDER BY sample_id").df()["sample_id"].tolist()
 
-@app.cell
-def filters(con, table_expr, mo):
-    chroms = (
-        con.execute(f"SELECT DISTINCT chrom FROM {table_expr} ORDER BY chrom")
-        .df()["chrom"]
-        .tolist()
-    )
-    samples = (
-        con.execute(f"SELECT DISTINCT sample_id FROM {table_expr} ORDER BY sample_id")
-        .df()["sample_id"]
-        .tolist()
-    )
+chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + chroms)
+sample_sel = st.sidebar.multiselect("Samples (blank = all)", samples)
+variant_sel = st.sidebar.multiselect(
+    "Variant type",
+    ["SNV", "insertion", "deletion", "MNV"],
+    default=["SNV", "insertion", "deletion", "MNV"],
+)
+vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01)
+min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, value=1, step=1)
 
-    chrom_filter = mo.ui.dropdown(
-        options=["All"] + chroms, value="All", label="Chromosome"
-    )
-    sample_filter = mo.ui.multiselect(options=samples, label="Samples (blank = all)")
-    variant_filter = mo.ui.multiselect(
-        options=["SNV", "insertion", "deletion", "MNV"],
-        value=["SNV", "insertion", "deletion", "MNV"],
-        label="Variant type",
-    )
-    vaf_filter = mo.ui.range_slider(
-        start=0.0, stop=1.0, step=0.01, value=[0.0, 1.0], label="VAF range"
-    )
-    min_alt_filter = mo.ui.number(start=1, stop=10000, step=1, value=1, label="Min alt count")
+# ── Filtered query ────────────────────────────────────────────────────────────
+conditions = [
+    f"alt_count >= {min_alt}",
+    f"alt_count * 1.0 / total_depth BETWEEN {vaf_range[0]} AND {vaf_range[1]}",
+]
+if chrom_sel != "All":
+    conditions.append(f"chrom = '{chrom_sel}'")
+if sample_sel:
+    s_list = ", ".join(f"'{s}'" for s in sample_sel)
+    conditions.append(f"sample_id IN ({s_list})")
+if variant_sel:
+    t_list = ", ".join(f"'{t}'" for t in variant_sel)
+    conditions.append(f"variant_type IN ({t_list})")
 
-    mo.hstack([
-        mo.vstack([chrom_filter, sample_filter]),
-        mo.vstack([variant_filter, vaf_filter]),
-        mo.vstack([min_alt_filter]),
-    ], gap=2)
-    return chrom_filter, min_alt_filter, sample_filter, variant_filter, vaf_filter
+where = " AND ".join(conditions)
+df = con.execute(f"""
+    SELECT *,
+           ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+    FROM {table_expr}
+    WHERE {where}
+    LIMIT 50000
+""").df()
 
+if len(df) == 0:
+    st.warning("No records match the current filters.")
+    st.stop()
 
-@app.cell
-def filtered_data(
-    chrom_filter, con, min_alt_filter, mo, sample_filter,
-    table_expr, variant_filter, vaf_filter,
-):
-    conditions = [
-        f"alt_count >= {min_alt_filter.value}",
-        f"alt_count * 1.0 / total_depth BETWEEN {vaf_filter.value[0]} AND {vaf_filter.value[1]}",
-    ]
+cap_msg = " (capped at 50,000 — refine filters to see more)" if len(df) == 50000 else ""
+st.info(f"**{len(df):,}** records{cap_msg}")
 
-    if chrom_filter.value != "All":
-        conditions.append(f"chrom = '{chrom_filter.value}'")
-
-    if sample_filter.value:
-        s = ", ".join(f"'{s}'" for s in sample_filter.value)
-        conditions.append(f"sample_id IN ({s})")
-
-    if variant_filter.value:
-        t = ", ".join(f"'{t}'" for t in variant_filter.value)
-        conditions.append(f"variant_type IN ({t})")
-
-    where = " AND ".join(conditions)
-
-    df = con.execute(f"""
-        SELECT *,
-               ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-               ROUND(fwd_alt_count * 1.0 / NULLIF(alt_count, 0), 4) AS fwd_alt_frac
-        FROM {table_expr}
-        WHERE {where}
-        LIMIT 50000
-    """).df()
-
-    mo.callout(
-        mo.md(f"**{len(df):,}** records shown (capped at 50,000)"),
-        kind="info" if len(df) < 50000 else "warn",
-    )
-    return (df,)
-
-
-@app.cell
-def data_table(df, mo):
-    mo.ui.table(
+# ── Data table ────────────────────────────────────────────────────────────────
+with st.expander("Data table", expanded=True):
+    st.dataframe(
         df[[
             "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
             "variant_type", "vaf", "alt_count", "ref_count", "total_depth",
             "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
             "overlap_alt_disagree", "variant_called", "variant_filter",
         ]],
-        selection=None,
-        pagination=True,
+        use_container_width=True,
     )
-    return
 
+# ── Plots ─────────────────────────────────────────────────────────────────────
+tab1, tab2, tab3, tab4 = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement"])
 
-@app.cell
-def plots(alt, df, mo):
-    snvs = df[df["variant_type"] == "SNV"].copy()
-
-    # ── VAF distribution ──────────────────────────────────────────────────────
-    vaf_chart = (
+with tab1:
+    chart = (
         alt.Chart(df)
         .mark_bar(opacity=0.8)
         .encode(
@@ -181,21 +127,17 @@ def plots(alt, df, mo):
             alt.Color("variant_type:N", title="Variant type"),
             tooltip=["variant_type:N", "count():Q"],
         )
-        .properties(title="VAF Distribution", width=380, height=260)
+        .properties(title="VAF Distribution", height=350)
     )
+    st.altair_chart(chart, use_container_width=True)
 
-    # ── Error spectrum (SNV substitution types) ───────────────────────────────
+with tab2:
+    snvs = df[df["variant_type"] == "SNV"].copy()
     if len(snvs) > 0:
-        spectrum_df = (
-            snvs.groupby(["ref_allele", "alt_allele"])
-            .size()
-            .reset_index(name="count")
-        )
-        spectrum_df["substitution"] = (
-            spectrum_df["ref_allele"] + ">" + spectrum_df["alt_allele"]
-        )
-        spectrum_chart = (
-            alt.Chart(spectrum_df)
+        spec = snvs.groupby(["ref_allele", "alt_allele"]).size().reset_index(name="count")
+        spec["substitution"] = spec["ref_allele"] + ">" + spec["alt_allele"]
+        chart = (
+            alt.Chart(spec)
             .mark_bar()
             .encode(
                 alt.X("substitution:N", sort="-y", title="Substitution"),
@@ -203,16 +145,16 @@ def plots(alt, df, mo):
                 alt.Color("substitution:N", legend=None),
                 tooltip=["substitution:N", "count:Q"],
             )
-            .properties(title="SNV Error Spectrum", width=380, height=260)
+            .properties(title="SNV Error Spectrum", height=350)
         )
+        st.altair_chart(chart, use_container_width=True)
     else:
-        spectrum_chart = alt.Chart(snvs).mark_text().encode(
-            text=alt.value("No SNVs in current selection")
-        ).properties(width=380, height=260)
+        st.info("No SNVs in current selection.")
 
-    # ── Strand bias ───────────────────────────────────────────────────────────
-    strand_chart = (
-        alt.Chart(df.sample(min(2000, len(df))))
+with tab3:
+    sample_df = df.sample(min(2000, len(df)))
+    chart = (
+        alt.Chart(sample_df)
         .mark_point(opacity=0.5, size=30)
         .encode(
             alt.X("fwd_alt_count:Q", title="Forward alt reads"),
@@ -221,39 +163,27 @@ def plots(alt, df, mo):
             tooltip=["sample_id", "chrom", "pos", "ref_allele", "alt_allele",
                      "fwd_alt_count", "rev_alt_count", "vaf"],
         )
-        .properties(title="Strand Bias (up to 2,000 points)", width=380, height=260)
+        .properties(title="Strand Bias (up to 2,000 points)", height=350)
     )
+    st.altair_chart(chart, use_container_width=True)
 
-    # ── Overlap agreement ─────────────────────────────────────────────────────
-    overlap_df = df[df["overlap_depth"] > 0].copy()
-    if len(overlap_df) > 0:
-        overlap_df["agree_frac"] = (
-            overlap_df["overlap_alt_agree"]
-            / (overlap_df["overlap_alt_agree"] + overlap_df["overlap_alt_disagree"]).clip(lower=1)
+with tab4:
+    ov = df[df["overlap_depth"] > 0].copy()
+    if len(ov) > 0:
+        ov["agree_frac"] = (
+            ov["overlap_alt_agree"]
+            / (ov["overlap_alt_agree"] + ov["overlap_alt_disagree"]).clip(lower=1)
         )
-        overlap_chart = (
-            alt.Chart(overlap_df)
+        chart = (
+            alt.Chart(ov)
             .mark_bar(opacity=0.8)
             .encode(
                 alt.X("agree_frac:Q", bin=alt.Bin(maxbins=20), title="Overlap agreement fraction"),
                 alt.Y("count():Q", title="Count"),
                 tooltip=["count():Q"],
             )
-            .properties(title="Overlap Agreement Fraction", width=380, height=260)
+            .properties(title="Overlap Agreement Fraction", height=350)
         )
+        st.altair_chart(chart, use_container_width=True)
     else:
-        overlap_chart = alt.Chart(overlap_df).mark_text().encode(
-            text=alt.value("No overlapping fragments in selection")
-        ).properties(width=380, height=260)
-
-    mo.tabs({
-        "VAF distribution":    mo.ui.altair_chart(vaf_chart),
-        "Error spectrum":      mo.ui.altair_chart(spectrum_chart),
-        "Strand bias":         mo.ui.altair_chart(strand_chart),
-        "Overlap agreement":   mo.ui.altair_chart(overlap_chart),
-    })
-    return
-
-
-if __name__ == "__main__":
-    app.run()
+        st.info("No overlapping fragments in current selection.")

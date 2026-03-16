@@ -10,22 +10,16 @@ An interactive web app for browsing and visualising alt base data:
 
 ```bash
 conda activate geac
-marimo run app/geac_explorer.py
+streamlit run app/geac_explorer.py
 ```
 
-Then open `http://localhost:2718` in your browser. Enter a Parquet or DuckDB
+Then open `http://localhost:8501` in your browser. Enter a Parquet or DuckDB
 file path in the text box to load data. Provides:
 
 - Summary statistics (records, samples, positions, mean VAF)
-- Filters: chromosome, sample, variant type, VAF range, min alt count
-- Paginated data table
+- Sidebar filters: chromosome, sample, variant type, VAF range, min alt count
+- Data table (expandable)
 - Tabbed plots: VAF distribution, error spectrum, strand bias, overlap agreement
-
-For interactive/notebook mode (editable cells):
-
-```bash
-marimo edit app/geac_explorer.py
-```
 
 ## Setup
 
