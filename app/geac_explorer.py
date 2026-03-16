@@ -118,14 +118,13 @@ with st.expander("Data table", expanded=True):
 tab1, tab2, tab3, tab4 = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement"])
 
 with tab1:
-    vaf_col1, vaf_col2, vaf_col3 = st.columns(3)
-    for col, vtype, color in [
-        (vaf_col1, "SNV",       "#4c78a8"),
-        (vaf_col2, "insertion", "#f58518"),
-        (vaf_col3, "deletion",  "#e45756"),
+    for vtype, color in [
+        ("SNV",       "#4c78a8"),
+        ("insertion", "#f58518"),
+        ("deletion",  "#e45756"),
     ]:
         subset = df[df["variant_type"] == vtype]
-        with col:
+        if True:
             if len(subset) == 0:
                 st.info(f"No {vtype}s in current selection.")
             else:
