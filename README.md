@@ -200,6 +200,86 @@ Each Parquet file contains one row per alt allele observed at a locus.
 | `variant_called` | bool? | Whether a variant was called here (null if no VCF provided) |
 | `variant_filter` | string? | VCF FILTER value (`PASS`, filter reason, or null) |
 
+## Docker
+
+The `docker/Dockerfile` performs a two-stage build: htslib and the `geac` binary are
+compiled in a builder stage, then only the runtime libraries and binary are copied into
+the final image, keeping it small. Images are built with [Podman](https://podman.io)
+(no daemon required, drop-in compatible with Dockerfile syntax).
+
+### Build and push to GCR
+
+**Prerequisites:** Podman installed, and `gcloud` CLI authenticated.
+
+```bash
+# Authenticate Podman to GCR (once per session)
+gcloud auth print-access-token | podman login -u oauth2accesstoken --password-stdin gcr.io
+
+# Build locally (tagged with VERSION and latest)
+bash scripts/build_docker.sh my-gcp-project
+
+# Build and push in one step
+bash scripts/build_docker.sh my-gcp-project --push
+```
+
+The version is read from the `VERSION` file in the repo root. Images are tagged as:
+- `gcr.io/my-gcp-project/geac:0.1.0`
+- `gcr.io/my-gcp-project/geac:latest`
+
+When releasing a new version, update `VERSION`, rebuild, and push. Commit the `VERSION`
+change so the git history and image tags stay in sync.
+
+### Updating the version
+
+```bash
+echo "0.2.0" > VERSION
+# also update version = "..." in Cargo.toml
+bash scripts/build_docker.sh my-gcp-project --push
+git add VERSION Cargo.toml && git commit -m "Bump version to 0.2.0"
+```
+
+## WDL / Terra
+
+`wdl/geac_collect.wdl` is a single-sample WDL 1.0 workflow that wraps `geac collect`.
+Run it on a sample set in Terra to scatter across all samples in parallel.
+
+### Inputs
+
+| Input | Type | Description |
+|---|---|---|
+| `input_bam` | File | BAM or CRAM file |
+| `input_bam_index` | File | `.bai` or `.crai` index |
+| `reference_fasta` | File | Reference FASTA |
+| `reference_fasta_index` | File | `.fai` index |
+| `read_type` | String | `duplex` / `simplex` / `raw` |
+| `pipeline` | String | `fgbio` / `dragen` / `raw` |
+| `docker_image` | String | e.g. `gcr.io/my-project/geac:0.1.0` |
+| `sample_id` | String? | Override sample ID (default: BAM SM tag) |
+| `vcf` | File? | VCF for variant call annotation |
+| `vcf_index` | File? | `.tbi` or `.csi` index |
+| `region` | String? | Restrict to a region, e.g. `chr1:1-1000000` |
+| `min_base_qual` | Int | Default: 1 |
+| `min_map_qual` | Int | Default: 20 |
+| `threads` | Int | Default: 4 |
+| `memory_gb` | Int | Default: 8 |
+| `disk_gb` | Int | Default: 100 |
+| `preemptible` | Int | Default: 2 |
+
+### Output
+
+| Output | Type | Description |
+|---|---|---|
+| `parquet` | File | Per-sample alt base Parquet file |
+
+### Running on Terra
+
+1. Import `wdl/geac_collect.wdl` into your Terra workspace.
+2. Set `docker_image` to your pushed GCR image (e.g. `gcr.io/my-project/geac:0.1.0`).
+3. Link `input_bam`, `input_bam_index`, `reference_fasta`, and `reference_fasta_index`
+   to your workspace data table columns.
+4. Run on a sample set — Terra will scatter across samples automatically.
+5. Collect the output `parquet` files and run `geac merge` to build the cohort DuckDB.
+
 ## Architecture
 
 ```

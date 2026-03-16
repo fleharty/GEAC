@@ -14,8 +14,8 @@
 
 ## WDL / Terra
 
-- [ ] WDL task wrapping `geac collect` — process a single sample (BAM/CRAM + reference → Parquet)
-- [ ] WDL task wrapping `geac merge` — aggregate per-sample Parquets into a cohort DuckDB
+- [x] WDL task wrapping `geac collect` — single-sample workflow in `wdl/geac_collect.wdl`
+- [x] Terra-compatible Docker image — multi-stage `docker/Dockerfile` with htslib + geac binary
 - [ ] WDL workflow — scatter `geac collect` across a sample list, then gather with `geac merge`
-- [ ] Terra-compatible Docker image — package the `geac` binary with htslib dependencies
+- [ ] WDL task wrapping `geac merge` — aggregate per-sample Parquets into a cohort DuckDB
 - [ ] Test on Terra with a small cohort
