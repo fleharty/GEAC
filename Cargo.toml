@@ -19,6 +19,9 @@ clap = { version = "4", features = ["derive"] }
 arrow = { version = "53", default-features = false, features = ["csv"] }
 parquet = { version = "53", default-features = false, features = ["arrow", "snap"] }
 
+# DuckDB for cohort merge
+duckdb = { version = "1", features = ["bundled"] }
+
 # Error handling
 anyhow = "1"
 thiserror = "1"

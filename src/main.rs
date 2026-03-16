@@ -1,5 +1,6 @@
 mod bam;
 mod cli;
+mod merge;
 mod progress;
 mod record;
 mod vcf;
@@ -48,14 +49,7 @@ fn main() -> Result<()> {
         }
 
         Command::Merge(args) => {
-            // TODO: implement DuckDB merge of per-sample Parquet files
-            // For now, print the files that would be merged.
-            info!(
-                n_inputs = args.inputs.len(),
-                output = %args.output.display(),
-                "merge not yet implemented"
-            );
-            anyhow::bail!("merge subcommand not yet implemented");
+            merge::merge(&args)?;
         }
     }
 
