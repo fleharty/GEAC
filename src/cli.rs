@@ -34,9 +34,11 @@ pub struct CollectArgs {
     #[arg(short = 'r', long)]
     pub reference: PathBuf,
 
-    /// Sample identifier (used as sample_id in output records)
+    /// Sample identifier (used as sample_id in output records).
+    /// If omitted, the SM tag from the BAM/CRAM read group header is used.
+    /// Exits with an error if neither is provided.
     #[arg(short, long)]
-    pub sample_id: String,
+    pub sample_id: Option<String>,
 
     /// Output Parquet file path
     #[arg(short, long)]
@@ -69,6 +71,10 @@ pub struct CollectArgs {
     /// Number of threads for parallel processing
     #[arg(short = 't', long, default_value_t = 1)]
     pub threads: usize,
+
+    /// Progress reporting interval in seconds (0 to disable)
+    #[arg(long, default_value_t = 30)]
+    pub progress_interval: u64,
 }
 
 #[derive(Parser, Debug)]

@@ -1,17 +1,27 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use rust_htslib::bam::{self, Read};
 use rust_htslib::faidx;
 
 use crate::cli::CollectArgs;
+use crate::progress::ProgressReporter;
 use crate::record::{AltBase, VariantType};
 
 /// Process a BAM/CRAM file and return all alt base records.
 pub fn collect_alt_bases(args: &CollectArgs) -> Result<Vec<AltBase>> {
     let mut bam = open_bam(&args.input, &args.reference)?;
     let mut ref_cache = RefCache::new(&args.reference)?;
+
+    // Resolve sample ID: CLI flag takes precedence, then SM tag from read group header.
+    let sample_id = match &args.sample_id {
+        Some(id) => id.clone(),
+        None => read_group_sample_id(bam.header())
+            .context("--sample-id was not provided and no SM tag found in BAM/CRAM header @RG line")?,
+    };
 
     // Extract target info before the pileup loop to avoid conflicting borrows on `bam`.
     let targets: Vec<(String, usize)> = {
@@ -32,6 +42,8 @@ pub fn collect_alt_bases(args: &CollectArgs) -> Result<Vec<AltBase>> {
         let _ = region;
     }
 
+    let start = Instant::now();
+    let (reporter, progress) = ProgressReporter::start(args.progress_interval);
     let mut records: Vec<AltBase> = Vec::new();
 
     for pileup in bam.pileup() {
@@ -53,6 +65,10 @@ pub fn collect_alt_bases(args: &CollectArgs) -> Result<Vec<AltBase>> {
             overlap_depth,
         } = tally_pileup(&pileup, args.min_base_qual, args.min_map_qual);
 
+        progress.positions_processed.fetch_add(1, Ordering::Relaxed);
+        progress.reads_processed.fetch_add(total_depth as u64, Ordering::Relaxed);
+        progress.update_locus(&chrom, pos);
+
         if total_depth == 0 {
             continue;
         }
@@ -65,8 +81,10 @@ pub fn collect_alt_bases(args: &CollectArgs) -> Result<Vec<AltBase>> {
                 continue;
             }
 
+            progress.alt_bases_found.fetch_add(1, Ordering::Relaxed);
+
             records.push(AltBase {
-                sample_id: args.sample_id.clone(),
+                sample_id: sample_id.clone(),
                 chrom: chrom.clone(),
                 pos,
                 ref_allele: ref_base.to_string(),
@@ -89,6 +107,7 @@ pub fn collect_alt_bases(args: &CollectArgs) -> Result<Vec<AltBase>> {
         }
     }
 
+    reporter.finish(start);
     Ok(records)
 }
 
@@ -276,6 +295,26 @@ impl RefCache {
 }
 
 // ── BAM/CRAM opener ───────────────────────────────────────────────────────────
+
+/// Extract the SM (sample name) field from the first @RG line in the BAM header.
+/// Returns an error if no @RG line exists or none has an SM tag.
+fn read_group_sample_id(header: &bam::HeaderView) -> Result<String> {
+    let header_text = std::str::from_utf8(header.as_bytes())
+        .context("BAM header is not valid UTF-8")?;
+
+    for line in header_text.lines() {
+        if !line.starts_with("@RG") {
+            continue;
+        }
+        for field in line.split('\t') {
+            if let Some(sm) = field.strip_prefix("SM:") {
+                return Ok(sm.to_string());
+            }
+        }
+    }
+
+    anyhow::bail!("no SM tag found in any @RG line of the BAM/CRAM header")
+}
 
 fn open_bam(input: &Path, reference: &Path) -> Result<bam::IndexedReader> {
     let mut reader = bam::IndexedReader::from_path(input)

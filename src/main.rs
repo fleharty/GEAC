@@ -1,5 +1,6 @@
 mod bam;
 mod cli;
+mod progress;
 mod record;
 mod writer;
 
@@ -22,7 +23,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Collect(args) => {
             info!(
-                sample_id = %args.sample_id,
+                sample_id = %args.sample_id.as_deref().unwrap_or("<from SM tag>"),
                 input = %args.input.display(),
                 output = %args.output.display(),
                 "collecting alt bases"
