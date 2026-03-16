@@ -52,9 +52,17 @@ pub struct CollectArgs {
     #[arg(long, default_value = "fgbio")]
     pub pipeline: Pipeline,
 
-    /// Optional VCF file to annotate whether loci overlap called variants
-    #[arg(long)]
+    /// Optional VCF/BCF file to annotate whether loci overlap called variants.
+    /// Mutually exclusive with --variants-tsv.
+    #[arg(long, conflicts_with = "variants_tsv")]
     pub vcf: Option<PathBuf>,
+
+    /// Optional tab-separated variant list to use instead of a VCF.
+    /// Expected columns: chrom  pos_start  pos_end  ref  var
+    /// Coordinates are 0-based half-open (BED convention).
+    /// Mutually exclusive with --vcf.
+    #[arg(long, conflicts_with = "vcf")]
+    pub variants_tsv: Option<PathBuf>,
 
     /// Minimum base quality to consider a base
     #[arg(long, default_value_t = 1)]

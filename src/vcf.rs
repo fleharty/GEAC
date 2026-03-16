@@ -5,11 +5,17 @@ use anyhow::{Context, Result};
 use rust_htslib::bcf::{self, Read as BcfRead};
 use rust_htslib::bcf::header::HeaderView;
 
-/// Annotation derived from a VCF record.
+/// Annotation attached to a called variant locus.
 #[derive(Debug, Clone)]
 pub struct VcfAnnotation {
-    /// FILTER field: "PASS" or semicolon-separated filter reason(s)
+    /// FILTER field: "PASS", semicolon-separated filter reasons, or "." if unknown.
     pub filter: String,
+}
+
+/// Common interface for variant annotation sources (VCF or TSV).
+pub trait VariantAnnotator {
+    /// Return annotation for the given locus and alt allele, or `None` if not found.
+    fn get(&self, chrom: &str, pos: i64, alt_allele: &str) -> Option<&VcfAnnotation>;
 }
 
 /// Pre-loaded VCF lookup structures built before the pileup loop.
@@ -68,14 +74,13 @@ impl VcfIndex {
         Ok(Self { by_allele, by_position })
     }
 
-    /// Look up annotation for a given locus and alt allele.
-    ///
-    /// For SNVs: tries exact (chrom, pos, alt_allele) match first.
-    /// For indels (alt starts with '+' or '-'): falls back to position-only match
-    /// because VCF and our indel representations differ.
-    ///
-    /// Returns `Some(annotation)` if the position/allele is in the VCF, `None` otherwise.
-    pub fn get(&self, chrom: &str, pos: i64, alt_allele: &str) -> Option<&VcfAnnotation> {
+}
+
+impl VariantAnnotator for VcfIndex {
+    /// For SNVs: tries exact (chrom, pos, alt_allele) match first, then position fallback.
+    /// For indels (alt starts with '+' or '-'): position-only match because VCF and our
+    /// indel representations differ.
+    fn get(&self, chrom: &str, pos: i64, alt_allele: &str) -> Option<&VcfAnnotation> {
         let is_indel = alt_allele.starts_with('+') || alt_allele.starts_with('-');
 
         if is_indel {

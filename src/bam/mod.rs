@@ -11,10 +11,10 @@ use rust_htslib::faidx;
 use crate::cli::CollectArgs;
 use crate::progress::ProgressReporter;
 use crate::record::{AltBase, VariantType};
-use crate::vcf::VcfIndex;
+use crate::vcf::VariantAnnotator;
 
 /// Process a BAM/CRAM file and return all alt base records.
-pub fn collect_alt_bases(args: &CollectArgs, vcf_index: Option<&VcfIndex>) -> Result<Vec<AltBase>> {
+pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnotator>) -> Result<Vec<AltBase>> {
     let mut bam = open_bam(&args.input, &args.reference)?;
     let mut ref_cache = RefCache::new(&args.reference)?;
 
@@ -47,18 +47,18 @@ pub fn collect_alt_bases(args: &CollectArgs, vcf_index: Option<&VcfIndex>) -> Re
     let start = Instant::now();
     let (reporter, progress) = ProgressReporter::start(args.progress_interval);
 
-    /// Look up VCF annotation for a given locus and allele.
+    /// Look up variant annotation for a given locus and allele.
     /// Returns (variant_called, variant_filter).
     fn vcf_annotation(
-        vcf_index: Option<&VcfIndex>,
+        annotator: Option<&dyn VariantAnnotator>,
         chrom: &str,
         pos: i64,
         alt_allele: &str,
     ) -> (Option<bool>, Option<String>) {
-        match vcf_index {
+        match annotator {
             None => (None, None),
-            Some(idx) => match idx.get(chrom, pos, alt_allele) {
-                Some(ann) => (Some(true), Some(ann.filter.clone())),
+            Some(ann) => match ann.get(chrom, pos, alt_allele) {
+                Some(a) => (Some(true), Some(a.filter.clone())),
                 None => (Some(false), None),
             },
         }
@@ -112,7 +112,7 @@ pub fn collect_alt_bases(args: &CollectArgs, vcf_index: Option<&VcfIndex>) -> Re
 
             let alt_allele = base.to_string();
             let (variant_called, variant_filter) =
-                vcf_annotation(vcf_index, &chrom, pos, &alt_allele);
+                vcf_annotation(annotator, &chrom, pos, &alt_allele);
 
             records.push(AltBase {
                 sample_id: sample_id.clone(),
@@ -152,7 +152,7 @@ pub fn collect_alt_bases(args: &CollectArgs, vcf_index: Option<&VcfIndex>) -> Re
             progress.alt_bases_found.fetch_add(1, Ordering::Relaxed);
 
             let (variant_called, variant_filter) =
-                vcf_annotation(vcf_index, &chrom, pos, &indel.alt_allele);
+                vcf_annotation(annotator, &chrom, pos, &indel.alt_allele);
 
             records.push(AltBase {
                 sample_id: sample_id.clone(),

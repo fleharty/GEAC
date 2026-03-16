@@ -16,6 +16,8 @@ version 1.0
 ##   sample_id            - (optional) override sample ID; defaults to BAM SM tag
 ##   vcf                  - (optional) VCF/BCF for variant call annotation
 ##   vcf_index            - (optional) Corresponding .tbi / .csi index
+##   variants_tsv         - (optional) TSV variant list (chrom/pos_start/pos_end/ref/var, 0-based)
+##                          Alternative to vcf; mutually exclusive.
 ##   region               - (optional) restrict to a region, e.g. chr1:1-1000000
 ##   min_base_qual        - minimum base quality (default 1)
 ##   min_map_qual         - minimum mapping quality (default 20)
@@ -38,6 +40,7 @@ workflow GeacCollect {
         String? sample_id
         File?   vcf
         File?   vcf_index
+        File?   variants_tsv
         String? region
 
         Int min_base_qual = 1
@@ -61,6 +64,7 @@ workflow GeacCollect {
             sample_id             = sample_id,
             vcf                   = vcf,
             vcf_index             = vcf_index,
+            variants_tsv          = variants_tsv,
             region                = region,
             min_base_qual         = min_base_qual,
             min_map_qual          = min_map_qual,
@@ -89,6 +93,7 @@ task Collect {
         String? sample_id
         File?   vcf
         File?   vcf_index
+        File?   variants_tsv
         String? region
 
         Int min_base_qual
@@ -118,6 +123,7 @@ task Collect {
             --threads ~{threads} \
             ~{"--sample-id " + sample_id} \
             ~{"--vcf " + vcf} \
+            ~{"--variants-tsv " + variants_tsv} \
             ~{"--region " + region}
     >>>
 

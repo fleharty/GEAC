@@ -3,6 +3,7 @@ mod cli;
 mod merge;
 mod progress;
 mod record;
+mod variants_tsv;
 mod vcf;
 mod writer;
 
@@ -31,6 +32,7 @@ fn main() -> Result<()> {
                 "collecting alt bases"
             );
 
+            // Load whichever annotation source was provided (at most one).
             let vcf_index = args
                 .vcf
                 .as_ref()
@@ -40,7 +42,22 @@ fn main() -> Result<()> {
                 })
                 .transpose()?;
 
-            let records = bam::collect_alt_bases(&args, vcf_index.as_ref())?;
+            let tsv_index = args
+                .variants_tsv
+                .as_ref()
+                .map(|p| {
+                    info!(variants_tsv = %p.display(), "loading variants TSV annotations");
+                    variants_tsv::VariantsTsv::load(p)
+                })
+                .transpose()?;
+
+            let annotator: Option<&dyn vcf::VariantAnnotator> = match (&vcf_index, &tsv_index) {
+                (Some(v), _) => Some(v),
+                (_, Some(t)) => Some(t),
+                _ => None,
+            };
+
+            let records = bam::collect_alt_bases(&args, annotator)?;
 
             info!(n_records = records.len(), "writing Parquet output");
             writer::parquet::write_parquet(&records, &args.output)?;
