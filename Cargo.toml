@@ -1,0 +1,39 @@
+[package]
+name = "geac"
+version = "0.1.0"
+edition = "2021"
+description = "Genomic Evidence Atlas of Cohorts — collect alt base metrics across sequencing cohorts"
+
+[[bin]]
+name = "geac"
+path = "src/main.rs"
+
+[dependencies]
+# BAM/CRAM parsing via htslib bindings
+rust-htslib = { version = "0.47", features = ["serde_feature"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Arrow/Parquet output
+arrow = { version = "53", default-features = false, features = ["csv"] }
+parquet = { version = "53", default-features = false, features = ["arrow", "snap"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Parallelism
+rayon = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
