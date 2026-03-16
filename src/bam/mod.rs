@@ -170,10 +170,9 @@ pub fn collect_alt_bases(args: &CollectArgs, vcf_index: Option<&VcfIndex>) -> Re
                 rev_alt_count: indel.rev,
                 fwd_ref_count,
                 rev_ref_count,
-                // TODO: overlap detection for indels
-                overlap_depth: 0,
-                overlap_alt_agree: 0,
-                overlap_alt_disagree: 0,
+                overlap_depth,
+                overlap_alt_agree: indel.overlap_alt_agree,
+                overlap_alt_disagree: indel.overlap_alt_disagree,
                 overlap_ref_agree,
                 read_type: args.read_type,
                 pipeline: args.pipeline,
@@ -322,73 +321,67 @@ struct IndelCount {
     total: i32,
     fwd: i32,
     rev: i32,
+    /// Overlapping pairs where both reads agree on this indel allele
+    overlap_alt_agree: i32,
+    /// Overlapping pairs where reads disagree (one has this indel, the other differs or has none)
+    overlap_alt_disagree: i32,
 }
 
-/// Tally indel alleles at a pileup column.
+/// Decoded indel allele for one read at the anchor position, or None if no indel.
+type IndelAllele = Option<(String, String, VariantType)>; // (alt_allele, ref_allele, variant_type)
+
+/// Tally indel alleles at a pileup column with overlap detection.
 ///
-/// Insertions and deletions are detected via `alignment.indel()`:
-/// - `Indel::Ins(len)`: insertion of `len` bases after the current position.
-///   The inserted sequence is read from the query at `[qpos+1, qpos+1+len)`.
-/// - `Indel::Del(len)`: deletion of `len` bases starting at the next reference position.
-///   The deleted sequence is read from `chrom_seq` at `[pos+1, pos+1+len)`.
+/// Groups reads by query name. A name appearing twice means both reads of the
+/// fragment are at the anchor position — their indel alleles are compared to
+/// determine agreement or disagreement.
 ///
-/// Both types are anchored at the current pileup position `pos`.
-/// Overlap detection for indels is not yet implemented.
+/// Every read that passes the mapping quality filter pushes an entry (Some or None)
+/// so that overlapping pairs are correctly identified even when one read has no indel.
 fn tally_indels(
     pileup: &rust_htslib::bam::pileup::Pileup,
     pos: i64,
     chrom_seq: &[u8],
     min_map_qual: u8,
 ) -> HashMap<String, IndelCount> {
-    let mut indels: HashMap<String, IndelCount> = HashMap::new();
+    // First pass: collect (indel_allele_or_none, is_reverse) per query name.
+    let mut by_qname: HashMap<Vec<u8>, Vec<(IndelAllele, bool)>> = HashMap::new();
 
     for alignment in pileup.alignments() {
         if alignment.is_refskip() {
             continue;
         }
-
         let record = alignment.record();
         if record.mapq() < min_map_qual {
             continue;
         }
 
-        match alignment.indel() {
-            Indel::Ins(len) => {
-                let qpos = match alignment.qpos() {
-                    Some(p) => p,
-                    None => continue,
-                };
+        let is_reverse = record.is_reverse();
+        let qname = record.qname().to_vec();
 
-                // Read inserted bases from query sequence
+        let allele: IndelAllele = match alignment.indel() {
+            Indel::Ins(len) => {
+                let Some(qpos) = alignment.qpos() else {
+                    by_qname.entry(qname).or_default().push((None, is_reverse));
+                    continue;
+                };
                 let seq = record.seq();
                 let len = len as usize;
                 if qpos + len >= seq.len() {
-                    continue; // insertion extends past end of read
+                    by_qname.entry(qname).or_default().push((None, is_reverse));
+                    continue;
                 }
                 let inserted: String = (1..=len)
                     .map(|i| seq[qpos + i].to_ascii_uppercase() as char)
                     .collect();
-
-                let alt_allele = format!("+{inserted}");
                 let ref_allele = chrom_seq
                     .get(pos as usize)
                     .map(|&b| (b as char).to_string())
                     .unwrap_or_default();
-
-                let entry = indels.entry(alt_allele.clone()).or_insert_with(|| IndelCount {
-                    ref_allele,
-                    alt_allele,
-                    variant_type: VariantType::Insertion,
-                    total: 0,
-                    fwd: 0,
-                    rev: 0,
-                });
-                entry.total += 1;
-                if record.is_reverse() { entry.rev += 1; } else { entry.fwd += 1; }
+                Some((format!("+{inserted}"), ref_allele, VariantType::Insertion))
             }
 
             Indel::Del(len) => {
-                // Deleted sequence starts at the next reference position
                 let start = pos as usize + 1;
                 let end = start + len as usize;
                 let deleted: String = chrom_seq
@@ -397,27 +390,88 @@ fn tally_indels(
                     .iter()
                     .map(|&b| b as char)
                     .collect();
-
                 if deleted.len() != len as usize {
-                    continue; // deletion extends past end of cached sequence, skip
+                    by_qname.entry(qname).or_default().push((None, is_reverse));
+                    continue;
                 }
-
-                let alt_allele = format!("-{deleted}");
-                let ref_allele = deleted.clone();
-
-                let entry = indels.entry(alt_allele.clone()).or_insert_with(|| IndelCount {
-                    ref_allele,
-                    alt_allele,
-                    variant_type: VariantType::Deletion,
-                    total: 0,
-                    fwd: 0,
-                    rev: 0,
-                });
-                entry.total += 1;
-                if record.is_reverse() { entry.rev += 1; } else { entry.fwd += 1; }
+                Some((format!("-{deleted}"), deleted.clone(), VariantType::Deletion))
             }
 
-            Indel::None => {}
+            Indel::None => None,
+        };
+
+        by_qname.entry(qname).or_default().push((allele, is_reverse));
+    }
+
+    // Second pass: tally with overlap detection.
+    let mut indels: HashMap<String, IndelCount> = HashMap::new();
+
+    for reads in by_qname.values() {
+        match reads.as_slice() {
+            [(allele, is_rev)] => {
+                // Non-overlapping read
+                if let Some((alt, ref_a, vt)) = allele {
+                    let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
+                        ref_allele: ref_a.clone(), alt_allele: alt.clone(),
+                        variant_type: *vt, total: 0, fwd: 0, rev: 0,
+                        overlap_alt_agree: 0, overlap_alt_disagree: 0,
+                    });
+                    e.total += 1;
+                    if *is_rev { e.rev += 1; } else { e.fwd += 1; }
+                }
+            }
+
+            [(allele1, is_rev1), (allele2, is_rev2)] => {
+                // Overlapping fragment — count both reads
+                for (allele, is_rev) in [(allele1, is_rev1), (allele2, is_rev2)] {
+                    if let Some((alt, ref_a, vt)) = allele {
+                        let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
+                            ref_allele: ref_a.clone(), alt_allele: alt.clone(),
+                            variant_type: *vt, total: 0, fwd: 0, rev: 0,
+                            overlap_alt_agree: 0, overlap_alt_disagree: 0,
+                        });
+                        e.total += 1;
+                        if *is_rev { e.rev += 1; } else { e.fwd += 1; }
+                    }
+                }
+
+                // Determine agreement
+                let key1 = allele1.as_ref().map(|(a, _, _)| a.as_str());
+                let key2 = allele2.as_ref().map(|(a, _, _)| a.as_str());
+                match (key1, key2) {
+                    (Some(a1), Some(a2)) if a1 == a2 => {
+                        if let Some(e) = indels.get_mut(a1) {
+                            e.overlap_alt_agree += 1;
+                        }
+                    }
+                    (Some(a1), Some(a2)) => {
+                        if let Some(e) = indels.get_mut(a1) { e.overlap_alt_disagree += 1; }
+                        if let Some(e) = indels.get_mut(a2) { e.overlap_alt_disagree += 1; }
+                    }
+                    (Some(a1), None) => {
+                        if let Some(e) = indels.get_mut(a1) { e.overlap_alt_disagree += 1; }
+                    }
+                    (None, Some(a2)) => {
+                        if let Some(e) = indels.get_mut(a2) { e.overlap_alt_disagree += 1; }
+                    }
+                    (None, None) => {}
+                }
+            }
+
+            _ => {
+                // More than 2 reads with same name — treat as non-overlapping
+                for (allele, is_rev) in reads {
+                    if let Some((alt, ref_a, vt)) = allele {
+                        let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
+                            ref_allele: ref_a.clone(), alt_allele: alt.clone(),
+                            variant_type: *vt, total: 0, fwd: 0, rev: 0,
+                            overlap_alt_agree: 0, overlap_alt_disagree: 0,
+                        });
+                        e.total += 1;
+                        if *is_rev { e.rev += 1; } else { e.fwd += 1; }
+                    }
+                }
+            }
         }
     }
 
