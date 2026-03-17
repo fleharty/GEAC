@@ -1005,3 +1005,40 @@ with tab_cohort:
                 if st.button(f"Filter all tabs to {_focused_sample}"):
                     st.session_state["sample_sel"] = [_focused_sample]
                     st.rerun()
+
+            # ── Step 2: VAF distribution overlay ──────────────────────────────
+            st.divider()
+            st.subheader("VAF distribution by sample")
+
+            _vaf_raw = con.execute(f"""
+                SELECT sample_id,
+                       ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+                FROM {table_expr}
+                WHERE {_cohort_where} AND variant_type = 'SNV'
+            """).df()
+
+            if _vaf_raw.empty:
+                st.info("No SNVs in current selection.")
+            else:
+                _vaf_chart = (
+                    alt.Chart(_vaf_raw)
+                    .transform_density(
+                        density="vaf",
+                        groupby=["sample_id"],
+                        extent=[0, 1],
+                        steps=200,
+                    )
+                    .mark_line(opacity=0.8)
+                    .encode(
+                        alt.X("value:Q", title="VAF"),
+                        alt.Y("density:Q", title="Density"),
+                        alt.Color("sample_id:N", title="Sample"),
+                        tooltip=["sample_id:N",
+                                 alt.Tooltip("value:Q", format=".3f", title="VAF")],
+                    )
+                    .properties(
+                        title="SNV VAF Distribution (all samples)",
+                        height=350,
+                    )
+                )
+                st.altair_chart(_vaf_chart, use_container_width=True)
