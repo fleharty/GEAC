@@ -4,6 +4,7 @@ mod gene_annotations;
 mod merge;
 mod progress;
 mod record;
+mod repeat;
 mod targets;
 mod variants_tsv;
 mod vcf;

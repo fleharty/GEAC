@@ -12,6 +12,7 @@ use crate::cli::CollectArgs;
 use crate::gene_annotations::GeneAnnotations;
 use crate::progress::ProgressReporter;
 use crate::record::{AltBase, VariantType};
+use crate::repeat::compute_repeat_metrics;
 use crate::targets::TargetIntervals;
 use crate::vcf::VariantAnnotator;
 
@@ -100,6 +101,9 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
         // Gene annotation — computed once per locus, shared by all alt records.
         let gene: Option<String> = gene_annots.and_then(|g| g.get(&chrom, pos).map(str::to_owned));
 
+        // Repetitiveness metrics — computed once per locus from the cached ref sequence.
+        let repeat = compute_repeat_metrics(ref_cache.current_seq(), pos as usize, args.repeat_window);
+
         // Extract ref base counts once for use in every alt record at this locus
         let ref_tally = bases.get(&ref_base);
         let ref_count = ref_tally.map_or(0, |t| t.total);
@@ -148,6 +152,9 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                 variant_filter,
                 on_target,
                 gene: gene.clone(),
+                homopolymer_len: repeat.homopolymer_len,
+                str_period:      repeat.str_period,
+                str_len:         repeat.str_len,
             });
         }
 
@@ -190,6 +197,9 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                 variant_filter,
                 on_target,
                 gene: gene.clone(),
+                homopolymer_len: repeat.homopolymer_len,
+                str_period:      repeat.str_period,
+                str_len:         repeat.str_len,
             });
         }
     }

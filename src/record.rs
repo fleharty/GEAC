@@ -109,4 +109,13 @@ pub struct AltBase {
 
     // Gene annotation (None if no annotation file was provided or locus is intergenic)
     pub gene: Option<String>,
+
+    // Repetitiveness metrics (always populated; 0 = no repeat detected)
+    /// Length of the longest homopolymer run overlapping this position (>= 1)
+    pub homopolymer_len: i32,
+    /// Period of the shortest tandem repeat unit whose tract includes this position
+    /// (1 = homopolymer, 2 = dinucleotide, …). 0 if no repeat.
+    pub str_period: i32,
+    /// Total length (bp) of the STR tract. 0 if no repeat.
+    pub str_len: i32,
 }

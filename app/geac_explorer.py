@@ -78,6 +78,15 @@ vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01)
 min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, value=1, step=1)
 variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No", "Unknown (no VCF/TSV)"])
 on_target_sel = st.sidebar.selectbox("Target bases", ["All", "On target", "Off target"])
+
+_repeat_cols_present = "homopolymer_len" in con.execute(f"DESCRIBE SELECT * FROM {table_expr} LIMIT 0").df()["column_name"].tolist()
+if _repeat_cols_present:
+    max_homopolymer = st.sidebar.slider("Max homopolymer length (0 = no limit)", 0, 20, 0, step=1)
+    max_str_len     = st.sidebar.slider("Max STR length (0 = no limit)",         0, 50, 0, step=1)
+else:
+    max_homopolymer = 0
+    max_str_len     = 0
+    st.sidebar.caption("Repeat filters unavailable — run geac collect with a newer build to enable.")
 min_depth = st.sidebar.number_input("Min depth (0 = no minimum)", min_value=0, value=0, step=1)
 max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, value=0, step=1)
 
@@ -289,6 +298,10 @@ elif on_target_sel == "Off target":
 if gene_sel:
     g_list = ", ".join(f"'{g}'" for g in gene_sel)
     conditions.append(f"gene IN ({g_list})")
+if max_homopolymer > 0:
+    conditions.append(f"homopolymer_len <= {max_homopolymer}")
+if max_str_len > 0:
+    conditions.append(f"str_len <= {max_str_len}")
 
 where = " AND ".join(conditions)
 

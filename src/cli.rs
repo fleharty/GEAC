@@ -91,6 +91,12 @@ pub struct CollectArgs {
     #[arg(long)]
     pub region: Option<String>,
 
+    /// Window size (bases on each side of the locus) used to scan for homopolymers
+    /// and short tandem repeats. Larger values detect longer repeat tracts but
+    /// slightly increase per-locus cost.
+    #[arg(long, default_value_t = 10)]
+    pub repeat_window: usize,
+
     /// Number of threads for parallel processing
     #[arg(short = 't', long, default_value_t = 1)]
     pub threads: usize,
