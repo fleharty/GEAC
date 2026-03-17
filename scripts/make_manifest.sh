@@ -2,15 +2,17 @@
 # make_manifest.sh — generate a GEAC manifest TSV from a directory of BAM files.
 #
 # Reads the SM tag from each BAM's @RG header line and writes a manifest with
-# columns: sample_id, bam_path, bai_path
+# columns: sample_id, bam_path, bai_path, variants_tsv_path
 #
 # Usage:
-#   bash scripts/make_manifest.sh -b /path/to/bams [-o manifest.tsv] [-p PATTERN]
+#   bash scripts/make_manifest.sh -b /path/to/bams [-o manifest.tsv] [-p PATTERN] [-v VARIANTS_PATTERN]
 #
 # Options:
-#   -b BAM_DIR   Directory containing BAM files (required)
-#   -o OUTPUT    Output manifest path (default: BAM_DIR/manifest.tsv)
-#   -p PATTERN   Glob pattern for BAMs (default: *.bam)
+#   -b BAM_DIR           Directory containing BAM files (required)
+#   -o OUTPUT            Output manifest path (default: BAM_DIR/manifest.tsv)
+#   -p PATTERN           Glob pattern for BAMs (default: *.bam)
+#   -v VARIANTS_PATTERN  Pattern for variants file relative to each BAM basename
+#                        (default: {sample}.bqsr.annotated_variants.txt)
 
 set -euo pipefail
 
@@ -22,14 +24,16 @@ usage() {
 BAM_DIR=""
 OUTPUT=""
 PATTERN="*.bam"
+VARIANTS_PATTERN="{sample}.bqsr.annotated_variants.txt"
 
-while getopts "b:o:p:h" opt; do
+while getopts "b:o:p:v:h" opt; do
     case $opt in
-        b) BAM_DIR="$OPTARG"  ;;
-        o) OUTPUT="$OPTARG"   ;;
-        p) PATTERN="$OPTARG"  ;;
-        h) usage              ;;
-        *) usage              ;;
+        b) BAM_DIR="$OPTARG"          ;;
+        o) OUTPUT="$OPTARG"           ;;
+        p) PATTERN="$OPTARG"          ;;
+        v) VARIANTS_PATTERN="$OPTARG" ;;
+        h) usage                      ;;
+        *) usage                      ;;
     esac
 done
 
@@ -59,7 +63,7 @@ echo "Found ${#bams[@]} BAM(s)"
 echo "Writing manifest to $OUTPUT"
 echo ""
 
-printf "sample_id\tbam_path\tbai_path\n" > "$OUTPUT"
+printf "sample_id\tbam_path\tbai_path\tvariants_tsv_path\n" > "$OUTPUT"
 
 failed=0
 for bam in "${bams[@]}"; do
@@ -77,12 +81,17 @@ for bam in "${bams[@]}"; do
 
     # Look for index alongside the BAM (.bai or .bam.bai)
     bai=""
-    if   [[ -f "${bam}.bai"                           ]]; then bai="${bam}.bai"
-    elif [[ -f "${bam%.bam}.bai"                      ]]; then bai="${bam%.bam}.bai"
+    if   [[ -f "${bam}.bai"      ]]; then bai="${bam}.bai"
+    elif [[ -f "${bam%.bam}.bai" ]]; then bai="${bam%.bam}.bai"
     fi
 
-    printf "%s\t%s\t%s\n" "$sample_id" "$bam" "$bai" >> "$OUTPUT"
-    echo "[ok]  $sample_id  →  $(basename "$bam")"
+    # Look for variants TSV using the configured pattern
+    variants_tsv_name="${VARIANTS_PATTERN/\{sample\}/$sample_id}"
+    variants_tsv="$BAM_DIR/$variants_tsv_name"
+    [[ -f "$variants_tsv" ]] || variants_tsv=""
+
+    printf "%s\t%s\t%s\t%s\n" "$sample_id" "$bam" "$bai" "$variants_tsv" >> "$OUTPUT"
+    echo "[ok]  $sample_id  →  $(basename "$bam")$([ -n "$variants_tsv" ] && echo "  +variants" || echo "  (no variants TSV)")"
 done
 
 echo ""
