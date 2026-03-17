@@ -8,6 +8,7 @@
 
 ## Explorer (Streamlit)
 
+- [x] IGV session download — manifest-driven BAM tracks + BED positions zip, capped at 5 samples
 - [ ] Position-level drill-down — click a locus and see all samples/alleles at that position
 - [ ] Export filtered data to CSV
 - [ ] Cohort comparison view — side-by-side stats across samples loaded from a DuckDB

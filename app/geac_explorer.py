@@ -1,3 +1,5 @@
+import io
+import zipfile
 import streamlit as st
 import duckdb
 import altair as alt
@@ -80,6 +82,115 @@ variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No",
 min_depth = st.sidebar.number_input("Min depth (0 = no minimum)", min_value=0, value=0, step=1)
 max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, value=0, step=1)
 
+# ── IGV integration (sidebar) ─────────────────────────────────────────────────
+st.sidebar.divider()
+st.sidebar.header("IGV Integration")
+
+manifest_path = st.sidebar.text_input(
+    "Manifest file (optional)",
+    placeholder="/path/to/manifest.tsv",
+    help="Tab-separated file with columns: sample_id, bam_path",
+)
+genome = st.sidebar.selectbox("Genome", ["hg38", "hg19", "mm10", "mm39", "other"])
+if genome == "other":
+    genome = st.sidebar.text_input("Genome ID", value="hg38")
+
+@st.cache_data
+def load_manifest(p: str) -> dict:
+    mdf = pd.read_csv(p.strip(), sep="\t")
+    return dict(zip(mdf["sample_id"].astype(str), mdf["bam_path"].astype(str)))
+
+manifest = {}
+if manifest_path and manifest_path.strip():
+    try:
+        manifest = load_manifest(manifest_path.strip())
+        st.sidebar.success(f"{len(manifest):,} samples loaded from manifest")
+    except Exception as e:
+        st.sidebar.error(f"Could not load manifest: {e}")
+
+# ── IGV helper functions ───────────────────────────────────────────────────────
+def make_bed(df: pd.DataFrame) -> str:
+    positions = (
+        df[["chrom", "pos"]]
+        .drop_duplicates()
+        .sort_values(["chrom", "pos"])
+    )
+    lines = [
+        f"{row.chrom}\t{int(row.pos)}\t{int(row.pos) + 1}"
+        for row in positions.itertuples(index=False)
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str) -> str:
+    sample_ids = df["sample_id"].unique().tolist()
+    first = df.sort_values(["chrom", "pos"]).iloc[0]
+    locus = f"{first['chrom']}:{max(0, int(first['pos']) - 100)}-{int(first['pos']) + 100}"
+
+    resources, tracks = [], []
+    for sid in sample_ids:
+        bam = manifest.get(str(sid))
+        if bam:
+            resources.append(f'        <Resource path="{bam}" name="{sid}"/>')
+            tracks.append(f'        <Track id="{bam}" name="{sid}"/>')
+
+    resources.append('        <Resource path="positions.bed" name="Selected positions"/>')
+    tracks.append('        <Track id="positions.bed" name="Selected positions" color="255,0,0" height="40"/>')
+
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n'
+        f'<Session genome="{genome}" locus="{locus}" version="8">\n'
+        '    <Resources>\n'
+        + "\n".join(resources) + "\n"
+        '    </Resources>\n'
+        '    <Tracks>\n'
+        + "\n".join(tracks) + "\n"
+        '    </Tracks>\n'
+        '</Session>\n'
+    )
+
+
+IGV_CAP = 5
+
+def igv_buttons(df: pd.DataFrame, key: str):
+    """Render IGV download buttons for a given dataframe."""
+    if not manifest:
+        st.caption("Add a manifest in the sidebar to enable IGV session download.")
+        return
+
+    sample_ids = df["sample_id"].unique().tolist()
+    n = len(sample_ids)
+    igv_df = df
+
+    if n > IGV_CAP:
+        st.warning(
+            f"{n} samples in this selection. IGV session capped at {IGV_CAP}. "
+            "Check the box below to override (you're on your own for 50,000 BAMs!)."
+        )
+        if st.checkbox(f"Load all {n} samples", key=f"{key}_override"):
+            pass  # igv_df already = df
+        else:
+            igv_df = df[df["sample_id"].isin(sample_ids[:IGV_CAP])]
+
+    bed     = make_bed(igv_df)
+    session = make_igv_session(igv_df, manifest, genome)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("session.xml", session)
+        zf.writestr("positions.bed", bed)
+    buf.seek(0)
+
+    st.download_button(
+        label="Download IGV session (.zip)",
+        data=buf,
+        file_name="igv_session.zip",
+        mime="application/zip",
+        key=f"{key}_dl",
+        help="Extract both files to the same folder, then open session.xml in IGV.",
+    )
+
+
 # ── Filtered query ────────────────────────────────────────────────────────────
 conditions = [
     f"alt_count >= {min_alt}",
@@ -121,26 +232,19 @@ cap_msg = " (capped at 50,000 — refine filters to see more)" if len(df) == 500
 st.info(f"**{len(df):,}** records{cap_msg}")
 
 # ── Data table ────────────────────────────────────────────────────────────────
-with st.expander("Data table", expanded=True):
-    st.dataframe(
-        df[[
-            "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
-            "variant_type", "vaf", "alt_count", "ref_count", "total_depth",
-            "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
-            "overlap_alt_disagree", "variant_called", "variant_filter",
-        ]],
-        use_container_width=True,
-    )
-
-# ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement"])
-
 _table_cols = [
     "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
     "variant_type", "vaf", "alt_count", "ref_count", "total_depth",
     "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
     "overlap_alt_disagree", "variant_called", "variant_filter",
 ]
+
+with st.expander("Data table", expanded=True):
+    st.dataframe(df[_table_cols], use_container_width=True)
+    igv_buttons(df, key="main")
+
+# ── Plots ─────────────────────────────────────────────────────────────────────
+tab1, tab2, tab3, tab4 = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement"])
 
 with tab1:
     for vtype, color in [
@@ -194,6 +298,7 @@ with tab1:
                         f"[{bin_start:.3f}, {bin_end:.3f})"
                     )
                     st.dataframe(sel[_table_cols], use_container_width=True)
+                    igv_buttons(sel, key=f"vaf_{vtype}_{bin_start}")
 
 with tab2:
     snvs = df[df["variant_type"] == "SNV"].copy()
@@ -223,6 +328,7 @@ with tab2:
                 sel = snvs[snvs["substitution"] == sub]
                 st.caption(f"{len(sel):,} records with substitution {sub}")
                 st.dataframe(sel[_table_cols], use_container_width=True)
+                igv_buttons(sel, key=f"spectrum_{sub}")
     else:
         st.info("No SNVs in current selection.")
 

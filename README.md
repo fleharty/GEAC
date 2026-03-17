@@ -159,16 +159,30 @@ Then open `http://localhost:8501` in your browser. Enter a Parquet or DuckDB
 file path in the text box to load data.
 
 Features:
-- **Summary statistics** — record count, sample count, chromosome count, position count,
-  total alt reads, mean VAF
-- **Sidebar filters** — chromosome, samples (multi-select), variant type, VAF range,
-  min alt count
-- **Data table** — paginated, sortable, all schema columns
+- **Summary statistics** — alt records, samples, total alt bases, mean VAF, mean depth,
+  % variant called
+- **Sidebar filters** — chromosome, samples, variant type, VAF range, min alt count,
+  variant called status, min/max depth
+- **Data table** — sortable, all schema columns, IGV session download button
 - **Tabbed plots**
-  - VAF distribution (histogram by variant type)
-  - SNV error spectrum (substitution counts)
+  - VAF distribution — separate histograms for SNV, insertion, deletion; click a bar
+    to see matching records and download an IGV session
+  - SNV error spectrum — click a substitution bar to see matching records and IGV session
   - Strand bias (forward vs reverse alt read scatter)
   - Overlap agreement fraction (histogram)
+- **IGV integration** — provide a manifest TSV (`sample_id`, `bam_path`) in the sidebar
+  to enable "Download IGV session" buttons throughout the app. Downloads a zip containing
+  `session.xml` (BAM tracks + BED track) and `positions.bed` (one row per unique locus).
+  Sessions are capped at 5 samples by default with an override option.
+
+### Manifest format
+
+```tsv
+sample_id	bam_path
+SAMPLE_001	gs://my-bucket/bams/SAMPLE_001.bam
+SAMPLE_002	gs://my-bucket/bams/SAMPLE_002.bam
+SAMPLE_003	/local/path/to/SAMPLE_003.bam
+```
 
 ## Schema
 
