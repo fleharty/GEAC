@@ -167,12 +167,14 @@ def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str) -> str:
 
 IGV_CAP = 5
 
-def igv_buttons(query_fn, display_df: pd.DataFrame, key: str):
-    """Render IGV Prepare + Download buttons.
+_IGV_CHUNK = 10_000
 
-    query_fn  — zero-arg callable that returns the full (unlimited) DataFrame
-    display_df — already-fetched display DataFrame (used only to enumerate sample_ids)
-    key        — unique widget key prefix
+def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str):
+    """Render IGV Prepare + Download buttons with chunked progress.
+
+    extra_conditions — additional SQL WHERE fragments (on top of global filters)
+    display_df       — already-fetched display DataFrame (used only to enumerate sample_ids)
+    key              — unique widget key prefix
     """
     if not manifest:
         st.caption("Add a manifest in the sidebar to enable IGV session download.")
@@ -198,16 +200,40 @@ def igv_buttons(query_fn, display_df: pd.DataFrame, key: str):
             cap_samples = sample_ids
 
     if st.button("Prepare IGV session", key=f"{key}_prepare"):
-        with st.spinner("Querying full dataset for IGV session…"):
-            full_df = query_fn()
-            igv_df = full_df[full_df["sample_id"].isin(cap_samples)]
-            bed = make_bed(igv_df)
-            session = make_igv_session(igv_df, manifest, genome)
-            buf = io.BytesIO()
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr("session.xml", session)
-                zf.writestr("positions.bed", bed)
-            st.session_state[f"{key}_igv"] = buf.getvalue()
+        w = " AND ".join(conditions + extra_conditions)
+        estimated = con.execute(
+            f"SELECT COUNT(*) FROM {table_expr} WHERE {w}"
+        ).fetchone()[0]
+
+        pbar = st.progress(0, text=f"Querying 0 / ~{estimated:,} records…")
+
+        cursor = con.execute(f"""
+            SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+            FROM {table_expr}
+            WHERE {w}
+        """)
+        col_names = [d[0] for d in cursor.description]
+        chunks, fetched = [], 0
+        while True:
+            rows = cursor.fetchmany(_IGV_CHUNK)
+            if not rows:
+                break
+            chunks.append(pd.DataFrame(rows, columns=col_names))
+            fetched += len(rows)
+            pct = min(fetched / estimated, 1.0) if estimated > 0 else 1.0
+            pbar.progress(pct, text=f"Querying {fetched:,} / ~{estimated:,} records…")
+
+        pbar.progress(1.0, text=f"Done — {fetched:,} records fetched.")
+
+        full_df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+        igv_df = full_df[full_df["sample_id"].isin(cap_samples)]
+        bed = make_bed(igv_df)
+        session = make_igv_session(igv_df, manifest, genome)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("session.xml", session)
+            zf.writestr("positions.bed", bed)
+        st.session_state[f"{key}_igv"] = buf.getvalue()
 
     if f"{key}_igv" in st.session_state:
         st.download_button(
@@ -282,7 +308,7 @@ _table_cols = [
 
 with st.expander("Data table", expanded=True):
     st.dataframe(df[_table_cols], use_container_width=True)
-    igv_buttons(lambda: query_records(limit=None), df, key="main")
+    igv_buttons([], df, key="main")
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4 = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement"])
@@ -346,12 +372,11 @@ with tab1:
                         f"[{bin_start:.3f}, {bin_end:.3f})"
                     )
                     st.dataframe(sel[_table_cols], use_container_width=True)
-                    _extra = [
+                    igv_buttons([
                         f"variant_type = '{vtype}'",
                         f"ROUND(alt_count * 1.0 / total_depth, 4) >= {bin_start}",
                         f"ROUND(alt_count * 1.0 / total_depth, 4) < {bin_end}",
-                    ]
-                    igv_buttons(lambda e=_extra: query_records(e, limit=None), sel, key=f"vaf_{vtype}_{bin_start}")
+                    ], sel, key=f"vaf_{vtype}_{bin_start}")
 
 with tab2:
     spec = con.execute(f"""
@@ -393,12 +418,11 @@ with tab2:
                 ])
                 st.caption(f"{len(sel):,} records with substitution {sub}")
                 st.dataframe(sel[_table_cols], use_container_width=True)
-                _extra = [
+                igv_buttons([
                     "variant_type = 'SNV'",
                     f"ref_allele = '{ref}'",
                     f"alt_allele = '{alt_allele}'",
-                ]
-                igv_buttons(lambda e=_extra: query_records(e, limit=None), sel, key=f"spectrum_{sub}")
+                ], sel, key=f"spectrum_{sub}")
 
 with tab3:
     sample_df = df.sample(min(2000, len(df)))
