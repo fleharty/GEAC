@@ -126,16 +126,16 @@ def make_bed(df: pd.DataFrame) -> str:
         return int(row["pos"]) + 1
 
     tmp = df.copy()
-    tmp["_end"] = tmp.apply(_end, axis=1)
+    tmp["bed_end"] = tmp.apply(_end, axis=1)
     # Where multiple records share the same locus, take the largest end coord.
     positions = (
-        tmp.groupby(["chrom", "pos"])["_end"]
+        tmp.groupby(["chrom", "pos"])["bed_end"]
         .max()
         .reset_index()
         .sort_values(["chrom", "pos"])
     )
     lines = [
-        f"{row.chrom}\t{int(row.pos)}\t{int(row._end)}"
+        f"{row.chrom}\t{int(row.pos)}\t{int(row.bed_end)}"
         for row in positions.itertuples(index=False)
     ]
     return "\n".join(lines) + "\n"
