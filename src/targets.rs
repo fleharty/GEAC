@@ -23,7 +23,10 @@ impl TargetIntervals {
     pub fn load(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read targets file: {}", path.display()))?;
+        Self::parse(&content)
+    }
 
+    fn parse(content: &str) -> Result<Self> {
         // Detect format by the presence of @ header lines (Picard interval list).
         let is_interval_list = content.lines().any(|l| l.starts_with('@'));
 
@@ -92,6 +95,115 @@ impl TargetIntervals {
 
     pub fn n_targets(&self) -> usize {
         self.by_chrom.values().map(|v| v.len()).sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(s: &str) -> TargetIntervals {
+        TargetIntervals::parse(s).expect("parse failed")
+    }
+
+    // ── BED ───────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn bed_inside_interval() {
+        let t = parse("chr1\t100\t200\n");
+        assert!(t.contains("chr1", 100));
+        assert!(t.contains("chr1", 150));
+        assert!(t.contains("chr1", 199));
+    }
+
+    #[test]
+    fn bed_outside_interval() {
+        let t = parse("chr1\t100\t200\n");
+        assert!(!t.contains("chr1", 99));
+        assert!(!t.contains("chr1", 200)); // end is exclusive
+        assert!(!t.contains("chr1", 300));
+    }
+
+    #[test]
+    fn bed_unknown_chrom() {
+        let t = parse("chr1\t100\t200\n");
+        assert!(!t.contains("chr2", 150));
+        assert!(!t.contains("chrX", 150));
+    }
+
+    #[test]
+    fn bed_multiple_chroms_independent() {
+        let t = parse("chr1\t100\t200\nchr2\t500\t600\n");
+        assert!( t.contains("chr1", 150));
+        assert!(!t.contains("chr1", 550));
+        assert!( t.contains("chr2", 550));
+        assert!(!t.contains("chr2", 150));
+    }
+
+    #[test]
+    fn bed_overlapping_intervals_merged() {
+        // [100,250) and [200,300) should merge to [100,300)
+        let t = parse("chr1\t100\t250\nchr1\t200\t300\n");
+        assert_eq!(t.n_targets(), 1);
+        assert!(t.contains("chr1", 100));
+        assert!(t.contains("chr1", 249));
+        assert!(t.contains("chr1", 250)); // inside the merged interval
+        assert!(t.contains("chr1", 299));
+        assert!(!t.contains("chr1", 300));
+    }
+
+    #[test]
+    fn bed_abutting_intervals_merged() {
+        // [100,200) and [200,300) share an edge and should merge
+        let t = parse("chr1\t100\t200\nchr1\t200\t300\n");
+        assert_eq!(t.n_targets(), 1);
+        assert!(t.contains("chr1", 199));
+        assert!(t.contains("chr1", 200));
+        assert!(t.contains("chr1", 299));
+    }
+
+    #[test]
+    fn bed_non_overlapping_not_merged() {
+        let t = parse("chr1\t100\t200\nchr1\t300\t400\n");
+        assert_eq!(t.n_targets(), 2);
+        assert!( t.contains("chr1", 150));
+        assert!(!t.contains("chr1", 250));
+        assert!( t.contains("chr1", 350));
+    }
+
+    #[test]
+    fn bed_skips_comment_and_blank_lines() {
+        let t = parse("# comment\nchr1\t100\t200\n\nchr1\t300\t400\n");
+        assert!(t.contains("chr1", 150));
+        assert!(t.contains("chr1", 350));
+    }
+
+    // ── Picard interval list ───────────────────────────────────────────────────
+
+    #[test]
+    fn picard_converts_to_zero_based() {
+        // Picard: 1-based inclusive [101, 200] → 0-based half-open [100, 200)
+        let t = parse("@HD\tVN:1.6\nchr1\t101\t200\t+\ttarget\n");
+        assert!( t.contains("chr1", 100)); // pos 100 is inside
+        assert!( t.contains("chr1", 199)); // pos 199 is the last inside
+        assert!(!t.contains("chr1", 99));  // pos 99 is before
+        assert!(!t.contains("chr1", 200)); // pos 200 is outside (half-open)
+    }
+
+    #[test]
+    fn picard_position_1_converts_correctly() {
+        // Picard start=1 → 0-based start=0
+        let t = parse("@HD\tVN:1.6\nchr1\t1\t100\t+\ttarget\n");
+        assert!(t.contains("chr1", 0));
+        assert!(t.contains("chr1", 99));
+        assert!(!t.contains("chr1", 100));
+    }
+
+    #[test]
+    fn picard_header_lines_skipped() {
+        let t = parse("@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:248956422\nchr1\t101\t200\t+\ttarget\n");
+        assert!(t.contains("chr1", 100));
+        assert_eq!(t.n_targets(), 1);
     }
 }
 

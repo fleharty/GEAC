@@ -61,9 +61,10 @@ fn alt_base_schema() -> Arc<Schema> {
         Field::new("variant_filter", DataType::Utf8, true),
         Field::new("on_target", DataType::Boolean, true),
         Field::new("gene", DataType::Utf8, true),
-        Field::new("homopolymer_len", DataType::Int32, false),
-        Field::new("str_period",      DataType::Int32, false),
-        Field::new("str_len",         DataType::Int32, false),
+        Field::new("homopolymer_len",  DataType::Int32, false),
+        Field::new("str_period",       DataType::Int32, false),
+        Field::new("str_len",          DataType::Int32, false),
+        Field::new("trinuc_context",   DataType::Utf8,  true),
     ]))
 }
 
@@ -104,6 +105,9 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
     let homopolymer_len: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.homopolymer_len)));
     let str_period:      ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.str_period)));
     let str_len:         ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.str_len)));
+    let trinuc_context:  ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.trinuc_context.as_deref()).collect::<Vec<_>>(),
+    ));
 
     RecordBatch::try_new(
         schema,
@@ -113,7 +117,7 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
             fwd_depth, rev_depth, fwd_alt_count, rev_alt_count, fwd_ref_count, rev_ref_count,
             overlap_depth, overlap_alt_agree, overlap_alt_disagree, overlap_ref_agree,
             read_type, pipeline, variant_called, variant_filter, on_target, gene,
-            homopolymer_len, str_period, str_len,
+            homopolymer_len, str_period, str_len, trinuc_context,
         ],
     )
     .context("failed to create Arrow record batch")

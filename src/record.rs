@@ -118,4 +118,8 @@ pub struct AltBase {
     pub str_period: i32,
     /// Total length (bp) of the STR tract. 0 if no repeat.
     pub str_len: i32,
+
+    // Trinucleotide context for SNVs (5'-base, ref-base, 3'-base from reference).
+    // Null for indels/MNVs, or when the locus is at a chromosome boundary.
+    pub trinuc_context: Option<String>,
 }

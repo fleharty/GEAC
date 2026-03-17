@@ -104,6 +104,17 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
         // Repetitiveness metrics — computed once per locus from the cached ref sequence.
         let repeat = compute_repeat_metrics(ref_cache.current_seq(), pos as usize, args.repeat_window);
 
+        // Trinucleotide context — raw 3-mer centered on this position (null at chromosome edges).
+        let trinuc_context: Option<String> = {
+            let seq = ref_cache.current_seq();
+            let p = pos as usize;
+            if p > 0 && p + 1 < seq.len() {
+                Some(format!("{}{}{}", seq[p - 1] as char, seq[p] as char, seq[p + 1] as char))
+            } else {
+                None
+            }
+        };
+
         // Extract ref base counts once for use in every alt record at this locus
         let ref_tally = bases.get(&ref_base);
         let ref_count = ref_tally.map_or(0, |t| t.total);
@@ -155,6 +166,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                 homopolymer_len: repeat.homopolymer_len,
                 str_period:      repeat.str_period,
                 str_len:         repeat.str_len,
+                trinuc_context:  trinuc_context.clone(),
             });
         }
 
@@ -200,6 +212,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                 homopolymer_len: repeat.homopolymer_len,
                 str_period:      repeat.str_period,
                 str_len:         repeat.str_len,
+                trinuc_context:  None,
             });
         }
     }

@@ -1011,6 +1011,7 @@ dependencies = [
  "arrow 53.4.1",
  "clap",
  "duckdb",
+ "flate2",
  "parquet",
  "rayon",
  "rust-htslib",

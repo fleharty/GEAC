@@ -1,5 +1,6 @@
 import io
 import zipfile
+import numpy as np
 import streamlit as st
 import duckdb
 import altair as alt
@@ -30,7 +31,7 @@ def open_connection(p: str):
         return duckdb.connect(p, read_only=True), "alt_bases"
     else:
         con = duckdb.connect()
-        return con, f"read_parquet('{p}')"
+        return con, f"read_parquet('{p}', union_by_name=true)"
 
 try:
     con, table_expr = open_connection(path)
@@ -64,10 +65,19 @@ samples = con.execute(f"SELECT DISTINCT sample_id FROM {table_expr} ORDER BY sam
 chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + chroms)
 sample_sel = st.sidebar.multiselect("Samples (blank = all)", samples)
 
-_genes_available = con.execute(f"SELECT COUNT(*) FROM {table_expr} WHERE gene IS NOT NULL").fetchone()[0] > 0
-genes = con.execute(f"SELECT DISTINCT gene FROM {table_expr} WHERE gene IS NOT NULL ORDER BY gene").df()["gene"].tolist() if _genes_available else []
-gene_sel = st.sidebar.multiselect("Gene (blank = all)", genes) if _genes_available else []
-if not _genes_available:
+_schema_cols = set(con.execute(f"DESCRIBE SELECT * FROM {table_expr} LIMIT 0").df()["column_name"].tolist())
+
+def _has_data(col: str) -> bool:
+    """True iff col exists in the schema AND has at least one non-null value."""
+    if col not in _schema_cols:
+        return False
+    return con.execute(f"SELECT COUNT(*) FROM {table_expr} WHERE {col} IS NOT NULL").fetchone()[0] > 0
+
+_genes_available = _has_data("gene")
+if _genes_available:
+    gene_text = st.sidebar.text_input("Gene (partial match, blank = all)", "")
+else:
+    gene_text = ""
     st.sidebar.caption("Gene filter unavailable — run geac collect with --gene-annotations to enable.")
 variant_sel = st.sidebar.multiselect(
     "Variant type",
@@ -79,13 +89,13 @@ min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000,
 variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No", "Unknown (no VCF/TSV)"])
 on_target_sel = st.sidebar.selectbox("Target bases", ["All", "On target", "Off target"])
 
-_repeat_cols_present = "homopolymer_len" in con.execute(f"DESCRIBE SELECT * FROM {table_expr} LIMIT 0").df()["column_name"].tolist()
+_repeat_cols_present = _has_data("homopolymer_len")
 if _repeat_cols_present:
-    max_homopolymer = st.sidebar.slider("Max homopolymer length (0 = no limit)", 0, 20, 0, step=1)
-    max_str_len     = st.sidebar.slider("Max STR length (0 = no limit)",         0, 50, 0, step=1)
+    homopolymer_range = st.sidebar.slider("Homopolymer length range", 0, 20, (0, 20), step=1)
+    str_len_range     = st.sidebar.slider("STR length range",         0, 50, (0, 50), step=1)
 else:
-    max_homopolymer = 0
-    max_str_len     = 0
+    homopolymer_range = (0, 20)
+    str_len_range     = (0, 50)
     st.sidebar.caption("Repeat filters unavailable — run geac collect with a newer build to enable.")
 min_depth = st.sidebar.number_input("Min depth (0 = no minimum)", min_value=0, value=0, step=1)
 max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, value=0, step=1)
@@ -291,17 +301,18 @@ elif variant_called_sel == "No":
     conditions.append("variant_called = false")
 elif variant_called_sel == "Unknown (no VCF/TSV)":
     conditions.append("variant_called IS NULL")
-if on_target_sel == "On target":
-    conditions.append("on_target = true")
-elif on_target_sel == "Off target":
-    conditions.append("on_target = false")
-if gene_sel:
-    g_list = ", ".join(f"'{g}'" for g in gene_sel)
-    conditions.append(f"gene IN ({g_list})")
-if max_homopolymer > 0:
-    conditions.append(f"homopolymer_len <= {max_homopolymer}")
-if max_str_len > 0:
-    conditions.append(f"str_len <= {max_str_len}")
+if "on_target" in _schema_cols:
+    if on_target_sel == "On target":
+        conditions.append("on_target = true")
+    elif on_target_sel == "Off target":
+        conditions.append("on_target = false")
+if gene_text.strip() and "gene" in _schema_cols:
+    _gene_escaped = gene_text.strip().replace("'", "''")
+    conditions.append(f"gene ILIKE '%{_gene_escaped}%'")
+
+if _repeat_cols_present:
+    conditions.append(f"homopolymer_len BETWEEN {homopolymer_range[0]} AND {homopolymer_range[1]}")
+    conditions.append(f"str_len BETWEEN {str_len_range[0]} AND {str_len_range[1]}")
 
 where = " AND ".join(conditions)
 
@@ -376,8 +387,75 @@ _table_cols = [
 ]
 
 with st.expander("Data table", expanded=True):
-    st.dataframe(df[_table_cols], use_container_width=True)
+    _tbl_event = st.dataframe(
+        df[_table_cols],
+        use_container_width=True,
+        on_select="rerun",
+        selection_mode="single-row",
+    )
     igv_buttons([], df, key="main")
+
+# ── Position-level drill-down ──────────────────────────────────────────────────
+_selected_rows = (_tbl_event.selection or {}).get("rows", [])
+if _selected_rows:
+    _row = df.iloc[_selected_rows[0]]
+    _chrom, _pos = _row["chrom"], int(_row["pos"])
+
+    # Query ALL samples/alleles at this locus, ignoring current filters.
+    _drill_df = con.execute(f"""
+        SELECT
+            sample_id,
+            ref_allele,
+            alt_allele,
+            variant_type,
+            alt_count,
+            ref_count,
+            total_depth,
+            ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+            fwd_alt_count,
+            rev_alt_count,
+            overlap_alt_agree,
+            overlap_alt_disagree,
+            variant_called,
+            variant_filter
+        FROM {table_expr}
+        WHERE chrom = '{_chrom}' AND pos = {_pos}
+        ORDER BY sample_id, alt_allele
+    """).df()
+
+    # Extract locus-level annotations from the first row (same for all samples).
+    _locus_cols = ["ref_allele"] + [
+        c for c in ["gene", "on_target", "homopolymer_len", "str_period", "str_len", "trinuc_context"]
+        if c in _schema_cols
+    ]
+    _locus_row = con.execute(f"""
+        SELECT {", ".join(_locus_cols)}
+        FROM {table_expr}
+        WHERE chrom = '{_chrom}' AND pos = {_pos}
+        LIMIT 1
+    """).df()
+
+    st.subheader(f"Position drill-down: {_chrom}:{_pos}")
+
+    # Locus-level info as metrics
+    _info_cols = st.columns(6)
+    _info_cols[0].metric("Ref allele", str(_locus_row["ref_allele"].iloc[0]))
+    _info_cols[1].metric("Samples with alt", str(_drill_df["sample_id"].nunique()))
+    if "gene" in _locus_row.columns:
+        _info_cols[2].metric("Gene", str(_locus_row["gene"].iloc[0] or "intergenic"))
+    if "on_target" in _locus_row.columns:
+        _info_cols[3].metric("On target", str(_locus_row["on_target"].iloc[0]))
+    if "homopolymer_len" in _locus_row.columns:
+        _info_cols[4].metric("Homopolymer len", str(_locus_row["homopolymer_len"].iloc[0]))
+    if "trinuc_context" in _locus_row.columns:
+        _info_cols[5].metric("Trinuc context", str(_locus_row["trinuc_context"].iloc[0] or ""))
+
+    st.dataframe(_drill_df, use_container_width=True, hide_index=True)
+    igv_buttons(
+        [f"chrom = '{_chrom}'", f"pos = {_pos}"],
+        _drill_df,
+        key=f"drill_{_chrom}_{_pos}",
+    )
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4 = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement"])
@@ -448,66 +526,203 @@ with tab1:
                     ], sel, key=f"vaf_{vtype}_{bin_start}")
 
 with tab2:
-    spec = con.execute(f"""
-        SELECT ref_allele || '>' || alt_allele AS substitution, COUNT(*) AS count
-        FROM {table_expr}
-        WHERE {where} AND variant_type = 'SNV'
-        GROUP BY substitution
-        ORDER BY count DESC
-    """).df()
+    _COMP = str.maketrans('ACGT', 'TGCA')
+    _SBS_MUT_TYPES = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G"]
+    _SBS_COLORS    = {
+        "C>A": "#1BBDEB", "C>G": "#231F20", "C>T": "#E22926",
+        "T>A": "#CBCACB", "T>C": "#97D54C", "T>G": "#ECC6C5",
+    }
+    _SBS_ORDER = [
+        f"{b5}[{mt}]{b3}"
+        for mt in _SBS_MUT_TYPES
+        for b5 in "ACGT"
+        for b3 in "ACGT"
+    ]
 
-    if spec.empty:
-        st.info("No SNVs in current selection.")
-    else:
-        sel_param = alt.selection_point(name="bar_click", fields=["substitution"], on="click")
-        chart = (
-            alt.Chart(spec)
-            .mark_bar()
-            .encode(
-                alt.X("substitution:N", sort="-y", title="Substitution"),
-                alt.Y("count:Q", title="Count"),
-                alt.Color("substitution:N", legend=None),
-                opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.4)),
-                tooltip=["substitution:N", "count:Q"],
+    _trinuc_available = _has_data("trinuc_context")
+
+    if _trinuc_available:
+        raw = con.execute(f"""
+            SELECT trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
+            FROM {table_expr}
+            WHERE {where} AND variant_type = 'SNV' AND trinuc_context IS NOT NULL
+              AND length(trinuc_context) = 3
+            GROUP BY trinuc_context, ref_allele, alt_allele
+        """).df()
+
+        if raw.empty:
+            st.info("No SNVs with trinucleotide context in current selection.")
+        else:
+            def _sbs(row):
+                ctx, r, a = row["trinuc_context"], row["ref_allele"], row["alt_allele"]
+                if not all(b in 'ACGT' for b in (ctx + r + a)):
+                    return None
+                if r in ('A', 'G'):
+                    ctx = ctx[::-1].translate(_COMP)
+                    r = r.translate(_COMP)
+                    a = a.translate(_COMP)
+                return f"{ctx[0]}[{r}>{a}]{ctx[2]}"
+
+            raw["sbs_label"] = raw.apply(_sbs, axis=1)
+            raw = raw.dropna(subset=["sbs_label"])
+            raw["mut_type"] = raw["sbs_label"].str.extract(r'\[([A-Z]>[A-Z])\]')[0]
+
+            agg = raw.groupby(["sbs_label", "mut_type"], as_index=False)["count"].sum()
+            # Ensure all 96 contexts are present (fill missing with 0)
+            full = pd.DataFrame({
+                "sbs_label": _SBS_ORDER,
+                "mut_type":  [lbl[2:5] for lbl in _SBS_ORDER],
+            })
+            spec96 = full.merge(agg, on=["sbs_label", "mut_type"], how="left")
+            spec96["count"] = spec96["count"].fillna(0).astype(int)
+
+            sel_param = alt.selection_point(name="bar_click", fields=["sbs_label"], on="click")
+            chart = (
+                alt.Chart(spec96)
+                .mark_bar()
+                .encode(
+                    alt.X("sbs_label:N", sort=_SBS_ORDER, title="Trinucleotide context",
+                          axis=alt.Axis(labelAngle=-90, labelFontSize=7, labelOverlap=False)),
+                    alt.Y("count:Q", title="Count"),
+                    alt.Color("mut_type:N",
+                        scale=alt.Scale(
+                            domain=_SBS_MUT_TYPES,
+                            range=[_SBS_COLORS[m] for m in _SBS_MUT_TYPES],
+                        ),
+                        title="Mutation type",
+                    ),
+                    opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.5)),
+                    tooltip=["sbs_label:N", "mut_type:N", "count:Q"],
+                )
+                .add_params(sel_param)
+                .properties(title="SNV Trinucleotide Spectrum (SBS96)", height=350)
             )
-            .add_params(sel_param)
-            .properties(title="SNV Error Spectrum", height=350)
-        )
-        event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
+            event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
 
-        pts = (event.selection or {}).get("bar_click", [])
-        if pts:
-            sub = pts[0].get("substitution")
-            if sub:
-                ref, alt_allele = sub.split(">")
-                sel = query_records([
-                    "variant_type = 'SNV'",
-                    f"ref_allele = '{ref}'",
-                    f"alt_allele = '{alt_allele}'",
-                ])
-                st.caption(f"{len(sel):,} records with substitution {sub}")
-                st.dataframe(sel[_table_cols], use_container_width=True)
-                igv_buttons([
-                    "variant_type = 'SNV'",
-                    f"ref_allele = '{ref}'",
-                    f"alt_allele = '{alt_allele}'",
-                ], sel, key=f"spectrum_{sub}")
+            pts = (event.selection or {}).get("bar_click", [])
+            if pts:
+                clicked = pts[0].get("sbs_label")
+                if clicked:
+                    matching = raw[raw["sbs_label"] == clicked][["trinuc_context", "ref_allele", "alt_allele"]]
+                    if not matching.empty:
+                        or_clauses = " OR ".join(
+                            f"(trinuc_context = '{r.trinuc_context}' AND ref_allele = '{r.ref_allele}' AND alt_allele = '{r.alt_allele}')"
+                            for r in matching.itertuples(index=False)
+                        )
+                        extra_cond = f"variant_type = 'SNV' AND ({or_clauses})"
+                        sel = query_records([extra_cond])
+                        st.caption(f"{len(sel):,} records with context {clicked}")
+                        st.dataframe(sel[_table_cols], use_container_width=True)
+                        igv_buttons([extra_cond], sel, key=f"sbs_{clicked}")
+
+    else:
+        # Fallback: simple ref>alt spectrum for older Parquet files
+        spec = con.execute(f"""
+            SELECT ref_allele || '>' || alt_allele AS substitution, COUNT(*) AS count
+            FROM {table_expr}
+            WHERE {where} AND variant_type = 'SNV'
+            GROUP BY substitution
+            ORDER BY count DESC
+        """).df()
+
+        if spec.empty:
+            st.info("No SNVs in current selection.")
+        else:
+            sel_param = alt.selection_point(name="bar_click", fields=["substitution"], on="click")
+            chart = (
+                alt.Chart(spec)
+                .mark_bar()
+                .encode(
+                    alt.X("substitution:N", sort="-y", title="Substitution"),
+                    alt.Y("count:Q", title="Count"),
+                    alt.Color("substitution:N", legend=None),
+                    opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.4)),
+                    tooltip=["substitution:N", "count:Q"],
+                )
+                .add_params(sel_param)
+                .properties(title="SNV Error Spectrum", height=350)
+            )
+            event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
+
+            pts = (event.selection or {}).get("bar_click", [])
+            if pts:
+                sub = pts[0].get("substitution")
+                if sub:
+                    ref, alt_allele = sub.split(">")
+                    sel = query_records([
+                        "variant_type = 'SNV'",
+                        f"ref_allele = '{ref}'",
+                        f"alt_allele = '{alt_allele}'",
+                    ])
+                    st.caption(f"{len(sel):,} records with substitution {sub}")
+                    st.dataframe(sel[_table_cols], use_container_width=True)
+                    igv_buttons([
+                        "variant_type = 'SNV'",
+                        f"ref_allele = '{ref}'",
+                        f"alt_allele = '{alt_allele}'",
+                    ], sel, key=f"spectrum_{sub}")
 
 with tab3:
     sample_df = df.sample(min(2000, len(df)))
-    chart = (
+    max_val = max(
+        int(sample_df["fwd_alt_count"].max()) if len(sample_df) > 0 else 50,
+        int(sample_df["rev_alt_count"].max()) if len(sample_df) > 0 else 50,
+        1,
+    )
+
+    # 95% CI band using normal approximation to Binomial(n, 0.5).
+    # For a point (fwd=x, rev=y), total n = x+y. Under H0 (equal strand probability)
+    # fwd ~ N(n/2, n/4). The point is in the 95% CI iff lo(n) <= x <= hi(n).
+    #
+    # For each x, we solve for the rev range [rev_min, rev_max]:
+    #   rev_min: x = hi(x+y)  →  s² + z·s − 2x = 0  →  s = (−z + √(z²+8x))/2
+    #   rev_max: x = lo(x+y)  →  s² − z·s − 2x = 0  →  s = ( z + √(z²+8x))/2
+    # where s = √(x+y) and n = s².
+    _x = np.arange(0, max_val + 1, dtype=float)
+    _z = 1.96
+    _s_lo = (-_z + np.sqrt(_z**2 + 8 * _x)) / 2
+    _s_hi = ( _z + np.sqrt(_z**2 + 8 * _x)) / 2
+    _ci_band = pd.DataFrame({
+        "fwd":     _x,
+        "rev_min": np.maximum(_s_lo**2 - _x, 0.0),
+        "rev_max": _s_hi**2 - _x,
+    })
+
+    _diag = pd.DataFrame({"fwd": [0.0, float(max_val)], "rev": [0.0, float(max_val)]})
+
+    ci_area = (
+        alt.Chart(_ci_band)
+        .mark_area(opacity=0.25, color="steelblue")
+        .encode(
+            alt.X("fwd:Q"),
+            alt.Y("rev_min:Q"),
+            alt.Y2("rev_max:Q"),
+        )
+    )
+    diag_line = (
+        alt.Chart(_diag)
+        .mark_line(strokeDash=[6, 4], color="gray", opacity=0.7)
+        .encode(
+            alt.X("fwd:Q"),
+            alt.Y("rev:Q"),
+        )
+    )
+    scatter = (
         alt.Chart(sample_df)
         .mark_point(opacity=0.5, size=30)
         .encode(
             alt.X("fwd_alt_count:Q", title="Forward alt reads"),
             alt.Y("rev_alt_count:Q", title="Reverse alt reads"),
             alt.Color("variant_type:N", title="Variant type"),
-            tooltip=["sample_id", "chrom", "pos", "ref_allele", "alt_allele",
-                     "fwd_alt_count", "rev_alt_count", "vaf"],
+            tooltip=(
+                ["sample_id", "chrom", "pos", "ref_allele", "alt_allele",
+                 "fwd_alt_count", "rev_alt_count", "vaf"]
+                + (["gene"] if _genes_available else [])
+            ),
         )
-        .properties(title="Strand Bias (up to 2,000 points)", height=350)
+        .properties(title="Strand Bias — dashed line: perfect balance; shaded band: 95% CI under Binomial(n, 0.5)", height=350)
     )
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart((ci_area + diag_line + scatter).resolve_scale(color="independent"), use_container_width=True)
 
 with tab4:
     ov = df[df["overlap_depth"] > 0].copy()

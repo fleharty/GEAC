@@ -3,12 +3,13 @@
 # writing one Parquet file per sample to the same directory.
 #
 # Usage:
-#   bash scripts/collect_cohort.sh -b /path/to/bams -r /path/to/ref.fa [-g targets.bed]
+#   bash scripts/collect_cohort.sh -b /path/to/bams -r /path/to/ref.fa [-g targets.bed] [-a genes.gtf]
 #
 # Options:
 #   -b BAM_DIR    Directory containing {sample}.bqsr.bam files (required)
 #   -r REFERENCE  Path to reference FASTA (required)
 #   -g TARGETS    BED or Picard interval list for on-target annotation (optional)
+#   -a GENE_ANNOT GFF3 or GTF file for gene annotation (optional)
 #   -j JOBS       Number of samples to process in parallel (default: 4)
 #   -t THREADS    CPU threads per geac collect job (default: 4)
 #   -f            Force re-run even if the output Parquet already exists
@@ -23,20 +24,22 @@ usage() {
 BAM_DIR=""
 REFERENCE=""
 TARGETS=""
+GENE_ANNOT=""
 JOBS=4
 THREADS=4
 FORCE=0
 
-while getopts "b:r:g:j:t:fh" opt; do
+while getopts "b:r:g:a:j:t:fh" opt; do
     case $opt in
-        b) BAM_DIR="$OPTARG"   ;;
-        r) REFERENCE="$OPTARG" ;;
-        g) TARGETS="$OPTARG"   ;;
-        j) JOBS="$OPTARG"      ;;
-        t) THREADS="$OPTARG"   ;;
-        f) FORCE=1             ;;
-        h) usage               ;;
-        *) usage               ;;
+        b) BAM_DIR="$OPTARG"     ;;
+        r) REFERENCE="$OPTARG"   ;;
+        g) TARGETS="$OPTARG"     ;;
+        a) GENE_ANNOT="$OPTARG"  ;;
+        j) JOBS="$OPTARG"        ;;
+        t) THREADS="$OPTARG"     ;;
+        f) FORCE=1               ;;
+        h) usage                 ;;
+        *) usage                 ;;
     esac
 done
 
@@ -44,7 +47,8 @@ done
 [[ -n "$REFERENCE" ]] || { echo "Error: -r REFERENCE is required"; usage; }
 [[ -d "$BAM_DIR"   ]] || { echo "Error: directory not found: $BAM_DIR";   exit 1; }
 [[ -f "$REFERENCE" ]] || { echo "Error: reference not found: $REFERENCE"; exit 1; }
-[[ -z "$TARGETS" || -f "$TARGETS" ]] || { echo "Error: targets file not found: $TARGETS"; exit 1; }
+[[ -z "$TARGETS"    || -f "$TARGETS"    ]] || { echo "Error: targets file not found: $TARGETS";         exit 1; }
+[[ -z "$GENE_ANNOT" || -f "$GENE_ANNOT" ]] || { echo "Error: gene annotation file not found: $GENE_ANNOT"; exit 1; }
 
 # Locate the geac binary: prefer the release build in this repo, then PATH.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -71,6 +75,7 @@ echo "Found ${#bams[@]} BAM(s) in $BAM_DIR"
 echo "Geac binary : $GEAC"
 echo "Reference   : $REFERENCE"
 echo "Targets     : ${TARGETS:-none}"
+echo "Gene annot  : ${GENE_ANNOT:-none}"
 echo "Parallel    : $JOBS jobs x $THREADS threads"
 echo ""
 
@@ -108,6 +113,10 @@ run_sample() {
         cmd+=(--targets "$TARGETS")
     fi
 
+    if [[ -n "$GENE_ANNOT" ]]; then
+        cmd+=(--gene-annotations "$GENE_ANNOT")
+    fi
+
     echo "[run]  $sample"
     if "${cmd[@]}"; then
         echo "[done] $sample"
@@ -118,7 +127,7 @@ run_sample() {
 }
 
 export -f run_sample
-export BAM_DIR REFERENCE TARGETS THREADS FORCE GEAC
+export BAM_DIR REFERENCE TARGETS GENE_ANNOT THREADS FORCE GEAC
 
 failed=0
 
