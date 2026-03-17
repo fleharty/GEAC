@@ -82,6 +82,10 @@ variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No",
 min_depth = st.sidebar.number_input("Min depth (0 = no minimum)", min_value=0, value=0, step=1)
 max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, value=0, step=1)
 
+_limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
+_limit_sel = st.sidebar.selectbox("Display limit (rows)", _limit_options, index=5)
+display_limit = None if _limit_sel == "All" else int(_limit_sel)
+
 # ── IGV integration (sidebar) ─────────────────────────────────────────────────
 st.sidebar.divider()
 st.sidebar.header("IGV Integration")
@@ -163,15 +167,20 @@ def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str) -> str:
 
 IGV_CAP = 5
 
-def igv_buttons(df: pd.DataFrame, key: str):
-    """Render IGV download buttons for a given dataframe."""
+def igv_buttons(query_fn, display_df: pd.DataFrame, key: str):
+    """Render IGV Prepare + Download buttons.
+
+    query_fn  — zero-arg callable that returns the full (unlimited) DataFrame
+    display_df — already-fetched display DataFrame (used only to enumerate sample_ids)
+    key        — unique widget key prefix
+    """
     if not manifest:
         st.caption("Add a manifest in the sidebar to enable IGV session download.")
         return
 
-    sample_ids = df["sample_id"].unique().tolist()
+    sample_ids = display_df["sample_id"].unique().tolist()
     n = len(sample_ids)
-    igv_df = df
+    cap_samples = sample_ids[:IGV_CAP]
 
     missing = [sid for sid in sample_ids if str(sid) not in manifest]
     if missing:
@@ -186,27 +195,29 @@ def igv_buttons(df: pd.DataFrame, key: str):
             "Check the box below to override (you're on your own for 50,000 BAMs!)."
         )
         if st.checkbox(f"Load all {n} samples", key=f"{key}_override"):
-            pass  # igv_df already = df
-        else:
-            igv_df = df[df["sample_id"].isin(sample_ids[:IGV_CAP])]
+            cap_samples = sample_ids
 
-    bed     = make_bed(igv_df)
-    session = make_igv_session(igv_df, manifest, genome)
+    if st.button("Prepare IGV session", key=f"{key}_prepare"):
+        with st.spinner("Querying full dataset for IGV session…"):
+            full_df = query_fn()
+            igv_df = full_df[full_df["sample_id"].isin(cap_samples)]
+            bed = make_bed(igv_df)
+            session = make_igv_session(igv_df, manifest, genome)
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("session.xml", session)
+                zf.writestr("positions.bed", bed)
+            st.session_state[f"{key}_igv"] = buf.getvalue()
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("session.xml", session)
-        zf.writestr("positions.bed", bed)
-    buf.seek(0)
-
-    st.download_button(
-        label="Download IGV session (.zip)",
-        data=buf,
-        file_name="igv_session.zip",
-        mime="application/zip",
-        key=f"{key}_dl",
-        help="Extract both files to the same folder, then open session.xml in IGV.",
-    )
+    if f"{key}_igv" in st.session_state:
+        st.download_button(
+            label="Download IGV session (.zip)",
+            data=st.session_state[f"{key}_igv"],
+            file_name="igv_session.zip",
+            mime="application/zip",
+            key=f"{key}_dl",
+            help="Extract both files to the same folder, then open session.xml in IGV.",
+        )
 
 
 # ── Filtered query ────────────────────────────────────────────────────────────
@@ -235,30 +246,30 @@ elif variant_called_sel == "Unknown (no VCF/TSV)":
 
 where = " AND ".join(conditions)
 
-def query_records(extra: list[str] = []) -> pd.DataFrame:
-    """Query records with current filters plus any extra conditions. No row cap."""
+def query_records(extra: list[str] = [], limit: int | None = display_limit) -> pd.DataFrame:
+    """Query records with current filters plus any extra conditions.
+    limit=None fetches all rows (used for IGV); otherwise applies LIMIT."""
     w = " AND ".join(conditions + extra)
+    limit_clause = f"LIMIT {limit}" if limit is not None else ""
     return con.execute(f"""
         SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
         FROM {table_expr}
         WHERE {w}
+        {limit_clause}
     """).df()
 
 total_count = con.execute(f"SELECT COUNT(*) FROM {table_expr} WHERE {where}").fetchone()[0]
-
-df = con.execute(f"""
-    SELECT *,
-           ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
-    FROM {table_expr}
-    WHERE {where}
-    LIMIT 50000
-""").df()
 
 if total_count == 0:
     st.warning("No records match the current filters.")
     st.stop()
 
-cap_msg = " (table capped at 50,000 — plots and drill-downs use full dataset)" if total_count > 50000 else ""
+df = query_records()
+
+cap_msg = (
+    f" (showing {len(df):,} of {total_count:,} — plots and IGV drill-downs use full dataset)"
+    if len(df) < total_count else ""
+)
 st.info(f"**{total_count:,}** records{cap_msg}")
 
 # ── Data table ────────────────────────────────────────────────────────────────
@@ -271,7 +282,7 @@ _table_cols = [
 
 with st.expander("Data table", expanded=True):
     st.dataframe(df[_table_cols], use_container_width=True)
-    igv_buttons(df, key="main")
+    igv_buttons(lambda: query_records(limit=None), df, key="main")
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4 = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement"])
@@ -335,7 +346,12 @@ with tab1:
                         f"[{bin_start:.3f}, {bin_end:.3f})"
                     )
                     st.dataframe(sel[_table_cols], use_container_width=True)
-                    igv_buttons(sel, key=f"vaf_{vtype}_{bin_start}")
+                    _extra = [
+                        f"variant_type = '{vtype}'",
+                        f"ROUND(alt_count * 1.0 / total_depth, 4) >= {bin_start}",
+                        f"ROUND(alt_count * 1.0 / total_depth, 4) < {bin_end}",
+                    ]
+                    igv_buttons(lambda e=_extra: query_records(e, limit=None), sel, key=f"vaf_{vtype}_{bin_start}")
 
 with tab2:
     spec = con.execute(f"""
@@ -377,7 +393,12 @@ with tab2:
                 ])
                 st.caption(f"{len(sel):,} records with substitution {sub}")
                 st.dataframe(sel[_table_cols], use_container_width=True)
-                igv_buttons(sel, key=f"spectrum_{sub}")
+                _extra = [
+                    "variant_type = 'SNV'",
+                    f"ref_allele = '{ref}'",
+                    f"alt_allele = '{alt_allele}'",
+                ]
+                igv_buttons(lambda e=_extra: query_records(e, limit=None), sel, key=f"spectrum_{sub}")
 
 with tab3:
     sample_df = df.sample(min(2000, len(df)))
