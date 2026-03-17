@@ -745,8 +745,28 @@ with tab2:
                             "exposure", ascending=False
                         ).reset_index(drop=True)
 
+                        # ── Goodness-of-fit ───────────────────────────────
+                        reconstructed = W @ h
+                        cos_sim = (
+                            float(np.dot(obs, reconstructed))
+                            / (np.linalg.norm(obs) * np.linalg.norm(reconstructed) + 1e-12)
+                        )
+                        residual_pct = float(np.linalg.norm(obs - reconstructed)) / (float(obs.sum()) + 1e-12) * 100
+
+                        fit_col1, fit_col2 = st.columns(2)
+                        fit_col1.metric(
+                            "Cosine similarity",
+                            f"{cos_sim:.4f}",
+                            help="1.0 = perfect reconstruction. Values above 0.95 indicate a good fit.",
+                        )
+                        fit_col2.metric(
+                            "Residual (% of counts)",
+                            f"{residual_pct:.1f}%",
+                            help="L2 norm of unexplained counts as a percentage of total SNV count. Lower is better.",
+                        )
+
                         top_n_sig = st.slider(
-                            "Top signatures to display", 3, min(20, len(sig_df)), 10,
+                            "Top signatures to display", 3, min(20, len(sig_df)), 4,
                             key="top_n_sig",
                         )
                         top_df = sig_df.head(top_n_sig)
