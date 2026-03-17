@@ -64,7 +64,9 @@ chroms = con.execute(f"SELECT DISTINCT chrom FROM {table_expr} ORDER BY chrom").
 samples = con.execute(f"SELECT DISTINCT sample_id FROM {table_expr} ORDER BY sample_id").df()["sample_id"].tolist()
 
 chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + chroms)
-sample_sel = st.sidebar.multiselect("Samples (blank = all)", samples)
+if "sample_sel" not in st.session_state:
+    st.session_state["sample_sel"] = []
+sample_sel = st.sidebar.multiselect("Samples (blank = all)", samples, key="sample_sel")
 
 _schema_cols = set(con.execute(f"DESCRIBE SELECT * FROM {table_expr} LIMIT 0").df()["column_name"].tolist())
 
@@ -459,7 +461,7 @@ if _selected_rows:
     )
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement"])
+tab1, tab2, tab3, tab4, tab_cohort = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort"])
 
 with tab1:
     for vtype, color in [
@@ -936,3 +938,70 @@ with tab4:
         st.altair_chart(chart, use_container_width=True)
     else:
         st.info("No overlapping fragments in current selection.")
+
+with tab_cohort:
+    if not path.endswith(".duckdb"):
+        st.info("Cohort view is available when loading a merged DuckDB file (`geac merge` output).")
+    else:
+        st.subheader("Per-sample summary")
+        st.caption(
+            "Applies all active sidebar filters except the sample selection. "
+            "Click a row to focus all other tabs on that sample."
+        )
+
+        # Build a where clause without the sample_sel condition so all
+        # samples always appear in the cohort summary table.
+        _cohort_conditions = [c for c in conditions if not c.startswith("sample_id IN")]
+        _cohort_where = " AND ".join(_cohort_conditions) if _cohort_conditions else "true"
+
+        _has_overlap = _has_data("overlap_alt_agree")
+        _overlap_col = """
+            ROUND(
+                SUM(overlap_alt_agree) * 1.0
+                    / NULLIF(SUM(overlap_alt_agree + overlap_alt_disagree), 0),
+                4
+            ) AS overlap_concordance,
+        """ if _has_overlap else "NULL AS overlap_concordance,"
+
+        _cohort_stats = con.execute(f"""
+            SELECT
+                sample_id,
+                COUNT(*) FILTER (WHERE variant_type = 'SNV')       AS n_snv,
+                COUNT(*) FILTER (WHERE variant_type = 'insertion')  AS n_insertion,
+                COUNT(*) FILTER (WHERE variant_type = 'deletion')   AS n_deletion,
+                ROUND(AVG(total_depth), 1)                          AS mean_depth,
+                ROUND(AVG(alt_count * 1.0 / total_depth), 6)       AS mean_vaf,
+                ROUND(
+                    AVG(fwd_alt_count * 1.0
+                        / NULLIF(fwd_alt_count + rev_alt_count, 0)),
+                    4
+                ) AS strand_balance,
+                {_overlap_col}
+                COUNT(*) AS n_total
+            FROM {table_expr}
+            WHERE {_cohort_where}
+            GROUP BY sample_id
+            ORDER BY sample_id
+        """).df()
+
+        if _cohort_stats.empty:
+            st.warning("No records match the current filters.")
+        else:
+            _cohort_event = st.dataframe(
+                _cohort_stats,
+                use_container_width=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                hide_index=True,
+            )
+
+            _cohort_sel = (_cohort_event.selection or {}).get("rows", [])
+            if _cohort_sel:
+                _focused_sample = _cohort_stats.iloc[_cohort_sel[0]]["sample_id"]
+                st.caption(
+                    f"Focused on **{_focused_sample}** — "
+                    "click button below to filter all tabs to this sample."
+                )
+                if st.button(f"Filter all tabs to {_focused_sample}"):
+                    st.session_state["sample_sel"] = [_focused_sample]
+                    st.rerun()
