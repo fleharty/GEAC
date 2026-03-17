@@ -193,8 +193,9 @@ with tab1:
 with tab2:
     snvs = df[df["variant_type"] == "SNV"].copy()
     if len(snvs) > 0:
-        spec = snvs.groupby(["ref_allele", "alt_allele"]).size().reset_index(name="count")
-        spec["substitution"] = spec["ref_allele"] + ">" + spec["alt_allele"]
+        snvs["substitution"] = snvs["ref_allele"] + ">" + snvs["alt_allele"]
+        spec = snvs.groupby("substitution").size().reset_index(name="count")
+        sel_param = alt.selection_point(name="bar_click", fields=["substitution"], on="click")
         chart = (
             alt.Chart(spec)
             .mark_bar()
@@ -202,11 +203,21 @@ with tab2:
                 alt.X("substitution:N", sort="-y", title="Substitution"),
                 alt.Y("count:Q", title="Count"),
                 alt.Color("substitution:N", legend=None),
+                opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.4)),
                 tooltip=["substitution:N", "count:Q"],
             )
+            .add_params(sel_param)
             .properties(title="SNV Error Spectrum", height=350)
         )
-        st.altair_chart(chart, use_container_width=True)
+        event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
+
+        pts = (event.selection or {}).get("bar_click", [])
+        if pts:
+            sub = pts[0].get("substitution")
+            if sub:
+                sel = snvs[snvs["substitution"] == sub]
+                st.caption(f"{len(sel):,} records with substitution {sub}")
+                st.dataframe(sel[_table_cols], use_container_width=True)
     else:
         st.info("No SNVs in current selection.")
 
