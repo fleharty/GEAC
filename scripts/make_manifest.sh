@@ -85,10 +85,16 @@ for bam in "${bams[@]}"; do
     elif [[ -f "${bam%.bam}.bai" ]]; then bai="${bam%.bam}.bai"
     fi
 
-    # Look for variants TSV using the configured pattern
-    variants_tsv_name="${VARIANTS_PATTERN/\{sample\}/$sample_id}"
-    variants_tsv="$BAM_DIR/$variants_tsv_name"
-    [[ -f "$variants_tsv" ]] || variants_tsv=""
+    # Look for variants TSV: derive from BAM filename (strip .bam, append suffix),
+    # then fall back to the configured pattern substituted with the SM tag.
+    variants_tsv=""
+    _bam_derived="${bam%.bam}.annotated_variants.txt"
+    if [[ -f "$_bam_derived" ]]; then
+        variants_tsv="$_bam_derived"
+    else
+        _pattern_derived="$BAM_DIR/${VARIANTS_PATTERN/\{sample\}/$sample_id}"
+        [[ -f "$_pattern_derived" ]] && variants_tsv="$_pattern_derived"
+    fi
 
     printf "%s\t%s\t%s\t%s\n" "$sample_id" "$bam" "$bai" "$variants_tsv" >> "$OUTPUT"
     echo "[ok]  $sample_id  →  $(basename "$bam")$([ -n "$variants_tsv" ] && echo "  +variants" || echo "  (no variants TSV)")"
