@@ -22,6 +22,9 @@ pub enum Command {
 
     /// Merge per-sample Parquet files into a cohort DuckDB database
     Merge(MergeArgs),
+
+    /// Print a per-sample QC summary from one or more Parquet files
+    Qc(QcArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -104,6 +107,21 @@ pub struct CollectArgs {
     /// Progress reporting interval in seconds (0 to disable)
     #[arg(long, default_value_t = 30)]
     pub progress_interval: u64,
+}
+
+#[derive(Parser, Debug)]
+pub struct QcArgs {
+    /// Input Parquet file(s)
+    #[arg(required = true)]
+    pub inputs: Vec<PathBuf>,
+
+    /// Write a machine-readable TSV summary to this file (in addition to the stdout report)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Restrict QC to on-target loci only (requires on_target column)
+    #[arg(long)]
+    pub on_target_only: bool,
 }
 
 #[derive(Parser, Debug)]

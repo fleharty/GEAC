@@ -3,6 +3,7 @@ mod cli;
 mod gene_annotations;
 mod merge;
 mod progress;
+mod qc;
 mod record;
 mod repeat;
 mod targets;
@@ -101,6 +102,10 @@ fn main() -> Result<()> {
 
         Command::Merge(args) => {
             merge::merge(&args)?;
+        }
+
+        Command::Qc(args) => {
+            qc::run_qc(&args)?;
         }
     }
 
