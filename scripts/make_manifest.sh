@@ -63,6 +63,8 @@ printf "sample_id\tbam_path\tbai_path\n" > "$OUTPUT"
 
 failed=0
 for bam in "${bams[@]}"; do
+    bam="$(cd "$(dirname "$bam")" && pwd)/$(basename "$bam")"
+
     # Extract SM tag from the first @RG line that has one
     sample_id=$(samtools view -H "$bam" \
         | awk '/^@RG/ { for(i=1;i<=NF;i++) if ($i ~ /^SM:/) { sub(/^SM:/,"",$i); print $i; exit } }')
