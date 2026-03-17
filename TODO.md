@@ -24,7 +24,7 @@
 - [x] Strand bias plot — dashed y=x diagonal + 95% binomial CI band; gene name in hover tooltip
 - [x] SNV trinucleotide spectrum (SBS96) — 3×2 grid of per-mutation-type panels with shared y-axis; click drill-down
 - [ ] Cohort comparison view — side-by-side stats across samples loaded from a DuckDB
-- [ ] NMF decomposition — fit the per-sample SBS96 spectrum against COSMIC reference signatures using NMF; show the largest contributing signatures and their weights
+- [x] NMF decomposition — fit the per-sample SBS96 spectrum against COSMIC reference signatures using NNLS; show the largest contributing signatures and their weights
 
 ## WDL / Terra
 
