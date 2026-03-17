@@ -115,13 +115,27 @@ if manifest_path and manifest_path.strip():
 
 # ── IGV helper functions ───────────────────────────────────────────────────────
 def make_bed(df: pd.DataFrame) -> str:
+    # For deletions the alt_allele is e.g. "-ACGT", so the deleted bases span
+    # pos+1 .. pos+del_len.  Extend the BED end to cover the full deleted region
+    # so IGV highlights the right coordinates.  For all other variant types a
+    # single-base interval (pos, pos+1) is correct.
+    def _end(row) -> int:
+        alt = str(row["alt_allele"])
+        if row["variant_type"] == "deletion" and alt.startswith("-"):
+            return int(row["pos"]) + len(alt)   # anchor + deleted bases
+        return int(row["pos"]) + 1
+
+    tmp = df.copy()
+    tmp["_end"] = tmp.apply(_end, axis=1)
+    # Where multiple records share the same locus, take the largest end coord.
     positions = (
-        df[["chrom", "pos"]]
-        .drop_duplicates()
+        tmp.groupby(["chrom", "pos"])["_end"]
+        .max()
+        .reset_index()
         .sort_values(["chrom", "pos"])
     )
     lines = [
-        f"{row.chrom}\t{int(row.pos)}\t{int(row.pos) + 1}"
+        f"{row.chrom}\t{int(row.pos)}\t{int(row._end)}"
         for row in positions.itertuples(index=False)
     ]
     return "\n".join(lines) + "\n"
