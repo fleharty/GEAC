@@ -25,6 +25,9 @@ pub enum Command {
 
     /// Print a per-sample QC summary from one or more Parquet files
     Qc(QcArgs),
+
+    /// Summarise recurrent loci across a cohort of Parquet files
+    Cohort(CohortArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -122,6 +125,33 @@ pub struct QcArgs {
     /// Restrict QC to on-target loci only (requires on_target column)
     #[arg(long)]
     pub on_target_only: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct CohortArgs {
+    /// Input Parquet files (one per sample)
+    #[arg(required = true)]
+    pub inputs: Vec<PathBuf>,
+
+    /// Output file — written as Parquet if the extension is .parquet, TSV otherwise
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Minimum number of samples a locus must appear in to be reported (default: 2)
+    #[arg(long, default_value_t = 2)]
+    pub min_samples: u32,
+
+    /// Minimum fraction of samples a locus must appear in, 0.0–1.0 (default: 0.0)
+    #[arg(long, default_value_t = 0.0)]
+    pub min_sample_fraction: f64,
+
+    /// Restrict to on-target loci only (requires on_target column)
+    #[arg(long)]
+    pub on_target_only: bool,
+
+    /// Number of top loci to print to stdout (by sample fraction, default: 20)
+    #[arg(long, default_value_t = 20)]
+    pub top_n: usize,
 }
 
 #[derive(Parser, Debug)]

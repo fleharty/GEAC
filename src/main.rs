@@ -1,5 +1,6 @@
 mod bam;
 mod cli;
+mod cohort;
 mod gene_annotations;
 mod merge;
 mod progress;
@@ -106,6 +107,10 @@ fn main() -> Result<()> {
 
         Command::Qc(args) => {
             qc::run_qc(&args)?;
+        }
+
+        Command::Cohort(args) => {
+            cohort::run_cohort(&args)?;
         }
     }
 
