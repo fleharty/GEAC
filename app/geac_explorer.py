@@ -130,29 +130,45 @@ with st.expander("Data table", expanded=True):
 # ── Plots ─────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4 = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement"])
 
+_table_cols = [
+    "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
+    "variant_type", "vaf", "alt_count", "ref_count", "total_depth",
+    "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
+    "overlap_alt_disagree", "variant_called", "variant_filter",
+]
+
 with tab1:
     for vtype, color in [
         ("SNV",       "#4c78a8"),
         ("insertion", "#f58518"),
         ("deletion",  "#e45756"),
     ]:
-        subset = df[df["variant_type"] == vtype]
-        if True:
-            if len(subset) == 0:
-                st.info(f"No {vtype}s in current selection.")
-            else:
-                chart = (
-                    alt.Chart(subset)
-                    .mark_bar(opacity=0.8, color=color)
-                    .encode(
-                        alt.X("vaf:Q", bin=alt.Bin(maxbins=50, extent=[0, 1]), title="VAF",
-                              scale=alt.Scale(domain=[0, 1])),
-                        alt.Y("count():Q", title="Count"),
-                        tooltip=["count():Q"],
-                    )
-                    .properties(title=f"{vtype} VAF Distribution", height=300)
+        subset = df[df["variant_type"] == vtype].copy()
+        if len(subset) == 0:
+            st.info(f"No {vtype}s in current selection.")
+        else:
+            chart = (
+                alt.Chart(subset)
+                .mark_bar(opacity=0.8, color=color)
+                .encode(
+                    alt.X("vaf:Q", bin=alt.Bin(maxbins=50, extent=[0, 1]), title="VAF",
+                          scale=alt.Scale(domain=[0, 1])),
+                    alt.Y("count():Q", title="Count"),
+                    tooltip=["count():Q"],
                 )
-                st.altair_chart(chart, use_container_width=True)
+                .add_params(alt.selection_point(name="bar_click", on="click", encodings=["x"]))
+                .properties(title=f"{vtype} VAF Distribution", height=300)
+            )
+            event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
+
+            pts = (event.selection or {}).get("bar_click", [])
+            if pts:
+                bin_start = pts[0].get("vaf_start")
+                bin_end   = pts[0].get("vaf_end")
+                if bin_start is not None and bin_end is not None:
+                    sel = subset[(subset["vaf"] >= bin_start) & (subset["vaf"] < bin_end)]
+                    st.caption(f"{len(sel):,} records with VAF in [{bin_start:.3f}, {bin_end:.3f})")
+                    st.dataframe(sel[_table_cols], use_container_width=True)
 
 with tab2:
     snvs = df[df["variant_type"] == "SNV"].copy()
