@@ -71,6 +71,7 @@ variant_sel = st.sidebar.multiselect(
 )
 vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01)
 min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, value=1, step=1)
+variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No", "Unknown (no VCF/TSV)"])
 
 # ── Filtered query ────────────────────────────────────────────────────────────
 conditions = [
@@ -85,6 +86,12 @@ if sample_sel:
 if variant_sel:
     t_list = ", ".join(f"'{t}'" for t in variant_sel)
     conditions.append(f"variant_type IN ({t_list})")
+if variant_called_sel == "Yes":
+    conditions.append("variant_called = true")
+elif variant_called_sel == "No":
+    conditions.append("variant_called = false")
+elif variant_called_sel == "Unknown (no VCF/TSV)":
+    conditions.append("variant_called IS NULL")
 
 where = " AND ".join(conditions)
 df = con.execute(f"""
