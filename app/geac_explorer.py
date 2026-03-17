@@ -229,7 +229,7 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
     if n > IGV_CAP:
         st.warning(
             f"{n} samples in this selection. IGV session capped at {IGV_CAP}. "
-            "Check the box below to override (you're on your own for 50,000 BAMs!)."
+            "Check the box below to override (may crash IGV — you're on your own)."
         )
         if st.checkbox(f"Load all {n} samples", key=f"{key}_override"):
             cap_samples = sample_ids
