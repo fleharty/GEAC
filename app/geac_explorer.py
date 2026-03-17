@@ -63,6 +63,12 @@ samples = con.execute(f"SELECT DISTINCT sample_id FROM {table_expr} ORDER BY sam
 
 chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + chroms)
 sample_sel = st.sidebar.multiselect("Samples (blank = all)", samples)
+
+_genes_available = con.execute(f"SELECT COUNT(*) FROM {table_expr} WHERE gene IS NOT NULL").fetchone()[0] > 0
+genes = con.execute(f"SELECT DISTINCT gene FROM {table_expr} WHERE gene IS NOT NULL ORDER BY gene").df()["gene"].tolist() if _genes_available else []
+gene_sel = st.sidebar.multiselect("Gene (blank = all)", genes) if _genes_available else []
+if not _genes_available:
+    st.sidebar.caption("Gene filter unavailable — run geac collect with --gene-annotations to enable.")
 variant_sel = st.sidebar.multiselect(
     "Variant type",
     ["SNV", "insertion", "deletion", "MNV"],
@@ -280,6 +286,9 @@ if on_target_sel == "On target":
     conditions.append("on_target = true")
 elif on_target_sel == "Off target":
     conditions.append("on_target = false")
+if gene_sel:
+    g_list = ", ".join(f"'{g}'" for g in gene_sel)
+    conditions.append(f"gene IN ({g_list})")
 
 where = " AND ".join(conditions)
 
@@ -350,7 +359,7 @@ _table_cols = [
     "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
     "variant_type", "vaf", "alt_count", "ref_count", "total_depth",
     "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
-    "overlap_alt_disagree", "variant_called", "variant_filter", "on_target",
+    "overlap_alt_disagree", "variant_called", "variant_filter", "on_target", "gene",
 ]
 
 with st.expander("Data table", expanded=True):

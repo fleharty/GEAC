@@ -1,5 +1,6 @@
 mod bam;
 mod cli;
+mod gene_annotations;
 mod merge;
 mod progress;
 mod record;
@@ -71,7 +72,25 @@ fn main() -> Result<()> {
                 info!(n_targets = ti.n_targets(), "target intervals loaded");
             }
 
-            let records = bam::collect_alt_bases(&args, annotator, target_intervals.as_ref().map(|t| t as &_))?;
+            let gene_annots = args
+                .gene_annotations
+                .as_ref()
+                .map(|p| {
+                    info!(gene_annotations = %p.display(), "loading gene annotations");
+                    gene_annotations::GeneAnnotations::load(p)
+                })
+                .transpose()?;
+
+            if let Some(ref ga) = gene_annots {
+                info!(n_genes = ga.n_genes(), "gene annotations loaded");
+            }
+
+            let records = bam::collect_alt_bases(
+                &args,
+                annotator,
+                target_intervals.as_ref().map(|t| t as &_),
+                gene_annots.as_ref(),
+            )?;
 
             info!(n_records = records.len(), "writing Parquet output");
             writer::parquet::write_parquet(&records, &args.output)?;

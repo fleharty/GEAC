@@ -106,4 +106,7 @@ pub struct AltBase {
     // Target annotation (None if no targets file was provided)
     /// true if the locus overlaps a target interval, false if not, null if no targets given
     pub on_target: Option<bool>,
+
+    // Gene annotation (None if no annotation file was provided or locus is intergenic)
+    pub gene: Option<String>,
 }

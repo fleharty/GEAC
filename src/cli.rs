@@ -64,6 +64,13 @@ pub struct CollectArgs {
     #[arg(long, conflicts_with = "vcf")]
     pub variants_tsv: Option<PathBuf>,
 
+    /// Optional GFF3 or GTF gene annotation file.
+    /// When provided, each record is annotated with the gene name it overlaps.
+    /// Only gene-level features are used (not exon/transcript).
+    /// If omitted, or for intergenic loci, `gene` is null in the output Parquet.
+    #[arg(long)]
+    pub gene_annotations: Option<PathBuf>,
+
     /// Optional BED file or Picard interval list of target regions.
     /// When provided, each record is annotated with `on_target = true/false`.
     /// If omitted, `on_target` is null in the output Parquet.

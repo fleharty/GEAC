@@ -6,7 +6,7 @@
 - [ ] Integration tests — generate synthetic BAM data and write end-to-end tests
 - [ ] Cohort-level CLI subcommand — per-locus artifact frequencies across samples (e.g. flag positions seen in N% of samples)
 - [x] On-target annotation — add `--targets` BED flag to `geac collect`; records `on_target bool?` column in Parquet (null if no BED provided). Locus is on-target if it overlaps any interval in the BED.
-- [ ] Gene annotation — add `--genes-bed` flag to `geac collect`; BED file with gene name in column 4. Records `gene string?` column (null if no BED provided or locus falls outside all intervals). Used for gene-level filtering in the Explorer.
+- [x] Gene annotation — add `--gene-annotations` flag to `geac collect`; accepts GFF3 or GTF (auto-detected). Records `gene string?` column (null if not provided or intergenic). Explorer shows gene multiselect when column is populated.
 - [ ] Locus repetitiveness metrics — for each locus, compute and record: `homopolymer_len` (length of the longest homopolymer run overlapping the position in the reference), `str_period` (period length of the shortest tandem repeat unit at the locus, 1 = homopolymer), and `str_len` (total length of the STR tract in bp). Requires a reference FASTA window around the locus. Consider exposing a `--repeat-window` flag (default e.g. 10 bp each side) to control how far to scan. All three columns are int32, 0 if no repeat detected.
 
 ## Explorer (Streamlit)
@@ -17,7 +17,7 @@
 - [ ] Export filtered data to CSV
 - [ ] Cohort comparison view — side-by-side stats across samples loaded from a DuckDB
 - [x] On-target filter — sidebar selectbox "Target bases": All / On target / Off target; depends on `on_target` column being populated (show warning if all null)
-- [ ] Gene filter — sidebar multiselect in the chromosome/region section; populated from distinct `gene` values; depends on `gene` column being populated
+- [x] Gene filter — sidebar multiselect in the chromosome/region section; populated from distinct `gene` values; depends on `gene` column being populated
 - [ ] Repeat filter — sidebar sliders for max `homopolymer_len` and max `str_len`; show warning if columns are absent. Useful for excluding error-prone repetitive loci from analysis.
 
 ## WDL / Terra
