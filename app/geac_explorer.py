@@ -55,14 +55,6 @@ n_annotated = int(stats["n_annotated"][0])
 n_called    = int(stats["n_called"][0])
 pct_called  = f"{100 * n_called / n_annotated:.1f}%" if n_annotated > 0 else "N/A"
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Alt records",      f"{int(stats['n_records'][0]):,}")
-c2.metric("Samples",          f"{int(stats['n_samples'][0]):,}")
-c3.metric("Total alt bases",  f"{int(stats['total_alt_bases'][0]):,}")
-c4.metric("Mean VAF",         str(stats["mean_vaf"][0]))
-c5.metric("Mean depth",       str(stats["mean_depth"][0]))
-c6.metric("% variant called", pct_called)
-
 # ── Filters (sidebar) ─────────────────────────────────────────────────────────
 st.sidebar.header("Filters")
 
@@ -271,6 +263,42 @@ elif variant_called_sel == "Unknown (no VCF/TSV)":
     conditions.append("variant_called IS NULL")
 
 where = " AND ".join(conditions)
+
+# ── Summary stats display ──────────────────────────────────────────────────────
+fstats = con.execute(f"""
+    SELECT
+        COUNT(*)                                        AS n_records,
+        COUNT(DISTINCT sample_id)                       AS n_samples,
+        SUM(alt_count)                                  AS total_alt_bases,
+        ROUND(AVG(alt_count * 1.0 / total_depth), 4)   AS mean_vaf,
+        ROUND(AVG(total_depth), 1)                      AS mean_depth,
+        COUNT(*) FILTER (WHERE variant_called IS NOT NULL) AS n_annotated,
+        COUNT(*) FILTER (WHERE variant_called = true)   AS n_called
+    FROM {table_expr}
+    WHERE {where}
+""").df()
+
+fn_annotated = int(fstats["n_annotated"][0])
+fn_called    = int(fstats["n_called"][0])
+fpct_called  = f"{100 * fn_called / fn_annotated:.1f}%" if fn_annotated > 0 else "N/A"
+
+st.caption("Overall")
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Alt records",      f"{int(stats['n_records'][0]):,}")
+c2.metric("Samples",          f"{int(stats['n_samples'][0]):,}")
+c3.metric("Total alt bases",  f"{int(stats['total_alt_bases'][0]):,}")
+c4.metric("Mean VAF",         str(stats["mean_vaf"][0]))
+c5.metric("Mean depth",       str(stats["mean_depth"][0]))
+c6.metric("% variant called", pct_called)
+
+st.caption("Filtered")
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Alt records",      f"{int(fstats['n_records'][0]):,}")
+c2.metric("Samples",          f"{int(fstats['n_samples'][0]):,}")
+c3.metric("Total alt bases",  f"{int(fstats['total_alt_bases'][0]):,}")
+c4.metric("Mean VAF",         str(fstats["mean_vaf"][0]))
+c5.metric("Mean depth",       str(fstats["mean_depth"][0]))
+c6.metric("% variant called", fpct_called)
 
 def query_records(extra: list[str] = [], limit: int | None = display_limit) -> pd.DataFrame:
     """Query records with current filters plus any extra conditions.
