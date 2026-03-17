@@ -112,6 +112,8 @@ if manifest_path and manifest_path.strip():
     try:
         manifest = load_manifest(manifest_path.strip())
         st.sidebar.success(f"{len(manifest):,} samples loaded from manifest")
+        with st.sidebar.expander("Manifest sample IDs"):
+            st.write(sorted(manifest.keys()))
     except Exception as e:
         st.sidebar.error(f"Could not load manifest: {e}")
 
@@ -170,6 +172,13 @@ def igv_buttons(df: pd.DataFrame, key: str):
     sample_ids = df["sample_id"].unique().tolist()
     n = len(sample_ids)
     igv_df = df
+
+    missing = [sid for sid in sample_ids if str(sid) not in manifest]
+    if missing:
+        st.warning(
+            f"Sample(s) not found in manifest — no BAM track will be added for: "
+            f"{', '.join(str(s) for s in missing)}"
+        )
 
     if n > IGV_CAP:
         st.warning(
