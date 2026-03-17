@@ -16,6 +16,7 @@
 - [ ] Position-level drill-down — click a locus and see all samples/alleles at that position
 - [x] Export filtered data to CSV — handled by Streamlit's built-in dataframe toolbar download button
 - [ ] Cohort comparison view — side-by-side stats across samples loaded from a DuckDB
+- [ ] NMF decomposition — fit the per-sample SBS96 spectrum against COSMIC reference signatures using NMF; show the largest contributing signatures and their weights
 - [x] On-target filter — sidebar selectbox "Target bases": All / On target / Off target; depends on `on_target` column being populated (show warning if all null)
 - [x] Gene filter — sidebar multiselect in the chromosome/region section; populated from distinct `gene` values; depends on `gene` column being populated
 - [x] Repeat filter — sidebar sliders for max `homopolymer_len` and max `str_len`; show warning if columns are absent. Useful for excluding error-prone repetitive loci from analysis.
