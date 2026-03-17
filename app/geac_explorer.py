@@ -5,6 +5,7 @@ import streamlit as st
 import duckdb
 import altair as alt
 import pandas as pd
+from scipy.optimize import nnls
 
 st.set_page_config(page_title="GEAC Explorer", layout="wide")
 st.title("GEAC Explorer")
@@ -622,6 +623,94 @@ with tab2:
                         st.caption(f"{len(sel):,} records with context {clicked}")
                         st.dataframe(sel[_table_cols], use_container_width=True)
                         igv_buttons([extra_cond], sel, key=f"sbs_{clicked}")
+
+            # ── COSMIC signature decomposition (NNLS) ─────────────────────────
+            st.divider()
+            st.subheader("COSMIC Signature Decomposition")
+            st.caption(
+                "Provide a COSMIC SBS matrix file (tab-separated, 96 contexts × N signatures). "
+                "Download from the COSMIC website under Mutational Signatures → Downloads "
+                "(e.g. COSMIC_v3.4_SBS_GRCh37.txt)."
+            )
+
+            cosmic_path = st.text_input(
+                "COSMIC SBS matrix path",
+                placeholder="/path/to/COSMIC_v3.4_SBS_GRCh37.txt",
+                key="cosmic_path",
+            )
+
+            @st.cache_data
+            def _load_cosmic(p: str) -> pd.DataFrame:
+                df_c = pd.read_csv(p, sep="\t", index_col=0)
+                return df_c
+
+            if cosmic_path and cosmic_path.strip():
+                try:
+                    cosmic_df = _load_cosmic(cosmic_path.strip())
+                    # Align rows to our canonical SBS96 order
+                    cosmic_aligned = cosmic_df.reindex(_SBS_ORDER)
+                    missing = cosmic_aligned.isna().any(axis=1).sum()
+                    if missing > 0:
+                        st.warning(
+                            f"{missing} context(s) not found in COSMIC matrix — "
+                            "check that the file uses the standard A[C>A]A format."
+                        )
+                    else:
+                        W = cosmic_aligned.values.astype(float)  # 96 × N
+                        obs = (
+                            spec96.set_index("sbs_label")["count"]
+                            .reindex(_SBS_ORDER)
+                            .fillna(0)
+                            .values.astype(float)
+                        )
+
+                        h, _residual = nnls(W, obs)
+                        total = h.sum()
+                        h_norm = h / total if total > 0 else h
+
+                        sig_df = pd.DataFrame({
+                            "signature": cosmic_aligned.columns.tolist(),
+                            "exposure":  h_norm,
+                        })
+                        sig_df = sig_df[sig_df["exposure"] > 0].sort_values(
+                            "exposure", ascending=False
+                        ).reset_index(drop=True)
+
+                        top_n_sig = st.slider(
+                            "Top signatures to display", 3, min(20, len(sig_df)), 10,
+                            key="top_n_sig",
+                        )
+                        top_df = sig_df.head(top_n_sig)
+
+                        sig_chart = (
+                            alt.Chart(top_df)
+                            .mark_bar()
+                            .encode(
+                                alt.X("signature:N",
+                                      sort=list(top_df["signature"]),
+                                      title="Signature"),
+                                alt.Y("exposure:Q",
+                                      title="Exposure (proportion)",
+                                      axis=alt.Axis(format=".0%")),
+                                alt.Color("signature:N", legend=None),
+                                tooltip=[
+                                    "signature:N",
+                                    alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
+                                ],
+                            )
+                            .properties(
+                                title=f"Top {top_n_sig} COSMIC SBS Signatures (NNLS fit)",
+                                height=300,
+                            )
+                        )
+                        st.altair_chart(sig_chart, use_container_width=True)
+
+                        display = top_df.copy()
+                        display["exposure"] = display["exposure"].map("{:.2%}".format)
+                        st.dataframe(display, use_container_width=True, hide_index=True)
+
+                except Exception as exc:
+                    st.error(f"Failed to load COSMIC matrix: {exc}")
 
     else:
         # Fallback: simple ref>alt spectrum for older Parquet files
