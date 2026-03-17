@@ -624,6 +624,72 @@ with tab2:
                         st.dataframe(sel[_table_cols], use_container_width=True)
                         igv_buttons([extra_cond], sel, key=f"sbs_{clicked}")
 
+            # ── COSMIC signature known-cause annotations ──────────────────────
+            _SBS_ETIOLOGY = {
+                # Age / endogenous
+                "SBS1":  "Age-related CpG deamination (5-methylcytosine → T)",
+                "SBS5":  "Age-related, unknown mechanism",
+                # APOBEC
+                "SBS2":  "APOBEC (C>T at TC context)",
+                "SBS13": "APOBEC (C>G at TC context)",
+                # Mismatch repair deficiency / MSI
+                "SBS6":  "Mismatch repair deficiency (MMRd/MSI)",
+                "SBS14": "MMRd + POLE mutation",
+                "SBS15": "Mismatch repair deficiency (MMRd/MSI)",
+                "SBS20": "Mismatch repair deficiency (MMRd/MSI)",
+                "SBS21": "Mismatch repair deficiency (MMRd/MSI)",
+                "SBS26": "Mismatch repair deficiency (MMRd/MSI)",
+                "SBS44": "Mismatch repair deficiency (MMRd/MSI)",
+                # POLE / proofreading
+                "SBS10a": "POLE proofreading exonuclease mutation",
+                "SBS10b": "POLE proofreading exonuclease mutation",
+                "SBS10c": "POLD1 proofreading mutation",
+                "SBS10d": "POLD1 proofreading mutation",
+                "SBS28": "POLE mutation (mechanism unclear)",
+                # UV light
+                "SBS7a": "UV light (C>T at dipyrimidines)",
+                "SBS7b": "UV light (C>T at dipyrimidines)",
+                "SBS7c": "UV light",
+                "SBS7d": "UV light",
+                # Tobacco / smoking
+                "SBS4":  "Tobacco smoking (BPDE adducts, C>A)",
+                "SBS29": "Tobacco chewing",
+                # Chemotherapy
+                "SBS25": "Chemotherapy (mechanism unclear)",
+                "SBS31": "Platinum chemotherapy",
+                "SBS35": "Platinum chemotherapy",
+                "SBS86": "Chemotherapy (unknown agent)",
+                "SBS87": "Thiopurine chemotherapy",
+                # Environmental carcinogens
+                "SBS22": "Aristolochic acid exposure",
+                "SBS24": "Aflatoxin exposure",
+                # HR deficiency
+                "SBS3":  "Homologous recombination deficiency (BRCA1/2)",
+                # Oxidative damage / sequencing artifacts
+                "SBS18": "Oxidative damage (8-oxoG, C>A)",
+                "SBS36": "Base excision repair deficiency (MUTYH)",
+                "SBS58": "Oxidative damage artifact (8-oxoG) — common sequencing artifact",
+                # Other / tissue-specific
+                "SBS8":  "Unknown — late replication timing",
+                "SBS9":  "Polymerase η somatic hypermutation",
+                "SBS11": "Temozolomide chemotherapy",
+                "SBS16": "Unknown — liver-specific, associated with alcohol",
+                "SBS17a": "Unknown — esophageal/gastric enrichment (T>G)",
+                "SBS17b": "Unknown — esophageal/gastric enrichment (T>G)",
+                "SBS19": "Unknown",
+                "SBS23": "Unknown",
+                "SBS30": "Base excision repair deficiency (NTHL1)",
+                "SBS33": "Unknown",
+                "SBS34": "Unknown",
+                "SBS37": "Unknown",
+                "SBS38": "Indirect UV damage",
+                "SBS39": "Unknown",
+                "SBS40": "Unknown — age-related",
+                "SBS41": "Unknown",
+                "SBS84": "AID activity (immune/lymphoid)",
+                "SBS85": "AID activity (immune/lymphoid)",
+            }
+
             # ── COSMIC signature decomposition (NNLS) ─────────────────────────
             st.divider()
             st.subheader("COSMIC Signature Decomposition")
@@ -672,6 +738,9 @@ with tab2:
                             "signature": cosmic_aligned.columns.tolist(),
                             "exposure":  h_norm,
                         })
+                        sig_df["etiology"] = sig_df["signature"].map(
+                            lambda s: _SBS_ETIOLOGY.get(s, "")
+                        )
                         sig_df = sig_df[sig_df["exposure"] > 0].sort_values(
                             "exposure", ascending=False
                         ).reset_index(drop=True)
@@ -696,6 +765,7 @@ with tab2:
                                 tooltip=[
                                     "signature:N",
                                     alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
+                                    alt.Tooltip("etiology:N", title="Etiology"),
                                 ],
                             )
                             .properties(
