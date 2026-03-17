@@ -771,6 +771,9 @@ with tab2:
                         )
                         top_df = sig_df.head(top_n_sig)
 
+                        # Fix color domain to full ranked list so colors
+                        # don't shift when the slider changes.
+                        _all_sigs = list(sig_df["signature"])
                         sig_chart = (
                             alt.Chart(top_df)
                             .mark_bar()
@@ -781,7 +784,9 @@ with tab2:
                                 alt.Y("exposure:Q",
                                       title="Exposure (proportion)",
                                       axis=alt.Axis(format=".0%")),
-                                alt.Color("signature:N", legend=None),
+                                alt.Color("signature:N",
+                                          scale=alt.Scale(domain=_all_sigs),
+                                          legend=None),
                                 tooltip=[
                                     "signature:N",
                                     alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
