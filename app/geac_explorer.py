@@ -86,9 +86,12 @@ max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, v
 st.sidebar.divider()
 st.sidebar.header("IGV Integration")
 
+import os as _os
+_default_manifest = _os.path.join(_os.path.dirname(_os.path.abspath(path)), "manifest.tsv")
+
 manifest_path = st.sidebar.text_input(
     "Manifest file (optional)",
-    placeholder="/path/to/manifest.tsv",
+    value=_default_manifest,
     help="Tab-separated file with columns: sample_id, bam_path, bai_path",
 )
 genome = st.sidebar.selectbox("Genome", ["hg38", "hg19", "mm10", "mm39", "other"])
