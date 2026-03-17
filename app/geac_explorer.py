@@ -322,13 +322,13 @@ where = " AND ".join(conditions)
 # ── Summary stats display ──────────────────────────────────────────────────────
 fstats = con.execute(f"""
     SELECT
-        COUNT(*)                                        AS n_records,
-        COUNT(DISTINCT sample_id)                       AS n_samples,
-        SUM(alt_count)                                  AS total_alt_bases,
-        ROUND(AVG(alt_count * 1.0 / total_depth), 4)   AS mean_vaf,
-        ROUND(AVG(total_depth), 1)                      AS mean_depth,
-        COUNT(*) FILTER (WHERE variant_called IS NOT NULL) AS n_annotated,
-        COUNT(*) FILTER (WHERE variant_called = true)   AS n_called
+        COUNT(*)                                            AS n_records,
+        COUNT(DISTINCT sample_id)                           AS n_samples,
+        COALESCE(SUM(alt_count), 0)                         AS total_alt_bases,
+        COALESCE(ROUND(AVG(alt_count * 1.0 / total_depth), 4), 0) AS mean_vaf,
+        COALESCE(ROUND(AVG(total_depth), 1), 0)             AS mean_depth,
+        COUNT(*) FILTER (WHERE variant_called IS NOT NULL)  AS n_annotated,
+        COUNT(*) FILTER (WHERE variant_called = true)       AS n_called
     FROM {table_expr}
     WHERE {where}
 """).df()
