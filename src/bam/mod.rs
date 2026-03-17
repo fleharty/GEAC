@@ -11,10 +11,11 @@ use rust_htslib::faidx;
 use crate::cli::CollectArgs;
 use crate::progress::ProgressReporter;
 use crate::record::{AltBase, VariantType};
+use crate::targets::TargetIntervals;
 use crate::vcf::VariantAnnotator;
 
 /// Process a BAM/CRAM file and return all alt base records.
-pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnotator>) -> Result<Vec<AltBase>> {
+pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnotator>, target_intervals: Option<&TargetIntervals>) -> Result<Vec<AltBase>> {
     let mut bam = open_bam(&args.input, &args.reference)?;
     let mut ref_cache = RefCache::new(&args.reference)?;
 
@@ -92,6 +93,9 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
             continue;
         }
 
+        // On-target annotation — computed once per locus, shared by all alt records.
+        let on_target: Option<bool> = target_intervals.map(|t| t.contains(&chrom, pos));
+
         // Extract ref base counts once for use in every alt record at this locus
         let ref_tally = bases.get(&ref_base);
         let ref_count = ref_tally.map_or(0, |t| t.total);
@@ -138,6 +142,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                 pipeline: args.pipeline,
                 variant_called,
                 variant_filter,
+                on_target,
             });
         }
 
@@ -178,6 +183,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                 pipeline: args.pipeline,
                 variant_called,
                 variant_filter,
+                on_target,
             });
         }
     }

@@ -71,6 +71,7 @@ variant_sel = st.sidebar.multiselect(
 vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01)
 min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, value=1, step=1)
 variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No", "Unknown (no VCF/TSV)"])
+on_target_sel = st.sidebar.selectbox("Target bases", ["All", "On target", "Off target"])
 min_depth = st.sidebar.number_input("Min depth (0 = no minimum)", min_value=0, value=0, step=1)
 max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, value=0, step=1)
 
@@ -275,6 +276,10 @@ elif variant_called_sel == "No":
     conditions.append("variant_called = false")
 elif variant_called_sel == "Unknown (no VCF/TSV)":
     conditions.append("variant_called IS NULL")
+if on_target_sel == "On target":
+    conditions.append("on_target = true")
+elif on_target_sel == "Off target":
+    conditions.append("on_target = false")
 
 where = " AND ".join(conditions)
 
@@ -345,7 +350,7 @@ _table_cols = [
     "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
     "variant_type", "vaf", "alt_count", "ref_count", "total_depth",
     "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
-    "overlap_alt_disagree", "variant_called", "variant_filter",
+    "overlap_alt_disagree", "variant_called", "variant_filter", "on_target",
 ]
 
 with st.expander("Data table", expanded=True):

@@ -59,6 +59,7 @@ fn alt_base_schema() -> Arc<Schema> {
         Field::new("pipeline", DataType::Utf8, false),
         Field::new("variant_called", DataType::Boolean, true),
         Field::new("variant_filter", DataType::Utf8, true),
+        Field::new("on_target", DataType::Boolean, true),
     ]))
 }
 
@@ -90,6 +91,9 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
     let variant_filter: ArrayRef = Arc::new(StringArray::from(
         records.iter().map(|r| r.variant_filter.as_deref()).collect::<Vec<_>>(),
     ));
+    let on_target: ArrayRef = Arc::new(BooleanArray::from(
+        records.iter().map(|r| r.on_target).collect::<Vec<_>>(),
+    ));
 
     RecordBatch::try_new(
         schema,
@@ -98,7 +102,7 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
             total_depth, alt_count, ref_count,
             fwd_depth, rev_depth, fwd_alt_count, rev_alt_count, fwd_ref_count, rev_ref_count,
             overlap_depth, overlap_alt_agree, overlap_alt_disagree, overlap_ref_agree,
-            read_type, pipeline, variant_called, variant_filter,
+            read_type, pipeline, variant_called, variant_filter, on_target,
         ],
     )
     .context("failed to create Arrow record batch")

@@ -64,6 +64,14 @@ pub struct CollectArgs {
     #[arg(long, conflicts_with = "vcf")]
     pub variants_tsv: Option<PathBuf>,
 
+    /// Optional BED file or Picard interval list of target regions.
+    /// When provided, each record is annotated with `on_target = true/false`.
+    /// If omitted, `on_target` is null in the output Parquet.
+    /// Auto-detects format: files with `@` header lines are treated as Picard
+    /// interval lists (1-based, end-inclusive); all others as BED (0-based, half-open).
+    #[arg(long)]
+    pub targets: Option<PathBuf>,
+
     /// Minimum base quality to consider a base
     #[arg(long, default_value_t = 1)]
     pub min_base_qual: u8,

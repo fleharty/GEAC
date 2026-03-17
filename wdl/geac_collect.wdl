@@ -41,6 +41,7 @@ workflow GeacCollect {
         File?   vcf
         File?   vcf_index
         File?   variants_tsv
+        File?   targets
         String? region
 
         Int min_base_qual = 1
@@ -65,6 +66,7 @@ workflow GeacCollect {
             vcf                   = vcf,
             vcf_index             = vcf_index,
             variants_tsv          = variants_tsv,
+            targets               = targets,
             region                = region,
             min_base_qual         = min_base_qual,
             min_map_qual          = min_map_qual,
@@ -94,6 +96,7 @@ task Collect {
         File?   vcf
         File?   vcf_index
         File?   variants_tsv
+        File?   targets
         String? region
 
         Int min_base_qual
@@ -124,6 +127,7 @@ task Collect {
             ~{"--sample-id " + sample_id} \
             ~{"--vcf " + vcf} \
             ~{"--variants-tsv " + variants_tsv} \
+            ~{"--targets " + targets} \
             ~{"--region " + region}
     >>>
 

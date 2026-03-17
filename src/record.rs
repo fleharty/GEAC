@@ -102,4 +102,8 @@ pub struct AltBase {
     pub variant_called: Option<bool>,
     /// None = not called; Some("PASS") = passing; Some("...") = filter reason(s)
     pub variant_filter: Option<String>,
+
+    // Target annotation (None if no targets file was provided)
+    /// true if the locus overlaps a target interval, false if not, null if no targets given
+    pub on_target: Option<bool>,
 }

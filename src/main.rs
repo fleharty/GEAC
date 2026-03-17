@@ -3,6 +3,7 @@ mod cli;
 mod merge;
 mod progress;
 mod record;
+mod targets;
 mod variants_tsv;
 mod vcf;
 mod writer;
@@ -57,7 +58,20 @@ fn main() -> Result<()> {
                 _ => None,
             };
 
-            let records = bam::collect_alt_bases(&args, annotator)?;
+            let target_intervals = args
+                .targets
+                .as_ref()
+                .map(|p| {
+                    info!(targets = %p.display(), "loading target intervals");
+                    targets::TargetIntervals::load(p)
+                })
+                .transpose()?;
+
+            if let Some(ref ti) = target_intervals {
+                info!(n_targets = ti.n_targets(), "target intervals loaded");
+            }
+
+            let records = bam::collect_alt_bases(&args, annotator, target_intervals.as_ref().map(|t| t as &_))?;
 
             info!(n_records = records.len(), "writing Parquet output");
             writer::parquet::write_parquet(&records, &args.output)?;
