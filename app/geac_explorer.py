@@ -576,21 +576,18 @@ with tab2:
             spec96 = full.merge(agg, on=["sbs_label", "mut_type"], how="left")
             spec96["count"] = spec96["count"].fillna(0).astype(int)
 
-            # Add flanking-bases label (x-axis within each panel)
-            spec96["flanking"] = spec96["sbs_label"].str[0] + spec96["sbs_label"].str[-1]
-
             sel_param = alt.selection_point(name="bar_click", fields=["sbs_label"], on="click")
 
             _sub_charts = []
             for _mt in _SBS_MUT_TYPES:
                 _sub = spec96[spec96["mut_type"] == _mt].copy()
-                _flank_order = [lbl[0] + lbl[-1] for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+                _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
                 _c = (
                     alt.Chart(_sub)
                     .mark_bar(color=_SBS_COLORS[_mt])
                     .encode(
-                        alt.X("flanking:N", sort=_flank_order, title=None,
-                              axis=alt.Axis(labelAngle=-90, labelFontSize=9)),
+                        alt.X("sbs_label:N", sort=_order, title=None,
+                              axis=alt.Axis(labelAngle=-90, labelFontSize=8)),
                         alt.Y("count:Q", title="Count"),
                         opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.4)),
                         tooltip=["sbs_label:N", "count:Q"],
