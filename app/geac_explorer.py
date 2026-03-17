@@ -136,6 +136,9 @@ _table_cols = [
     "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
     "overlap_alt_disagree", "variant_called", "variant_filter",
 ]
+_N_BINS    = 50
+_BIN_WIDTH = 1.0 / _N_BINS
+_BIN_EDGES = [round(i * _BIN_WIDTH, 10) for i in range(_N_BINS + 1)]
 
 with tab1:
     for vtype, color in [
@@ -147,27 +150,50 @@ with tab1:
         if len(subset) == 0:
             st.info(f"No {vtype}s in current selection.")
         else:
+            # Pre-bin so selection can return a concrete field value
+            subset["vaf_bin"] = pd.cut(
+                subset["vaf"], bins=_BIN_EDGES, labels=_BIN_EDGES[:-1],
+                include_lowest=True,
+            ).astype(float)
+            counts = (
+                subset.groupby("vaf_bin", observed=True)
+                .size()
+                .reset_index(name="count")
+            )
+            counts["vaf_bin_end"] = counts["vaf_bin"] + _BIN_WIDTH
+
+            sel_param = alt.selection_point(name="bar_click", fields=["vaf_bin"])
             chart = (
-                alt.Chart(subset)
-                .mark_bar(opacity=0.8, color=color)
+                alt.Chart(counts)
+                .mark_bar(color=color)
                 .encode(
-                    alt.X("vaf:Q", bin=alt.Bin(maxbins=50, extent=[0, 1]), title="VAF",
-                          scale=alt.Scale(domain=[0, 1])),
-                    alt.Y("count():Q", title="Count"),
-                    tooltip=["count():Q"],
+                    alt.X("vaf_bin:Q",     title="VAF", scale=alt.Scale(domain=[0, 1])),
+                    alt.X2("vaf_bin_end:Q"),
+                    alt.Y("count:Q",       title="Count"),
+                    opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.5)),
+                    tooltip=[
+                        alt.Tooltip("vaf_bin:Q",     title="Bin start", format=".3f"),
+                        alt.Tooltip("vaf_bin_end:Q", title="Bin end",   format=".3f"),
+                        alt.Tooltip("count:Q",       title="Count"),
+                    ],
                 )
-                .add_params(alt.selection_point(name="bar_click", on="click", encodings=["x"]))
+                .add_params(sel_param)
                 .properties(title=f"{vtype} VAF Distribution", height=300)
             )
             event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
 
             pts = (event.selection or {}).get("bar_click", [])
             if pts:
-                bin_start = pts[0].get("vaf_start")
-                bin_end   = pts[0].get("vaf_end")
-                if bin_start is not None and bin_end is not None:
-                    sel = subset[(subset["vaf"] >= bin_start) & (subset["vaf"] < bin_end)]
-                    st.caption(f"{len(sel):,} records with VAF in [{bin_start:.3f}, {bin_end:.3f})")
+                bin_start = pts[0].get("vaf_bin")
+                if bin_start is not None:
+                    bin_end = bin_start + _BIN_WIDTH
+                    sel = subset[
+                        (subset["vaf"] >= bin_start) & (subset["vaf"] < bin_end)
+                    ]
+                    st.caption(
+                        f"{len(sel):,} {vtype} records with VAF in "
+                        f"[{bin_start:.3f}, {bin_end:.3f})"
+                    )
                     st.dataframe(sel[_table_cols], use_container_width=True)
 
 with tab2:
