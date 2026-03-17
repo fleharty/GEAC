@@ -14,7 +14,7 @@
 - [x] IGV session download — manifest-driven BAM tracks + BED positions zip, capped at 5 samples
 - [x] BED file has some incorrect entries — fixed: deletion loci now span the full deleted region [pos, pos+del_len) instead of just the anchor base
 - [ ] Position-level drill-down — click a locus and see all samples/alleles at that position
-- [ ] Export filtered data to CSV
+- [x] Export filtered data to CSV — handled by Streamlit's built-in dataframe toolbar download button
 - [ ] Cohort comparison view — side-by-side stats across samples loaded from a DuckDB
 - [x] On-target filter — sidebar selectbox "Target bases": All / On target / Off target; depends on `on_target` column being populated (show warning if all null)
 - [x] Gene filter — sidebar multiselect in the chromosome/region section; populated from distinct `gene` values; depends on `gene` column being populated
