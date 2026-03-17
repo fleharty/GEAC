@@ -577,14 +577,14 @@ with tab2:
             spec96["count"] = spec96["count"].fillna(0).astype(int)
 
             # Add flanking-bases label (x-axis within each panel)
-            spec96["flanking"] = spec96["sbs_label"].str[0] + spec96["sbs_label"].str[4]
+            spec96["flanking"] = spec96["sbs_label"].str[0] + spec96["sbs_label"].str[-1]
 
             sel_param = alt.selection_point(name="bar_click", fields=["sbs_label"], on="click")
 
             _sub_charts = []
             for _mt in _SBS_MUT_TYPES:
                 _sub = spec96[spec96["mut_type"] == _mt].copy()
-                _flank_order = [lbl[0] + lbl[4] for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+                _flank_order = [lbl[0] + lbl[-1] for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
                 _c = (
                     alt.Chart(_sub)
                     .mark_bar(color=_SBS_COLORS[_mt])
