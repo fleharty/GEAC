@@ -5,6 +5,8 @@
 - [ ] `geac qc` subcommand — per-sample summary of error rates by substitution type, strand bias metrics, and overlap concordance
 - [ ] Integration tests — generate synthetic BAM data and write end-to-end tests
 - [ ] Cohort-level CLI subcommand — per-locus artifact frequencies across samples (e.g. flag positions seen in N% of samples)
+- [ ] On-target annotation — add `--targets` BED flag to `geac collect`; records `on_target bool?` column in Parquet (null if no BED provided). Locus is on-target if it overlaps any interval in the BED.
+- [ ] Gene annotation — add `--genes-bed` flag to `geac collect`; BED file with gene name in column 4. Records `gene string?` column (null if no BED provided or locus falls outside all intervals). Used for gene-level filtering in the Explorer.
 
 ## Explorer (Streamlit)
 
@@ -13,6 +15,8 @@
 - [ ] Position-level drill-down — click a locus and see all samples/alleles at that position
 - [ ] Export filtered data to CSV
 - [ ] Cohort comparison view — side-by-side stats across samples loaded from a DuckDB
+- [ ] On-target filter — sidebar selectbox "Target bases": All / On target / Off target; depends on `on_target` column being populated (show warning if all null)
+- [ ] Gene filter — sidebar multiselect in the chromosome/region section; populated from distinct `gene` values; depends on `gene` column being populated
 
 ## WDL / Terra
 
