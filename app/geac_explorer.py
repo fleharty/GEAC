@@ -576,26 +576,36 @@ with tab2:
             spec96 = full.merge(agg, on=["sbs_label", "mut_type"], how="left")
             spec96["count"] = spec96["count"].fillna(0).astype(int)
 
+            # Add flanking-bases label (x-axis within each panel)
+            spec96["flanking"] = spec96["sbs_label"].str[0] + spec96["sbs_label"].str[4]
+
             sel_param = alt.selection_point(name="bar_click", fields=["sbs_label"], on="click")
-            chart = (
-                alt.Chart(spec96)
-                .mark_bar()
-                .encode(
-                    alt.X("sbs_label:N", sort=_SBS_ORDER, title="Trinucleotide context",
-                          axis=alt.Axis(labelAngle=-90, labelFontSize=7, labelOverlap=False)),
-                    alt.Y("count:Q", title="Count"),
-                    alt.Color("mut_type:N",
-                        scale=alt.Scale(
-                            domain=_SBS_MUT_TYPES,
-                            range=[_SBS_COLORS[m] for m in _SBS_MUT_TYPES],
-                        ),
-                        title="Mutation type",
-                    ),
-                    opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.5)),
-                    tooltip=["sbs_label:N", "mut_type:N", "count:Q"],
+
+            _sub_charts = []
+            for _mt in _SBS_MUT_TYPES:
+                _sub = spec96[spec96["mut_type"] == _mt].copy()
+                _flank_order = [lbl[0] + lbl[4] for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+                _c = (
+                    alt.Chart(_sub)
+                    .mark_bar(color=_SBS_COLORS[_mt])
+                    .encode(
+                        alt.X("flanking:N", sort=_flank_order, title=None,
+                              axis=alt.Axis(labelAngle=-90, labelFontSize=9)),
+                        alt.Y("count:Q", title="Count"),
+                        opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.4)),
+                        tooltip=["sbs_label:N", "count:Q"],
+                    )
+                    .add_params(sel_param)
+                    .properties(
+                        title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt], fontSize=13, fontWeight="bold"),
+                        width=150, height=140,
+                    )
                 )
-                .add_params(sel_param)
-                .properties(title="SNV Trinucleotide Spectrum (SBS96)", height=350)
+                _sub_charts.append(_c)
+
+            chart = (
+                alt.concat(*_sub_charts, columns=3)
+                .properties(title=alt.TitleParams("SNV Trinucleotide Spectrum (SBS96)", fontSize=15))
             )
             event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
 
