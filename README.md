@@ -178,11 +178,13 @@ Features:
 ### Manifest format
 
 ```tsv
-sample_id	bam_path
-SAMPLE_001	gs://my-bucket/bams/SAMPLE_001.bam
-SAMPLE_002	gs://my-bucket/bams/SAMPLE_002.bam
-SAMPLE_003	/local/path/to/SAMPLE_003.bam
+sample_id	bam_path	bai_path
+SAMPLE_001	gs://my-bucket/bams/SAMPLE_001.bam	gs://my-bucket/bams/SAMPLE_001.bam.bai
+SAMPLE_002	gs://my-bucket/bams/SAMPLE_002.bam	gs://my-bucket/bams/SAMPLE_002.bam.bai
+SAMPLE_003	/local/path/to/SAMPLE_003.bam	/local/path/to/SAMPLE_003.bam.bai
 ```
+
+`bai_path` is optional — if omitted or left blank, IGV will attempt to find the index automatically.
 
 ## Schema
 

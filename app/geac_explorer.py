@@ -89,7 +89,7 @@ st.sidebar.header("IGV Integration")
 manifest_path = st.sidebar.text_input(
     "Manifest file (optional)",
     placeholder="/path/to/manifest.tsv",
-    help="Tab-separated file with columns: sample_id, bam_path",
+    help="Tab-separated file with columns: sample_id, bam_path, bai_path",
 )
 genome = st.sidebar.selectbox("Genome", ["hg38", "hg19", "mm10", "mm39", "other"])
 if genome == "other":
@@ -98,7 +98,11 @@ if genome == "other":
 @st.cache_data
 def load_manifest(p: str) -> dict:
     mdf = pd.read_csv(p.strip(), sep="\t")
-    return dict(zip(mdf["sample_id"].astype(str), mdf["bam_path"].astype(str)))
+    result = {}
+    for row in mdf.itertuples(index=False):
+        bai = str(row.bai_path) if hasattr(row, "bai_path") and pd.notna(row.bai_path) else None
+        result[str(row.sample_id)] = {"bam": str(row.bam_path), "bai": bai}
+    return result
 
 manifest = {}
 if manifest_path and manifest_path.strip():
@@ -129,9 +133,11 @@ def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str) -> str:
 
     resources, tracks = [], []
     for sid in sample_ids:
-        bam = manifest.get(str(sid))
-        if bam:
-            resources.append(f'        <Resource path="{bam}" name="{sid}"/>')
+        entry = manifest.get(str(sid))
+        if entry:
+            bam, bai = entry["bam"], entry["bai"]
+            index_attr = f' index="{bai}"' if bai else ""
+            resources.append(f'        <Resource path="{bam}" name="{sid}"{index_attr}/>')
             tracks.append(f'        <Track id="{bam}" name="{sid}"/>')
 
     resources.append('        <Resource path="positions.bed" name="Selected positions"/>')
