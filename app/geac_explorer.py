@@ -139,7 +139,7 @@ with tab1:
                     alt.Chart(subset)
                     .mark_bar(opacity=0.8, color=color)
                     .encode(
-                        alt.X("vaf:Q", bin=alt.Bin(maxbins=50), title="VAF",
+                        alt.X("vaf:Q", bin=alt.Bin(maxbins=50, extent=[0, 1]), title="VAF",
                               scale=alt.Scale(domain=[0, 1])),
                         alt.Y("count():Q", title="Count"),
                         tooltip=["count():Q"],
