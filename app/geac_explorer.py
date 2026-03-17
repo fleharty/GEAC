@@ -75,7 +75,7 @@ min_depth = st.sidebar.number_input("Min depth (0 = no minimum)", min_value=0, v
 max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, value=0, step=1)
 
 _limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
-_limit_sel = st.sidebar.selectbox("Display limit (rows)", _limit_options, index=5)
+_limit_sel = st.sidebar.selectbox("Display limit (rows)", _limit_options, index=0)
 display_limit = None if _limit_sel == "All" else int(_limit_sel)
 
 # ── IGV integration (sidebar) ─────────────────────────────────────────────────
