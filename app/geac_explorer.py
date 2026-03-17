@@ -136,9 +136,6 @@ _table_cols = [
     "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
     "overlap_alt_disagree", "variant_called", "variant_filter",
 ]
-_N_BINS    = 50
-_BIN_WIDTH = 1.0 / _N_BINS
-_BIN_EDGES = [round(i * _BIN_WIDTH, 10) for i in range(_N_BINS + 1)]
 
 with tab1:
     for vtype, color in [
@@ -146,31 +143,28 @@ with tab1:
         ("insertion", "#f58518"),
         ("deletion",  "#e45756"),
     ]:
-        subset = df[df["variant_type"] == vtype].copy()
+        subset = df[df["variant_type"] == vtype]
         if len(subset) == 0:
             st.info(f"No {vtype}s in current selection.")
         else:
-            # Pre-bin so selection can return a concrete field value
-            subset["vaf_bin"] = pd.cut(
-                subset["vaf"], bins=_BIN_EDGES, labels=_BIN_EDGES[:-1],
-                include_lowest=True,
-            ).astype(float)
-            counts = (
-                subset.groupby("vaf_bin", observed=True)
-                .size()
-                .reset_index(name="count")
+            sel_param = alt.selection_point(
+                name="bar_click",
+                fields=["vaf_bin", "vaf_bin_end"],
+                on="click",
             )
-            counts["vaf_bin_end"] = counts["vaf_bin"] + _BIN_WIDTH
-
-            sel_param = alt.selection_point(name="bar_click", fields=["vaf_bin"])
             chart = (
-                alt.Chart(counts)
+                alt.Chart(subset[["vaf"]])
+                .transform_bin(
+                    "vaf_bin", field="vaf",
+                    bin=alt.BinParams(maxbins=50, extent=[0, 1]),
+                )
+                .transform_aggregate(count="count()", groupby=["vaf_bin", "vaf_bin_end"])
                 .mark_bar(color=color)
                 .encode(
                     alt.X("vaf_bin:Q",     title="VAF", scale=alt.Scale(domain=[0, 1])),
                     alt.X2("vaf_bin_end:Q"),
                     alt.Y("count:Q",       title="Count"),
-                    opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.5)),
+                    opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.4)),
                     tooltip=[
                         alt.Tooltip("vaf_bin:Q",     title="Bin start", format=".3f"),
                         alt.Tooltip("vaf_bin_end:Q", title="Bin end",   format=".3f"),
@@ -185,8 +179,8 @@ with tab1:
             pts = (event.selection or {}).get("bar_click", [])
             if pts:
                 bin_start = pts[0].get("vaf_bin")
-                if bin_start is not None:
-                    bin_end = bin_start + _BIN_WIDTH
+                bin_end   = pts[0].get("vaf_bin_end")
+                if bin_start is not None and bin_end is not None:
                     sel = subset[
                         (subset["vaf"] >= bin_start) & (subset["vaf"] < bin_end)
                     ]
