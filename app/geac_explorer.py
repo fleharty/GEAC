@@ -602,6 +602,7 @@ with tab2:
 
             chart = (
                 alt.concat(*_sub_charts, columns=3)
+                .resolve_scale(y="shared")
                 .properties(title=alt.TitleParams("SNV Trinucleotide Spectrum (SBS96)", fontSize=15))
             )
             event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
