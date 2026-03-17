@@ -234,6 +234,18 @@ elif variant_called_sel == "Unknown (no VCF/TSV)":
     conditions.append("variant_called IS NULL")
 
 where = " AND ".join(conditions)
+
+def query_records(extra: list[str] = []) -> pd.DataFrame:
+    """Query records with current filters plus any extra conditions. No row cap."""
+    w = " AND ".join(conditions + extra)
+    return con.execute(f"""
+        SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+        FROM {table_expr}
+        WHERE {w}
+    """).df()
+
+total_count = con.execute(f"SELECT COUNT(*) FROM {table_expr} WHERE {where}").fetchone()[0]
+
 df = con.execute(f"""
     SELECT *,
            ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
@@ -242,12 +254,12 @@ df = con.execute(f"""
     LIMIT 50000
 """).df()
 
-if len(df) == 0:
+if total_count == 0:
     st.warning("No records match the current filters.")
     st.stop()
 
-cap_msg = " (capped at 50,000 — refine filters to see more)" if len(df) == 50000 else ""
-st.info(f"**{len(df):,}** records{cap_msg}")
+cap_msg = " (table capped at 50,000 — plots and drill-downs use full dataset)" if total_count > 50000 else ""
+st.info(f"**{total_count:,}** records{cap_msg}")
 
 # ── Data table ────────────────────────────────────────────────────────────────
 _table_cols = [
@@ -270,8 +282,18 @@ with tab1:
         ("insertion", "#f58518"),
         ("deletion",  "#e45756"),
     ]:
-        subset = df[df["variant_type"] == vtype]
-        if len(subset) == 0:
+        counts = con.execute(f"""
+            SELECT
+                FLOOR(ROUND(alt_count * 1.0 / total_depth, 4) * 50) / 50.0 AS vaf_bin,
+                FLOOR(ROUND(alt_count * 1.0 / total_depth, 4) * 50) / 50.0 + 0.02 AS vaf_bin_end,
+                COUNT(*) AS count
+            FROM {table_expr}
+            WHERE {where} AND variant_type = '{vtype}'
+            GROUP BY vaf_bin, vaf_bin_end
+            ORDER BY vaf_bin
+        """).df()
+
+        if counts.empty:
             st.info(f"No {vtype}s in current selection.")
         else:
             sel_param = alt.selection_point(
@@ -280,12 +302,7 @@ with tab1:
                 on="click",
             )
             chart = (
-                alt.Chart(subset[["vaf"]])
-                .transform_bin(
-                    "vaf_bin", field="vaf",
-                    bin=alt.BinParams(maxbins=50, extent=[0, 1]),
-                )
-                .transform_aggregate(count="count()", groupby=["vaf_bin", "vaf_bin_end"])
+                alt.Chart(counts)
                 .mark_bar(color=color)
                 .encode(
                     alt.X("vaf_bin:Q",     title="VAF", scale=alt.Scale(domain=[0, 1])),
@@ -308,9 +325,11 @@ with tab1:
                 bin_start = pts[0].get("vaf_bin")
                 bin_end   = pts[0].get("vaf_bin_end")
                 if bin_start is not None and bin_end is not None:
-                    sel = subset[
-                        (subset["vaf"] >= bin_start) & (subset["vaf"] < bin_end)
-                    ]
+                    sel = query_records([
+                        f"variant_type = '{vtype}'",
+                        f"ROUND(alt_count * 1.0 / total_depth, 4) >= {bin_start}",
+                        f"ROUND(alt_count * 1.0 / total_depth, 4) < {bin_end}",
+                    ])
                     st.caption(
                         f"{len(sel):,} {vtype} records with VAF in "
                         f"[{bin_start:.3f}, {bin_end:.3f})"
@@ -319,10 +338,17 @@ with tab1:
                     igv_buttons(sel, key=f"vaf_{vtype}_{bin_start}")
 
 with tab2:
-    snvs = df[df["variant_type"] == "SNV"].copy()
-    if len(snvs) > 0:
-        snvs["substitution"] = snvs["ref_allele"] + ">" + snvs["alt_allele"]
-        spec = snvs.groupby("substitution").size().reset_index(name="count")
+    spec = con.execute(f"""
+        SELECT ref_allele || '>' || alt_allele AS substitution, COUNT(*) AS count
+        FROM {table_expr}
+        WHERE {where} AND variant_type = 'SNV'
+        GROUP BY substitution
+        ORDER BY count DESC
+    """).df()
+
+    if spec.empty:
+        st.info("No SNVs in current selection.")
+    else:
         sel_param = alt.selection_point(name="bar_click", fields=["substitution"], on="click")
         chart = (
             alt.Chart(spec)
@@ -343,12 +369,15 @@ with tab2:
         if pts:
             sub = pts[0].get("substitution")
             if sub:
-                sel = snvs[snvs["substitution"] == sub]
+                ref, alt_allele = sub.split(">")
+                sel = query_records([
+                    "variant_type = 'SNV'",
+                    f"ref_allele = '{ref}'",
+                    f"alt_allele = '{alt_allele}'",
+                ])
                 st.caption(f"{len(sel):,} records with substitution {sub}")
                 st.dataframe(sel[_table_cols], use_container_width=True)
                 igv_buttons(sel, key=f"spectrum_{sub}")
-    else:
-        st.info("No SNVs in current selection.")
 
 with tab3:
     sample_df = df.sample(min(2000, len(df)))
