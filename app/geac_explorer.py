@@ -94,7 +94,7 @@ manifest_path = st.sidebar.text_input(
     value=_default_manifest,
     help="Tab-separated file with columns: sample_id, bam_path, bai_path",
 )
-genome = st.sidebar.selectbox("Genome", ["hg38", "hg19", "mm10", "mm39", "other"])
+genome = st.sidebar.selectbox("Genome", ["hg19", "hg38", "mm10", "mm39", "other"])
 if genome == "other":
     genome = st.sidebar.text_input("Genome ID", value="hg38")
 
