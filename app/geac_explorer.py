@@ -239,7 +239,12 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
         st.caption("Add a manifest in the sidebar to enable IGV session download.")
         return
 
-    sample_ids = display_df["sample_id"].unique().tolist()
+    # Query full (non-display-limited) sample list so the cap warning fires correctly
+    # regardless of the display row limit setting.
+    _extra_w = " AND ".join(conditions + extra_conditions)
+    sample_ids = con.execute(
+        f"SELECT DISTINCT sample_id FROM {table_expr} WHERE {_extra_w} ORDER BY sample_id"
+    ).df()["sample_id"].tolist()
     n = len(sample_ids)
     cap_samples = sample_ids[:IGV_CAP]
 
@@ -251,7 +256,9 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
         )
 
     if n > IGV_CAP:
-        _total_records = len(display_df)
+        _total_records = con.execute(
+            f"SELECT COUNT(*) FROM {table_expr} WHERE {_extra_w}"
+        ).fetchone()[0]
         st.warning(
             f"{n} samples in this selection. IGV session capped at {IGV_CAP}. "
             "Select specific samples below, or check the box to load all "
@@ -264,7 +271,10 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
             key=f"{key}_sample_pick",
         )
         cap_samples = chosen if chosen else cap_samples
-        _chosen_records = len(display_df[display_df["sample_id"].isin(cap_samples)])
+        _chosen_records = con.execute(
+            f"SELECT COUNT(*) FROM {table_expr} WHERE {_extra_w} "
+            f"AND sample_id IN ({', '.join(f\"'{s}'\" for s in cap_samples)})"
+        ).fetchone()[0]
         st.caption(f"{_chosen_records:,} / {_total_records:,} records from selected samples")
         if st.checkbox(f"Load all {n} samples instead", key=f"{key}_override"):
             cap_samples = sample_ids
