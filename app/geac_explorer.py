@@ -898,32 +898,54 @@ with tab2:
                     ], sel, key=f"spectrum_{sub}")
 
 with tab3:
-    sample_df = df.sample(min(2000, len(df)))
+    _sb_scale = st.radio(
+        "Axis scale", ["Linear", "log1p"], horizontal=True, key="sb_scale",
+        help="log1p = log(1 + x), compresses large counts while keeping zeros visible.",
+    )
+    _use_log1p = _sb_scale == "log1p"
+
+    sample_df = df.sample(min(2000, len(df))).copy()
+
+    if _use_log1p:
+        sample_df["fwd_plot"] = np.log1p(sample_df["fwd_alt_count"])
+        sample_df["rev_plot"] = np.log1p(sample_df["rev_alt_count"])
+        _x_title = "log1p(Forward alt reads)"
+        _y_title = "log1p(Reverse alt reads)"
+    else:
+        sample_df["fwd_plot"] = sample_df["fwd_alt_count"]
+        sample_df["rev_plot"] = sample_df["rev_alt_count"]
+        _x_title = "Forward alt reads"
+        _y_title = "Reverse alt reads"
+
     max_val = max(
-        int(sample_df["fwd_alt_count"].max()) if len(sample_df) > 0 else 50,
-        int(sample_df["rev_alt_count"].max()) if len(sample_df) > 0 else 50,
-        1,
+        float(sample_df["fwd_plot"].max()) if len(sample_df) > 0 else 50,
+        float(sample_df["rev_plot"].max()) if len(sample_df) > 0 else 50,
+        1.0,
     )
 
-    # 95% CI band using normal approximation to Binomial(n, 0.5).
-    # For a point (fwd=x, rev=y), total n = x+y. Under H0 (equal strand probability)
-    # fwd ~ N(n/2, n/4). The point is in the 95% CI iff lo(n) <= x <= hi(n).
-    #
-    # For each x, we solve for the rev range [rev_min, rev_max]:
-    #   rev_min: x = hi(x+y)  →  s² + z·s − 2x = 0  →  s = (−z + √(z²+8x))/2
-    #   rev_max: x = lo(x+y)  →  s² − z·s − 2x = 0  →  s = ( z + √(z²+8x))/2
-    # where s = √(x+y) and n = s².
-    _x = np.arange(0, max_val + 1, dtype=float)
+    # 95% CI band — computed in original (linear) space, then optionally
+    # transformed so the band correctly follows the data points.
+    _x_lin = np.arange(0, int(sample_df["fwd_alt_count"].max()) + 1, dtype=float)
     _z = 1.96
-    _s_lo = (-_z + np.sqrt(_z**2 + 8 * _x)) / 2
-    _s_hi = ( _z + np.sqrt(_z**2 + 8 * _x)) / 2
-    _ci_band = pd.DataFrame({
-        "fwd":     _x,
-        "rev_min": np.maximum(_s_lo**2 - _x, 0.0),
-        "rev_max": _s_hi**2 - _x,
-    })
+    _s_lo = (-_z + np.sqrt(_z**2 + 8 * _x_lin)) / 2
+    _s_hi = ( _z + np.sqrt(_z**2 + 8 * _x_lin)) / 2
+    _rev_min_lin = np.maximum(_s_lo**2 - _x_lin, 0.0)
+    _rev_max_lin = _s_hi**2 - _x_lin
 
-    _diag = pd.DataFrame({"fwd": [0.0, float(max_val)], "rev": [0.0, float(max_val)]})
+    if _use_log1p:
+        _ci_band = pd.DataFrame({
+            "fwd":     np.log1p(_x_lin),
+            "rev_min": np.log1p(_rev_min_lin),
+            "rev_max": np.log1p(_rev_max_lin),
+        })
+        _diag = pd.DataFrame({"fwd": [0.0, max_val], "rev": [0.0, max_val]})
+    else:
+        _ci_band = pd.DataFrame({
+            "fwd":     _x_lin,
+            "rev_min": _rev_min_lin,
+            "rev_max": _rev_max_lin,
+        })
+        _diag = pd.DataFrame({"fwd": [0.0, max_val], "rev": [0.0, max_val]})
 
     ci_area = (
         alt.Chart(_ci_band)
@@ -946,8 +968,8 @@ with tab3:
         alt.Chart(sample_df)
         .mark_point(opacity=0.5, size=30)
         .encode(
-            alt.X("fwd_alt_count:Q", title="Forward alt reads"),
-            alt.Y("rev_alt_count:Q", title="Reverse alt reads"),
+            alt.X("fwd_plot:Q", title=_x_title),
+            alt.Y("rev_plot:Q", title=_y_title),
             alt.Color("variant_type:N", title="Variant type"),
             tooltip=(
                 ["sample_id", "chrom", "pos", "ref_allele", "alt_allele",
@@ -955,7 +977,10 @@ with tab3:
                 + (["gene"] if _genes_available else [])
             ),
         )
-        .properties(title="Strand Bias — dashed line: perfect balance; shaded band: 95% CI under Binomial(n, 0.5)", height=350)
+        .properties(
+            title="Strand Bias — dashed line: perfect balance; shaded band: 95% CI under Binomial(n, 0.5)",
+            height=350,
+        )
     )
     st.altair_chart(
         (ci_area + diag_line + scatter).resolve_scale(color="independent"),
