@@ -67,9 +67,19 @@ _FILTER_KEYS = [
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
 _hdr_col.header("Filters")
 if _btn_col.button("Clear all", help="Reset all filters to defaults"):
-    for _k in _FILTER_KEYS:
-        if _k in st.session_state:
-            del st.session_state[_k]
+    st.session_state["chrom_sel"]          = "All"
+    st.session_state["sample_sel"]         = []
+    st.session_state["gene_text"]          = ""
+    st.session_state["variant_sel"]        = ["SNV", "insertion", "deletion", "MNV"]
+    st.session_state["vaf_range"]          = (0.0, 1.0)
+    st.session_state["min_alt"]            = 1
+    st.session_state["variant_called_sel"] = "All"
+    st.session_state["on_target_sel"]      = "All"
+    st.session_state["homopolymer_range"]  = (0, 20)
+    st.session_state["str_len_range"]      = (0, 50)
+    st.session_state["min_depth"]          = 0
+    st.session_state["max_depth"]          = 0
+    st.session_state["limit_sel"]          = 100
     st.rerun()
 
 chroms = con.execute(f"SELECT DISTINCT chrom FROM {table_expr} ORDER BY chrom").df()["chrom"].tolist()
