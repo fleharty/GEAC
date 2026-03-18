@@ -606,13 +606,33 @@ with tab1:
                         f"ROUND(alt_count * 1.0 / total_depth, 4) < {bin_end}",
                     ], sel, key=f"vaf_{vtype}_{bin_start}")
 
+# ── SBS96 helpers (used by Error Spectrum tab and Cohort tab) ─────────────────
+_COMP = str.maketrans('ACGT', 'TGCA')
+_SBS_MUT_TYPES = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G"]
+_SBS_COLORS    = {
+    "C>A": "#1BBDEB", "C>G": "#808080", "C>T": "#E22926",
+    "T>A": "#CBCACB", "T>C": "#97D54C", "T>G": "#ECC6C5",
+}
+_SBS_ORDER = [
+    f"{b5}[{mt}]{b3}"
+    for mt in _SBS_MUT_TYPES
+    for b5 in "ACGT"
+    for b3 in "ACGT"
+]
+
+def _sbs_label(trinuc_context, ref_allele, alt_allele):
+    """Convert raw trinuc/ref/alt into a pyrimidine-normalised SBS96 label."""
+    ctx, r, a = trinuc_context, ref_allele, alt_allele
+    if not all(b in 'ACGT' for b in (ctx + r + a)):
+        return None
+    if r in ('A', 'G'):
+        ctx = ctx[::-1].translate(_COMP)
+        r = r.translate(_COMP)
+        a = a.translate(_COMP)
+    return f"{ctx[0]}[{r}>{a}]{ctx[2]}"
+
+
 with tab2:
-    _COMP = str.maketrans('ACGT', 'TGCA')
-    _SBS_MUT_TYPES = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G"]
-    _SBS_COLORS    = {
-        "C>A": "#1BBDEB", "C>G": "#808080", "C>T": "#E22926",
-        "T>A": "#CBCACB", "T>C": "#97D54C", "T>G": "#ECC6C5",
-    }
     _SBS_ORDER = [
         f"{b5}[{mt}]{b3}"
         for mt in _SBS_MUT_TYPES
@@ -634,17 +654,10 @@ with tab2:
         if raw.empty:
             st.info("No SNVs with trinucleotide context in current selection.")
         else:
-            def _sbs(row):
-                ctx, r, a = row["trinuc_context"], row["ref_allele"], row["alt_allele"]
-                if not all(b in 'ACGT' for b in (ctx + r + a)):
-                    return None
-                if r in ('A', 'G'):
-                    ctx = ctx[::-1].translate(_COMP)
-                    r = r.translate(_COMP)
-                    a = a.translate(_COMP)
-                return f"{ctx[0]}[{r}>{a}]{ctx[2]}"
-
-            raw["sbs_label"] = raw.apply(_sbs, axis=1)
+            raw["sbs_label"] = raw.apply(
+                lambda row: _sbs_label(row["trinuc_context"], row["ref_allele"], row["alt_allele"]),
+                axis=1,
+            )
             raw = raw.dropna(subset=["sbs_label"])
             raw["mut_type"] = raw["sbs_label"].str.extract(r'\[([A-Z]>[A-Z])\]')[0]
 
@@ -1348,3 +1361,66 @@ with tab_cohort:
                     .properties(height=350, title="SNV count per sample colored by SBS6 substitution type")
                 )
                 st.altair_chart(_sbs6_chart, use_container_width=True)
+
+            # ── Step 5: SBS96 heatmap ──────────────────────────────────────────
+            st.subheader("SBS96 Heatmap (samples × trinucleotide contexts)")
+            if not _has_data("trinuc_context"):
+                st.info("Trinucleotide context unavailable — run geac collect with a reference FASTA.")
+            else:
+                _hm_raw = con.execute(f"""
+                    SELECT sample_id, trinuc_context, ref_allele, alt_allele, COUNT(*) AS n
+                    FROM {table_expr}
+                    WHERE {_cohort_where} AND variant_type = 'SNV'
+                      AND trinuc_context IS NOT NULL AND length(trinuc_context) = 3
+                    GROUP BY sample_id, trinuc_context, ref_allele, alt_allele
+                """).df()
+
+                if _hm_raw.empty:
+                    st.info("No SNVs with trinucleotide context in current selection.")
+                else:
+                    _hm_raw["sbs_label"] = _hm_raw.apply(
+                        lambda row: _sbs_label(row["trinuc_context"], row["ref_allele"], row["alt_allele"]),
+                        axis=1,
+                    )
+                    _hm_raw = _hm_raw.dropna(subset=["sbs_label"])
+                    _hm_agg = _hm_raw.groupby(["sample_id", "sbs_label"], as_index=False)["n"].sum()
+
+                    # Normalize per sample so colours reflect profile, not total count
+                    _totals = _hm_agg.groupby("sample_id")["n"].transform("sum")
+                    _hm_agg["fraction"] = _hm_agg["n"] / _totals
+
+                    # Fill missing context/sample combinations with zero
+                    _all_combos = pd.MultiIndex.from_product(
+                        [_hm_agg["sample_id"].unique(), _SBS_ORDER],
+                        names=["sample_id", "sbs_label"],
+                    )
+                    _hm_full = (
+                        _hm_agg.set_index(["sample_id", "sbs_label"])
+                        .reindex(_all_combos, fill_value=0)
+                        .reset_index()
+                    )
+                    _hm_full["mut_type"] = _hm_full["sbs_label"].str.extract(r'\[([A-Z]>[A-Z])\]')[0]
+
+                    _hm_chart = (
+                        alt.Chart(_hm_full)
+                        .mark_rect()
+                        .encode(
+                            alt.X("sbs_label:N", sort=_SBS_ORDER, title="Trinucleotide context",
+                                  axis=alt.Axis(labels=False, ticks=False)),
+                            alt.Y("sample_id:N", title="Sample"),
+                            alt.Color("fraction:Q", title="Fraction of SNVs",
+                                      scale=alt.Scale(scheme="blues")),
+                            alt.Tooltip(["sample_id:N", "sbs_label:N",
+                                         alt.Tooltip("n:Q", title="Count"),
+                                         alt.Tooltip("fraction:Q", title="Fraction", format=".4f")]),
+                        )
+                        .properties(
+                            height=max(200, 20 * _hm_full["sample_id"].nunique()),
+                            title="Normalised SBS96 profile per sample (fraction of SNVs)",
+                        )
+                    )
+                    st.altair_chart(_hm_chart, use_container_width=True)
+                    st.caption(
+                        "Color = fraction of that sample's SNVs falling in each trinucleotide context. "
+                        "Contexts ordered by mutation type (C>A, C>G, C>T, T>A, T>C, T>G) then flanking bases."
+                    )
