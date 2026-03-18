@@ -1,0 +1,10 @@
+target/
+.git/
+app/
+scripts/
+wdl/
+docker/
+*.md
+*.yml
+*.lock
+.dockerignore

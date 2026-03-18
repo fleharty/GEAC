@@ -1,0 +1,13 @@
+name: geac
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - htslib >=1.19
+  - pkg-config
+  - marimo
+  - streamlit
+  - altair
+  - pyarrow
+  - pandas
