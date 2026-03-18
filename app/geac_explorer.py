@@ -6,6 +6,7 @@ import duckdb
 import altair as alt
 import pandas as pd
 from scipy.optimize import nnls
+from igv_helpers import query_distinct_samples
 
 st.set_page_config(page_title="GEAC Explorer", layout="wide")
 st.title("GEAC Explorer")
@@ -60,7 +61,7 @@ pct_called  = f"{100 * n_called / n_annotated:.1f}%" if n_annotated > 0 else "N/
 # ── Filters (sidebar) ─────────────────────────────────────────────────────────
 _FILTER_KEYS = [
     "chrom_sel", "sample_sel", "gene_text", "variant_sel", "vaf_range",
-    "min_alt", "variant_called_sel", "on_target_sel",
+    "min_alt", "min_rev_alt", "variant_called_sel", "on_target_sel",
     "homopolymer_range", "str_len_range", "min_depth", "max_depth", "limit_sel",
 ]
 
@@ -73,6 +74,7 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["variant_sel"]        = ["SNV", "insertion", "deletion", "MNV"]
     st.session_state["vaf_range"]          = (0.0, 1.0)
     st.session_state["min_alt"]            = 1
+    st.session_state["min_rev_alt"]        = 0
     st.session_state["variant_called_sel"] = "All"
     st.session_state["on_target_sel"]      = "All"
     st.session_state["homopolymer_range"]  = (0, 20)
@@ -113,6 +115,7 @@ variant_sel = st.sidebar.multiselect(
 )
 vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01, key="vaf_range")
 min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, value=1, step=1, key="min_alt")
+min_rev_alt = st.sidebar.number_input("Min rev alt count (0 = no minimum)", min_value=0, max_value=10000, value=0, step=1, key="min_rev_alt")
 variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No", "Unknown (no VCF/TSV)"], key="variant_called_sel")
 on_target_sel = st.sidebar.selectbox("Target bases", ["All", "On target", "Off target"], key="on_target_sel")
 
@@ -228,6 +231,7 @@ IGV_CAP = 5
 
 _IGV_CHUNK = 10_000
 
+
 def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str):
     """Render IGV Prepare + Download buttons with chunked progress.
 
@@ -239,7 +243,8 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
         st.caption("Add a manifest in the sidebar to enable IGV session download.")
         return
 
-    sample_ids = display_df["sample_id"].unique().tolist()
+    _extra_w = " AND ".join(conditions + extra_conditions)
+    sample_ids = query_distinct_samples(con, table_expr, _extra_w)
     n = len(sample_ids)
     cap_samples = sample_ids[:IGV_CAP]
 
@@ -251,7 +256,9 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
         )
 
     if n > IGV_CAP:
-        _total_records = len(display_df)
+        _total_records = con.execute(
+            f"SELECT COUNT(*) FROM {table_expr} WHERE {_extra_w}"
+        ).fetchone()[0]
         st.warning(
             f"{n} samples in this selection. IGV session capped at {IGV_CAP}. "
             "Select specific samples below, or check the box to load all "
@@ -264,7 +271,11 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
             key=f"{key}_sample_pick",
         )
         cap_samples = chosen if chosen else cap_samples
-        _chosen_records = len(display_df[display_df["sample_id"].isin(cap_samples)])
+        _cap_list = ", ".join(f"'{s}'" for s in cap_samples)
+        _chosen_records = con.execute(
+            f"SELECT COUNT(*) FROM {table_expr} WHERE {_extra_w} "
+            f"AND sample_id IN ({_cap_list})"
+        ).fetchone()[0]
         st.caption(f"{_chosen_records:,} / {_total_records:,} records from selected samples")
         if st.checkbox(f"Load all {n} samples instead", key=f"{key}_override"):
             cap_samples = sample_ids
@@ -331,6 +342,8 @@ if sample_sel:
 if variant_sel:
     t_list = ", ".join(f"'{t}'" for t in variant_sel)
     conditions.append(f"variant_type IN ({t_list})")
+if min_rev_alt > 0:
+    conditions.append(f"rev_alt_count >= {min_rev_alt}")
 if min_depth > 0:
     conditions.append(f"total_depth >= {min_depth}")
 if max_depth > 0:
