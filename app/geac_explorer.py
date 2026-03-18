@@ -7,6 +7,7 @@ import altair as alt
 import pandas as pd
 from scipy.optimize import nnls
 from igv_helpers import query_distinct_samples
+import geac_config
 
 st.set_page_config(page_title="GEAC Explorer", layout="wide")
 st.title("GEAC Explorer")
@@ -15,9 +16,13 @@ st.markdown(
     "per-sample Parquet files or a merged cohort DuckDB database."
 )
 
+# ── Project config (geac.toml or --config flag) ───────────────────────────────
+_cfg = geac_config.load()
+
 # ── File input ────────────────────────────────────────────────────────────────
 path = st.text_input(
     "Data file path",
+    value=_cfg.get("data", ""),
     placeholder="/path/to/sample.parquet  or  cohort.duckdb",
 )
 
@@ -139,14 +144,20 @@ st.sidebar.divider()
 st.sidebar.header("IGV Integration")
 
 import os as _os
-_default_manifest = _os.path.join(_os.path.dirname(_os.path.abspath(path)), "manifest.tsv")
+_default_manifest = (
+    _cfg.get("manifest")
+    or _os.path.join(_os.path.dirname(_os.path.abspath(path)), "manifest.tsv")
+)
 
 manifest_path = st.sidebar.text_input(
     "Manifest file (optional)",
     value=_default_manifest,
     help="Tab-separated file with columns: sample_id, bam_path, bai_path",
 )
-genome = st.sidebar.selectbox("Genome", ["hg19", "hg38", "mm10", "mm39", "other"])
+_genome_options = ["hg19", "hg38", "mm10", "mm39", "other"]
+_cfg_genome = _cfg.get("genome", "hg19")
+_genome_default_idx = _genome_options.index(_cfg_genome) if _cfg_genome in _genome_options else 0
+genome = st.sidebar.selectbox("Genome", _genome_options, index=_genome_default_idx)
 if genome == "other":
     genome = st.sidebar.text_input("Genome ID", value="hg38")
 
@@ -585,7 +596,7 @@ with tab2:
     _COMP = str.maketrans('ACGT', 'TGCA')
     _SBS_MUT_TYPES = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G"]
     _SBS_COLORS    = {
-        "C>A": "#1BBDEB", "C>G": "#231F20", "C>T": "#E22926",
+        "C>A": "#1BBDEB", "C>G": "#808080", "C>T": "#E22926",
         "T>A": "#CBCACB", "T>C": "#97D54C", "T>G": "#ECC6C5",
     }
     _SBS_ORDER = [
@@ -757,6 +768,7 @@ with tab2:
 
             cosmic_path = st.text_input(
                 "COSMIC SBS matrix path",
+                value=_cfg.get("cosmic", ""),
                 placeholder="/path/to/COSMIC_v3.4_SBS_GRCh37.txt",
                 key="cosmic_path",
             )

@@ -1,0 +1,17 @@
+# GEAC project configuration
+# Copy this file to geac.toml and fill in paths for your project.
+# Run the Explorer from the same directory: streamlit run /path/to/geac_explorer.py
+# Or point to a config explicitly:         streamlit run /path/to/geac_explorer.py -- --config /path/to/geac.toml
+
+# Path to a per-sample Parquet file or a merged cohort DuckDB database (required)
+data = "/path/to/cohort.duckdb"
+
+# Tab-separated manifest with columns: sample_id, bam_path, bai_path (optional)
+manifest = "/path/to/manifest.tsv"
+
+# COSMIC SBS reference matrix for signature decomposition (optional)
+# Download from https://cancer.sanger.ac.uk/signatures/downloads/
+cosmic = "/path/to/COSMIC_v3.4_SBS_GRCh38.txt"
+
+# Reference genome for IGV sessions: hg19 | hg38 | mm10 | mm39 | other
+genome = "hg38"

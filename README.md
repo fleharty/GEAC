@@ -302,6 +302,7 @@ Three WDL 1.0 workflows are provided in `wdl/`:
 | `targets` | File? | BED or Picard interval list for on-target annotation |
 | `gene_annotations` | File? | GFF3, GTF, or UCSC genePred for gene annotation |
 | `region` | String? | Restrict to a region, e.g. `chr1:1-1000000` |
+| `repeat_window` | Int | Bases each side of locus for homopolymer/STR scan (default: 10) |
 | `min_base_qual` | Int | Default: 1 |
 | `min_map_qual` | Int | Default: 20 |
 | `threads` | Int | Default: 4 |
@@ -313,9 +314,10 @@ Output: `parquet` (File) — per-sample alt base Parquet file.
 
 ### `geac_cohort.wdl` inputs
 
-Accepts the same per-sample and shared inputs as `geac_collect.wdl` but as parallel arrays
-(`input_bams`, `input_bam_indices`, optional `sample_ids`, optional `variants_tsvs`).
-Shared annotation inputs (`targets`, `gene_annotations`, `reference_fasta`) apply to all samples.
+Per-sample parallel arrays: `input_bams`, `input_bam_indices`, optional `sample_ids`,
+optional `variants_tsvs`, optional `vcfs` + `vcf_indices` (per-sample VCF annotation).
+Shared inputs applied to all samples: `reference_fasta`, `targets`, `gene_annotations`,
+`region`, `repeat_window`, `read_type`, `pipeline`, `min_base_qual`, `min_map_qual`, `threads`.
 
 Outputs: `parquets` (Array[File]) and `cohort_db` (File, the merged DuckDB).
 
