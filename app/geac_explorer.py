@@ -898,11 +898,21 @@ with tab2:
                     ], sel, key=f"spectrum_{sub}")
 
 with tab3:
-    _sb_scale = st.radio(
+    _sb_col1, _sb_col2 = st.columns(2)
+    _sb_scale = _sb_col1.radio(
         "Axis scale", ["Linear", "log1p"], horizontal=True, key="sb_scale",
         help="log1p = log(1 + x), compresses large counts while keeping zeros visible.",
     )
     _use_log1p = _sb_scale == "log1p"
+
+    _color_options = ["Variant type", "Sample"]
+    if _has_data("on_target"):
+        _color_options.append("On target")
+    if _has_data("variant_called"):
+        _color_options.append("Called variant")
+    _color_by = _sb_col2.radio(
+        "Color by", _color_options, horizontal=True, key="sb_color_by",
+    )
 
     sample_df = df.sample(min(2000, len(df))).copy()
 
@@ -991,16 +1001,25 @@ with tab3:
         _enc_x = alt.X("fwd_plot:Q", title=_x_title)
         _enc_y = alt.Y("rev_plot:Q", title=_y_title)
 
+    _color_field, _color_title = {
+        "Variant type":   ("variant_type:N",   "Variant type"),
+        "Sample":         ("sample_id:N",       "Sample"),
+        "On target":      ("on_target:N",       "On target"),
+        "Called variant": ("variant_called:N",  "Called variant"),
+    }[_color_by]
+
     scatter = (
         alt.Chart(sample_df)
         .mark_point(opacity=0.5, size=30)
         .encode(
             _enc_x,
             _enc_y,
-            alt.Color("variant_type:N", title="Variant type"),
+            alt.Color(_color_field, title=_color_title),
             tooltip=(
                 ["sample_id", "chrom", "pos", "ref_allele", "alt_allele",
-                 "fwd_alt_count", "rev_alt_count", "vaf"]
+                 "variant_type", "fwd_alt_count", "rev_alt_count", "vaf"]
+                + (["on_target"] if _has_data("on_target") else [])
+                + (["variant_called"] if _has_data("variant_called") else [])
                 + (["gene"] if _genes_available else [])
             ),
         )
