@@ -396,10 +396,13 @@ st.info(f"**{total_count:,}** records{cap_msg}")
 
 # ── Data table ────────────────────────────────────────────────────────────────
 _table_cols = [
-    "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
-    "variant_type", "vaf", "alt_count", "ref_count", "total_depth",
-    "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
-    "overlap_alt_disagree", "variant_called", "variant_filter", "on_target", "gene",
+    c for c in [
+        "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
+        "variant_type", "vaf", "alt_count", "ref_count", "total_depth",
+        "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
+        "overlap_alt_disagree", "variant_called", "variant_filter", "on_target", "gene",
+    ]
+    if c in df.columns
 ]
 
 with st.expander("Data table", expanded=True):
