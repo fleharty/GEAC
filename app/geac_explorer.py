@@ -6,6 +6,7 @@ import duckdb
 import altair as alt
 import pandas as pd
 from scipy.optimize import nnls
+from igv_helpers import query_distinct_samples
 
 st.set_page_config(page_title="GEAC Explorer", layout="wide")
 st.title("GEAC Explorer")
@@ -228,6 +229,7 @@ IGV_CAP = 5
 
 _IGV_CHUNK = 10_000
 
+
 def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str):
     """Render IGV Prepare + Download buttons with chunked progress.
 
@@ -239,12 +241,8 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
         st.caption("Add a manifest in the sidebar to enable IGV session download.")
         return
 
-    # Query full (non-display-limited) sample list so the cap warning fires correctly
-    # regardless of the display row limit setting.
     _extra_w = " AND ".join(conditions + extra_conditions)
-    sample_ids = con.execute(
-        f"SELECT DISTINCT sample_id FROM {table_expr} WHERE {_extra_w} ORDER BY sample_id"
-    ).df()["sample_id"].tolist()
+    sample_ids = query_distinct_samples(con, table_expr, _extra_w)
     n = len(sample_ids)
     cap_samples = sample_ids[:IGV_CAP]
 
@@ -271,9 +269,10 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
             key=f"{key}_sample_pick",
         )
         cap_samples = chosen if chosen else cap_samples
+        _cap_list = ", ".join(f"'{s}'" for s in cap_samples)
         _chosen_records = con.execute(
             f"SELECT COUNT(*) FROM {table_expr} WHERE {_extra_w} "
-            f"AND sample_id IN ({', '.join(f\"'{s}'\" for s in cap_samples)})"
+            f"AND sample_id IN ({_cap_list})"
         ).fetchone()[0]
         st.caption(f"{_chosen_records:,} / {_total_records:,} records from selected samples")
         if st.checkbox(f"Load all {n} samples instead", key=f"{key}_override"):
