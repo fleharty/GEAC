@@ -1011,13 +1011,22 @@ with tab3:
                            alt.Scale(domain=[True, False], range=["#2ca02c", "#d62728"])),
     }[_color_by]
 
+    _sb_point_sel = alt.selection_point(
+        name="sb_select",
+        fields=["sample_id", "chrom", "pos", "ref_allele", "alt_allele"],
+        on="click",
+        toggle="event.shiftKey",
+    )
+
     scatter = (
         alt.Chart(sample_df)
-        .mark_point(opacity=0.5, size=30)
+        .mark_point(size=40)
         .encode(
             _enc_x,
             _enc_y,
             alt.Color(_color_field, title=_color_title, scale=_color_scale),
+            opacity=alt.condition(_sb_point_sel, alt.value(1.0), alt.value(0.35)),
+            size=alt.condition(_sb_point_sel, alt.value(80), alt.value(30)),
             tooltip=(
                 ["sample_id", "chrom", "pos", "ref_allele", "alt_allele",
                  "variant_type", "fwd_alt_count", "rev_alt_count", "vaf"]
@@ -1026,12 +1035,48 @@ with tab3:
                 + (["gene"] if _genes_available else [])
             ),
         )
+        .add_params(_sb_point_sel)
         .properties(title=_sb_title, height=350)
     )
-    st.altair_chart(
+    sb_event = st.altair_chart(
         (ci_lower + ci_upper + diag_line + scatter).resolve_scale(color="independent"),
         use_container_width=True,
+        on_select="rerun",
     )
+
+    # ── Drill-down for selected points ────────────────────────────────────────
+    sb_pts = (sb_event.selection or {}).get("sb_select", [])
+    if sb_pts:
+        # Build a dataframe of selected records from the full (non-sampled) data
+        _sb_or_clauses = " OR ".join(
+            f"(sample_id = '{p['sample_id']}' AND chrom = '{p['chrom']}' "
+            f"AND pos = {p['pos']} AND ref_allele = '{p['ref_allele']}' "
+            f"AND alt_allele = '{p['alt_allele']}')"
+            for p in sb_pts
+            if all(k in p for k in ["sample_id", "chrom", "pos", "ref_allele", "alt_allele"])
+        )
+        if _sb_or_clauses:
+            _sb_sel_df = con.execute(f"""
+                SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+                FROM {table_expr}
+                WHERE {_sb_or_clauses}
+                ORDER BY sample_id, chrom, pos
+            """).df()
+
+            n_pts = len(_sb_sel_df)
+            n_smp = _sb_sel_df["sample_id"].nunique()
+            st.caption(
+                f"{n_pts} selected loci across {n_smp} sample(s) — "
+                "shift-click to select multiple points"
+            )
+            st.dataframe(_sb_sel_df[_table_cols], use_container_width=True, hide_index=True)
+            igv_buttons(
+                [f"({_sb_or_clauses})"],
+                _sb_sel_df,
+                key=f"sb_sel_{'_'.join(str(p.get('pos','')) for p in sb_pts[:5])}",
+            )
+    else:
+        st.caption("Click a point to select it; shift-click to select multiple.")
 
 with tab4:
     ov = df[df["overlap_depth"] > 0].copy()
