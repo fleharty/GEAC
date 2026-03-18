@@ -1055,3 +1055,66 @@ with tab_cohort:
                     )
                 )
                 st.altair_chart(_vaf_chart, use_container_width=True)
+
+            # ── Step 3: Strand balance scatter ────────────────────────────────
+            st.divider()
+            st.subheader("Strand balance by sample")
+            st.caption(
+                "Each dot is one sample. x = mean strand balance (0.5 = perfect), "
+                "y = mean VAF. Outliers in either axis may indicate a problematic sample."
+            )
+
+            _strand_stats = con.execute(f"""
+                SELECT
+                    sample_id,
+                    ROUND(AVG(alt_count * 1.0 / total_depth), 6) AS mean_vaf,
+                    ROUND(
+                        AVG(fwd_alt_count * 1.0
+                            / NULLIF(fwd_alt_count + rev_alt_count, 0)),
+                        4
+                    ) AS mean_strand_balance,
+                    COUNT(*) AS n_loci
+                FROM {table_expr}
+                WHERE {_cohort_where} AND variant_type = 'SNV'
+                GROUP BY sample_id
+            """).df()
+
+            if _strand_stats.empty:
+                st.info("No SNVs in current selection.")
+            else:
+                _strand_chart = (
+                    alt.Chart(_strand_stats)
+                    .mark_circle(size=80, opacity=0.85)
+                    .encode(
+                        alt.X("mean_strand_balance:Q",
+                              title="Mean strand balance (0.5 = perfect)",
+                              scale=alt.Scale(domain=[0, 1])),
+                        alt.Y("mean_vaf:Q",
+                              title="Mean VAF",
+                              scale=alt.Scale(zero=False)),
+                        alt.Color("sample_id:N", title="Sample"),
+                        alt.Size("n_loci:Q", title="SNV loci",
+                                 scale=alt.Scale(range=[40, 300])),
+                        tooltip=[
+                            "sample_id:N",
+                            alt.Tooltip("mean_strand_balance:Q", format=".4f",
+                                        title="Mean strand balance"),
+                            alt.Tooltip("mean_vaf:Q", format=".6f", title="Mean VAF"),
+                            alt.Tooltip("n_loci:Q", format=",", title="SNV loci"),
+                        ],
+                    )
+                    .properties(
+                        title="Strand Balance vs Mean VAF (per sample)",
+                        height=350,
+                    )
+                )
+                # Dashed reference line at x=0.5 (perfect strand balance)
+                _ref_line = (
+                    alt.Chart(pd.DataFrame({"x": [0.5]}))
+                    .mark_rule(strokeDash=[4, 4], color="gray", opacity=0.6)
+                    .encode(alt.X("x:Q"))
+                )
+                st.altair_chart(
+                    (_strand_chart + _ref_line).properties(height=350),
+                    use_container_width=True,
+                )
