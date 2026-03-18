@@ -914,6 +914,7 @@ with tab3:
             alt.Y("rev:Q"),
         )
     )
+    _sb_sel = alt.selection_point(name="sb_click", fields=["chrom", "pos"], on="click")
     scatter = (
         alt.Chart(sample_df)
         .mark_point(opacity=0.5, size=30)
@@ -921,15 +922,40 @@ with tab3:
             alt.X("fwd_alt_count:Q", title="Forward alt reads"),
             alt.Y("rev_alt_count:Q", title="Reverse alt reads"),
             alt.Color("variant_type:N", title="Variant type"),
+            opacity=alt.condition(_sb_sel, alt.value(1.0), alt.value(0.3)),
             tooltip=(
                 ["sample_id", "chrom", "pos", "ref_allele", "alt_allele",
                  "fwd_alt_count", "rev_alt_count", "vaf"]
                 + (["gene"] if _genes_available else [])
             ),
         )
+        .add_params(_sb_sel)
         .properties(title="Strand Bias — dashed line: perfect balance; shaded band: 95% CI under Binomial(n, 0.5)", height=350)
     )
-    st.altair_chart((ci_area + diag_line + scatter).resolve_scale(color="independent"), use_container_width=True)
+    sb_event = st.altair_chart(
+        (ci_area + diag_line + scatter).resolve_scale(color="independent"),
+        use_container_width=True,
+        on_select="rerun",
+    )
+
+    sb_pts = (sb_event.selection or {}).get("sb_click", [])
+    if sb_pts:
+        _sb_chrom = sb_pts[0].get("chrom")
+        _sb_pos   = sb_pts[0].get("pos")
+        if _sb_chrom and _sb_pos is not None:
+            st.markdown(f"**{_sb_chrom}:{_sb_pos}** — all samples at this locus")
+            _sb_drill = con.execute(f"""
+                SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+                FROM {table_expr}
+                WHERE chrom = '{_sb_chrom}' AND pos = {_sb_pos}
+                ORDER BY sample_id
+            """).df()
+            st.dataframe(_sb_drill[_table_cols], use_container_width=True, hide_index=True)
+            igv_buttons(
+                [f"chrom = '{_sb_chrom}'", f"pos = {_sb_pos}"],
+                _sb_drill,
+                key=f"sb_{_sb_chrom}_{_sb_pos}",
+            )
 
 with tab4:
     ov = df[df["overlap_depth"] > 0].copy()
