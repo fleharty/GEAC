@@ -17,9 +17,9 @@ Work through each item top to bottom. Check off items as verified, note failures
 ### Basic operation
 - [x] Runs on a BAM with no optional flags; produces valid Parquet
 - [x] DuckDB query against output Parquet returns valid rows
-- [ ] Reads sample ID from BAM SM tag when `--sample-id` is omitted
-- [ ] `--sample-id` overrides SM tag correctly
-- [ ] `--read-type` and `--pipeline` values stored correctly in output
+- [x] Reads sample ID from BAM SM tag when `--sample-id` is omitted
+- [x] `--sample-id` overrides SM tag correctly
+- [x] `--read-type` and `--pipeline` values stored correctly in output
 - [ ] `--region` restricts output to the specified region only
 - [ ] `--threads > 1` runs without error
 - [ ] `--progress-interval 0` suppresses progress output
@@ -91,7 +91,10 @@ Work through each item top to bottom. Check off items as verified, note failures
 - [ ] Variant type multiselect works
 - [ ] VAF range slider works
 - [ ] Min alt count filter works
+- [ ] Min fwd alt count filter works
 - [ ] Min rev alt count filter works
+- [ ] Min overlap alt agree filter works
+- [ ] Min overlap alt disagree filter works
 - [ ] Variant called filter (Yes / No / Unknown) works
 - [ ] Target bases filter (On target / Off target) works; unavailable when column absent
 - [ ] Homopolymer length range filter works; unavailable when column absent
