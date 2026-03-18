@@ -246,7 +246,10 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
             cap_samples = sample_ids
 
     if st.button("Prepare IGV session", key=f"{key}_prepare"):
-        w = " AND ".join(conditions + extra_conditions)
+        _sample_clause = "sample_id IN ({})".format(
+            ", ".join(f"'{s}'" for s in cap_samples)
+        )
+        w = " AND ".join(conditions + extra_conditions + [_sample_clause])
         estimated = con.execute(
             f"SELECT COUNT(*) FROM {table_expr} WHERE {w}"
         ).fetchone()[0]
@@ -271,8 +274,7 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
 
         pbar.progress(1.0, text=f"Done — {fetched:,} records fetched.")
 
-        full_df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
-        igv_df = full_df[full_df["sample_id"].isin(cap_samples)]
+        igv_df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
         bed = make_bed(igv_df)
         session = make_igv_session(igv_df, manifest, genome)
         buf = io.BytesIO()
