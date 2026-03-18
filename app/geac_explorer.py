@@ -952,7 +952,7 @@ with tab3:
 
     ci_area = (
         alt.Chart(_ci_band)
-        .mark_area(opacity=0.25, color="steelblue")
+        .mark_area(opacity=0.25, color="steelblue", tooltip=None)
         .encode(
             alt.X("fwd:Q"),
             alt.Y("rev_min:Q"),
