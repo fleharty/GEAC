@@ -58,12 +58,24 @@ n_called    = int(stats["n_called"][0])
 pct_called  = f"{100 * n_called / n_annotated:.1f}%" if n_annotated > 0 else "N/A"
 
 # ── Filters (sidebar) ─────────────────────────────────────────────────────────
-st.sidebar.header("Filters")
+_FILTER_KEYS = [
+    "chrom_sel", "sample_sel", "gene_text", "variant_sel", "vaf_range",
+    "min_alt", "variant_called_sel", "on_target_sel",
+    "homopolymer_range", "str_len_range", "min_depth", "max_depth", "limit_sel",
+]
+
+_hdr_col, _btn_col = st.sidebar.columns([2, 1])
+_hdr_col.header("Filters")
+if _btn_col.button("Clear all", help="Reset all filters to defaults"):
+    for _k in _FILTER_KEYS:
+        if _k in st.session_state:
+            del st.session_state[_k]
+    st.rerun()
 
 chroms = con.execute(f"SELECT DISTINCT chrom FROM {table_expr} ORDER BY chrom").df()["chrom"].tolist()
 samples = con.execute(f"SELECT DISTINCT sample_id FROM {table_expr} ORDER BY sample_id").df()["sample_id"].tolist()
 
-chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + chroms)
+chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + chroms, key="chrom_sel")
 if "sample_sel" not in st.session_state:
     st.session_state["sample_sel"] = []
 sample_sel = st.sidebar.multiselect("Samples (blank = all)", samples, key="sample_sel")
@@ -78,7 +90,7 @@ def _has_data(col: str) -> bool:
 
 _genes_available = _has_data("gene")
 if _genes_available:
-    gene_text = st.sidebar.text_input("Gene (partial match, blank = all)", "")
+    gene_text = st.sidebar.text_input("Gene (partial match, blank = all)", "", key="gene_text")
 else:
     gene_text = ""
     st.sidebar.caption("Gene filter unavailable — run geac collect with --gene-annotations to enable.")
@@ -86,25 +98,26 @@ variant_sel = st.sidebar.multiselect(
     "Variant type",
     ["SNV", "insertion", "deletion", "MNV"],
     default=["SNV", "insertion", "deletion", "MNV"],
+    key="variant_sel",
 )
-vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01)
-min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, value=1, step=1)
-variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No", "Unknown (no VCF/TSV)"])
-on_target_sel = st.sidebar.selectbox("Target bases", ["All", "On target", "Off target"])
+vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01, key="vaf_range")
+min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, value=1, step=1, key="min_alt")
+variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No", "Unknown (no VCF/TSV)"], key="variant_called_sel")
+on_target_sel = st.sidebar.selectbox("Target bases", ["All", "On target", "Off target"], key="on_target_sel")
 
 _repeat_cols_present = _has_data("homopolymer_len")
 if _repeat_cols_present:
-    homopolymer_range = st.sidebar.slider("Homopolymer length range", 0, 20, (0, 20), step=1)
-    str_len_range     = st.sidebar.slider("STR length range",         0, 50, (0, 50), step=1)
+    homopolymer_range = st.sidebar.slider("Homopolymer length range", 0, 20, (0, 20), step=1, key="homopolymer_range")
+    str_len_range     = st.sidebar.slider("STR length range",         0, 50, (0, 50), step=1, key="str_len_range")
 else:
     homopolymer_range = (0, 20)
     str_len_range     = (0, 50)
     st.sidebar.caption("Repeat filters unavailable — run geac collect with a newer build to enable.")
-min_depth = st.sidebar.number_input("Min depth (0 = no minimum)", min_value=0, value=0, step=1)
-max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, value=0, step=1)
+min_depth = st.sidebar.number_input("Min depth (0 = no minimum)", min_value=0, value=0, step=1, key="min_depth")
+max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, value=0, step=1, key="max_depth")
 
 _limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
-_limit_sel = st.sidebar.selectbox("Display limit (rows)", _limit_options, index=0)
+_limit_sel = st.sidebar.selectbox("Display limit (rows)", _limit_options, index=0, key="limit_sel")
 display_limit = None if _limit_sel == "All" else int(_limit_sel)
 
 # ── IGV integration (sidebar) ─────────────────────────────────────────────────
