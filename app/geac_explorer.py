@@ -914,7 +914,7 @@ with tab3:
         "Color by", _color_options, horizontal=True, key="sb_color_by",
     )
 
-    sample_df = df.sample(min(2000, len(df))).copy()
+    sample_df = df.sample(min(2000, len(df)), random_state=42).copy()
 
     # Round linear values used as tick labels when in log1p mode.
     _log1p_ticks_linear = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
