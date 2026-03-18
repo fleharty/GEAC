@@ -1355,8 +1355,7 @@ with tab_cohort:
                         alt.Y("n_snv:Q", title="SNV count", stack="zero"),
                         alt.Color("substitution:N", title="Substitution",
                                   scale=_sbs6_color_scale),
-                        alt.Tooltip(["sample_id:N", "substitution:N",
-                                     alt.Tooltip("n_snv:Q", title="Count")]),
+                        alt.Tooltip(["sample_id:N", "substitution:N", "n_snv:Q"]),
                     )
                     .properties(height=350, title="SNV count per sample colored by SBS6 substitution type")
                 )
