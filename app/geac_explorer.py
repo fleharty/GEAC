@@ -1102,7 +1102,7 @@ with tab3:
         # Build a dataframe of selected records from the full (non-sampled) data
         _sb_or_clauses = " OR ".join(
             f"(sample_id = '{p['sample_id']}' AND chrom = '{p['chrom']}' "
-            f"AND pos = {p['pos']} AND ref_allele = '{p['ref_allele']}' "
+            f"AND pos = {int(p['pos'])} AND ref_allele = '{p['ref_allele']}' "
             f"AND alt_allele = '{p['alt_allele']}')"
             for p in sb_pts
             if all(k in p for k in ["sample_id", "chrom", "pos", "ref_allele", "alt_allele"])
@@ -1125,7 +1125,7 @@ with tab3:
             igv_buttons(
                 [f"({_sb_or_clauses})"],
                 _sb_sel_df,
-                key=f"sb_sel_{'_'.join(str(p.get('pos','')) for p in sb_pts[:5])}",
+                key=f"sb_sel_{'_'.join(str(int(p['pos'])) for p in sb_pts[:5] if 'pos' in p)}",
             )
     else:
         st.caption("Click a point to select it; shift-click to select multiple.")
