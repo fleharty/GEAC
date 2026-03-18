@@ -960,14 +960,15 @@ with tab3:
         })
         _diag = pd.DataFrame({"fwd": [0.0, max_val], "rev": [0.0, max_val]})
 
-    ci_area = (
+    ci_lower = (
         alt.Chart(_ci_band)
-        .mark_area(opacity=0.25, color="steelblue", tooltip=None)
-        .encode(
-            alt.X("fwd:Q"),
-            alt.Y("rev_min:Q"),
-            alt.Y2("rev_max:Q"),
-        )
+        .mark_line(color="steelblue", opacity=0.6, strokeDash=[3, 3], tooltip=None)
+        .encode(alt.X("fwd:Q"), alt.Y("rev_min:Q"))
+    )
+    ci_upper = (
+        alt.Chart(_ci_band)
+        .mark_line(color="steelblue", opacity=0.6, strokeDash=[3, 3], tooltip=None)
+        .encode(alt.X("fwd:Q"), alt.Y("rev_max:Q"))
     )
     diag_line = (
         alt.Chart(_diag)
@@ -978,9 +979,9 @@ with tab3:
         )
     )
     _sb_title = (
-        "Strand Bias (log1p scale) — dashed line: perfect balance; shaded band: 95% CI under Binomial(n, 0.5)"
+        "Strand Bias (log1p scale) — solid: perfect balance; dashed: 95% CI under Binomial(n, 0.5)"
         if _use_log1p else
-        "Strand Bias — dashed line: perfect balance; shaded band: 95% CI under Binomial(n, 0.5)"
+        "Strand Bias — solid: perfect balance; dashed: 95% CI under Binomial(n, 0.5)"
     )
 
     if _use_log1p:
@@ -1028,7 +1029,7 @@ with tab3:
         .properties(title=_sb_title, height=350)
     )
     st.altair_chart(
-        (ci_area + diag_line + scatter).resolve_scale(color="independent"),
+        (ci_lower + ci_upper + diag_line + scatter).resolve_scale(color="independent"),
         use_container_width=True,
     )
 
