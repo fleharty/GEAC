@@ -11,8 +11,54 @@
 - [x] Variant annotation — `--vcf` and `--variants-tsv` flags; annotates `variant_called` / `variant_filter` columns
 - [x] Fragment overlap metrics — `overlap_alt_agree`, `overlap_alt_disagree`, `overlap_ref_agree` columns for read-pair concordance
 - [ ] Integration tests — generate synthetic BAM data and write end-to-end tests
-- [ ] Read-end proximity metrics — record distance of each alt base from the nearest read end; enables detection of end-repair artifacts (alt bases enriched near read ends are likely artifactual). New columns: `dist_from_read_end` (int), optionally a boolean `near_read_end` flag with a configurable threshold (e.g. `--end-repair-window`, default 10 bp)
-- [ ] Consensus family size metrics — for duplex/simplex reads, record the number of raw fragments that contributed to the consensus. New columns: `ab_count` (top-strand family size), `ba_count` (bottom-strand family size), `family_size` (ab_count + ba_count). Requires parsing fgbio/DRAGEN consensus tags (e.g. `cD`, `cE`, or `RX`/`MI` tags depending on pipeline). Useful for filtering low-confidence consensus calls.
+## Per-read detail table (two-table design)
+
+**Motivation:** Read-end proximity and family size are inherently per-read properties.
+Aggregating them into the locus table (e.g. `mean_dist_from_end`) loses distributional
+information needed for principled artifact filtering. The most correct design stores
+per-read detail in a second table linked to the existing locus table.
+
+### Design
+
+Two output files per sample from `geac collect`:
+- `{sample}.parquet` — existing locus-level table (one row per alt locus per sample); unchanged
+- `{sample}.reads.parquet` — new per-read table (one row per alt-supporting read); columns:
+  - `sample_id`, `chrom`, `pos`, `alt_allele` — foreign key back to locus table
+  - `dist_from_read_start` — 0-based position of the alt base within the read
+  - `dist_from_read_end` — distance from the alt base to the 3' end of the read
+  - `read_length` — total read length after soft-clipping
+  - `ab_count` — top-strand family size (fgbio `cD` tag or equivalent)
+  - `ba_count` — bottom-strand family size
+  - `family_size` — ab_count + ba_count
+  - `base_qual` — base quality at the alt position
+  - `map_qual` — mapping quality of the read
+
+### Pros
+- Enables principled per-read filtering (e.g. "alt reads where family_size >= 3 AND dist_from_read_end > 10")
+- Joint filters are natural SQL: no need to pre-compute every possible aggregate
+- Supports future analyses not yet anticipated
+- Locus table remains unchanged — no migration of existing Parquet files
+- DuckDB handles multi-table joins efficiently with Parquet pushdown
+- Per-read drill-down in Explorer at a specific locus becomes very rich
+- Only alt-supporting reads are stored, so table is much smaller than total read count
+
+### Cons
+- `geac collect` must write two files instead of one — more complex output handling
+- WDL workflows need to propagate and merge both file types
+- `geac merge` needs a second merge step for the reads table
+- Explorer must be aware of the optional reads table (graceful fallback if absent)
+- Larger total storage footprint per sample
+- Adds implementation complexity to the Rust BAM processing loop
+
+### Implementation steps
+- [ ] Step 1: Define `AltRead` struct in `src/record.rs` with the columns listed above
+- [ ] Step 2: Populate `AltRead` records during BAM pileup in `src/bam/mod.rs`; parse fgbio/DRAGEN family size tags (`cD`/`cE` or `RX`/`MI`) per pipeline
+- [ ] Step 3: Add `src/writer/parquet_reads.rs` — write `AltRead` records to `{stem}.reads.parquet`
+- [ ] Step 4: Update `geac collect` CLI to emit both files; add `--reads-output` flag (optional; if omitted, reads table is not written)
+- [ ] Step 5: Update `geac merge` to accept and merge reads Parquets into a second DuckDB table (`alt_reads`) alongside `alt_bases`
+- [ ] Step 6: Update WDL workflows to handle the optional reads Parquet output from `Collect` and pass it to `Merge`
+- [ ] Step 7: Explorer — in the position drill-down, JOIN `alt_reads` on `(sample_id, chrom, pos, alt_allele)` to show per-read detail (dist from end, family size, base qual) when reads table is present
+- [ ] Step 8: Explorer — add sidebar filters for `min_family_size` and `max_dist_from_end` that apply to the locus table via a subquery against `alt_reads`
 
 ## Intra-sample comparison (read-type)
 
