@@ -1304,3 +1304,47 @@ with tab_cohort:
                     (_strand_chart + _ref_line).properties(height=350),
                     use_container_width=True,
                 )
+
+            # ── Step 4: SNV count bar chart stacked by SBS6 substitution ──────
+            st.subheader("SNV Count by Sample (SBS6 breakdown)")
+            _sbs6_df = con.execute(f"""
+                SELECT
+                    sample_id,
+                    CASE
+                        WHEN ref_allele IN ('C','G') AND alt_allele IN ('A','T') THEN 'C>A'
+                        WHEN ref_allele IN ('C','G') AND alt_allele IN ('G','C') THEN 'C>G'
+                        WHEN ref_allele IN ('C','G') AND alt_allele IN ('T','A') THEN 'C>T'
+                        WHEN ref_allele IN ('T','A') AND alt_allele IN ('A','T') THEN 'T>A'
+                        WHEN ref_allele IN ('T','A') AND alt_allele IN ('C','G') THEN 'T>C'
+                        WHEN ref_allele IN ('T','A') AND alt_allele IN ('G','C') THEN 'T>G'
+                        ELSE 'other'
+                    END AS substitution,
+                    COUNT(*) AS n_snv
+                FROM {table_expr}
+                WHERE {_cohort_where} AND variant_type = 'SNV'
+                GROUP BY sample_id, substitution
+                ORDER BY sample_id, substitution
+            """).df()
+
+            if _sbs6_df.empty:
+                st.info("No SNVs in current selection.")
+            else:
+                _sbs6_color_scale = alt.Scale(
+                    domain=["C>A", "C>G", "C>T", "T>A", "T>C", "T>G"],
+                    range=["#1BBDEB", "#808080", "#E22926", "#CBCACB", "#A1CE63", "#EDB5C0"],
+                )
+                _sbs6_chart = (
+                    alt.Chart(_sbs6_df)
+                    .mark_bar()
+                    .encode(
+                        alt.X("sample_id:N", title="Sample", sort="-y",
+                              axis=alt.Axis(labelAngle=-45, labelLimit=200)),
+                        alt.Y("n_snv:Q", title="SNV count", stack="zero"),
+                        alt.Color("substitution:N", title="Substitution",
+                                  scale=_sbs6_color_scale),
+                        alt.Tooltip(["sample_id:N", "substitution:N",
+                                     alt.Tooltip("n_snv:Q", title="Count")]),
+                    )
+                    .properties(height=350, title="SNV count per sample colored by SBS6 substitution type")
+                )
+                st.altair_chart(_sbs6_chart, use_container_width=True)
