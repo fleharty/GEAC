@@ -17,9 +17,9 @@ Work through each item top to bottom. Check off items as verified, note failures
 ### Basic operation
 - [x] Runs on a BAM with no optional flags; produces valid Parquet
 - [x] DuckDB query against output Parquet returns valid rows
-- [ ] Reads sample ID from BAM SM tag when `--sample-id` is omitted
-- [ ] `--sample-id` overrides SM tag correctly
-- [ ] `--read-type` and `--pipeline` values stored correctly in output
+- [x] Reads sample ID from BAM SM tag when `--sample-id` is omitted
+- [x] `--sample-id` overrides SM tag correctly
+- [x] `--read-type` and `--pipeline` values stored correctly in output
 - [ ] `--region` restricts output to the specified region only
 - [ ] `--threads > 1` runs without error
 - [ ] `--progress-interval 0` suppresses progress output
@@ -91,7 +91,10 @@ Work through each item top to bottom. Check off items as verified, note failures
 - [ ] Variant type multiselect works
 - [ ] VAF range slider works
 - [ ] Min alt count filter works
+- [ ] Min fwd alt count filter works
 - [ ] Min rev alt count filter works
+- [ ] Min overlap alt agree filter works
+- [ ] Min overlap alt disagree filter works
 - [ ] Variant called filter (Yes / No / Unknown) works
 - [ ] Target bases filter (On target / Off target) works; unavailable when column absent
 - [ ] Homopolymer length range filter works; unavailable when column absent
@@ -179,6 +182,12 @@ Work through each item top to bottom. Check off items as verified, note failures
 - [ ] Focus button sets sample filter for all other tabs
 - [ ] VAF distribution overlay shows one curve per sample
 - [ ] Strand balance scatter shows one dot per sample with dashed reference at 0.5
+- [ ] SNV count bar chart renders with one bar per sample sorted by total count
+- [ ] SBS6 stacking shows correct substitution type breakdown per sample
+- [ ] SBS96 heatmap renders with samples as rows and 96 contexts as columns
+- [ ] Heatmap color reflects normalized fraction (not raw count)
+- [ ] Heatmap and SBS6 chart show "No SNVs" message when no data present
+- [ ] Heatmap shows "Trinucleotide context unavailable" when column absent
 
 ---
 

@@ -18,6 +18,8 @@ version 1.0
 ##   vcf_index            - (optional) Corresponding .tbi / .csi index
 ##   variants_tsv         - (optional) TSV variant list (chrom/pos_start/pos_end/ref/var, 0-based)
 ##                          Alternative to vcf; mutually exclusive.
+##   targets              - (optional) BED or Picard interval list; annotates on_target column
+##   gene_annotations     - (optional) GFF3, GTF, or UCSC genePred; annotates gene column
 ##   region               - (optional) restrict to a region, e.g. chr1:1-1000000
 ##   repeat_window        - bases each side of locus to scan for homopolymers/STRs (default 10)
 ##   min_base_qual        - minimum base quality (default 1)

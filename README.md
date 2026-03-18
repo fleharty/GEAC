@@ -183,7 +183,9 @@ Features:
     cosine similarity, and residual percentage
   - *Overlap agreement* — histogram of overlap concordance fractions
   - *Cohort* (DuckDB only) — per-sample summary table, VAF distribution overlay, strand
-    balance scatter; click a sample row to focus all other views
+    balance scatter, SNV count bar chart stacked by SBS6 substitution type, and SBS96
+    heatmap (samples × 96 contexts, normalised by sample); click a sample row to focus
+    all other views
 - **IGV integration** — provide a manifest TSV (`sample_id`, `bam_path`) in the sidebar
   to enable "Download IGV session" buttons throughout the app. Downloads a zip containing
   `session.xml` (BAM tracks + BED track) and `positions.bed` (one row per unique locus).
