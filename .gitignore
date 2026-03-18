@@ -1,1 +1,4 @@
 /target
+
+# Project-specific config (contains local paths — not for version control)
+geac.toml
