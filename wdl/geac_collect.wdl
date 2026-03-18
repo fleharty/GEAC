@@ -19,6 +19,7 @@ version 1.0
 ##   variants_tsv         - (optional) TSV variant list (chrom/pos_start/pos_end/ref/var, 0-based)
 ##                          Alternative to vcf; mutually exclusive.
 ##   region               - (optional) restrict to a region, e.g. chr1:1-1000000
+##   repeat_window        - bases each side of locus to scan for homopolymers/STRs (default 10)
 ##   min_base_qual        - minimum base quality (default 1)
 ##   min_map_qual         - minimum mapping quality (default 20)
 ##   threads              - CPU threads for geac (default 4)
@@ -44,6 +45,7 @@ workflow GeacCollect {
         File?   targets
         File?   gene_annotations
         String? region
+        Int repeat_window = 10
 
         Int min_base_qual = 1
         Int min_map_qual  = 20
@@ -70,6 +72,7 @@ workflow GeacCollect {
             targets               = targets,
             gene_annotations      = gene_annotations,
             region                = region,
+            repeat_window         = repeat_window,
             min_base_qual         = min_base_qual,
             min_map_qual          = min_map_qual,
             threads               = threads,
@@ -101,6 +104,7 @@ task Collect {
         File?   targets
         File?   gene_annotations
         String? region
+        Int repeat_window
 
         Int min_base_qual
         Int min_map_qual
@@ -132,7 +136,8 @@ task Collect {
             ~{"--variants-tsv " + variants_tsv} \
             ~{"--targets " + targets} \
             ~{"--gene-annotations " + gene_annotations} \
-            ~{"--region " + region}
+            ~{"--region " + region} \
+            --repeat-window ~{repeat_window}
     >>>
 
     output {

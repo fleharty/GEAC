@@ -13,6 +13,8 @@ version 1.0
 ##   input_bam_indices     - Corresponding .bai / .crai indices
 ##   sample_ids            - (optional) override sample IDs; defaults to SM tag per BAM
 ##   variants_tsvs         - (optional) per-sample variant TSV files
+##   vcfs                  - (optional) per-sample VCF/BCF files for variant annotation
+##   vcf_indices           - (optional) per-sample .tbi / .csi indices; required when vcfs provided
 ##
 ## Inputs (shared across all samples):
 ##   reference_fasta       - Reference FASTA
@@ -21,6 +23,8 @@ version 1.0
 ##   pipeline              - fgbio | dragen | raw    (default: fgbio)
 ##   targets               - (optional) BED or Picard interval list
 ##   gene_annotations      - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
+##   region                - (optional) restrict all samples to a genomic region
+##   repeat_window         - bases each side of locus for homopolymer/STR scan (default 10)
 ##   cohort_name           - Base name for the output DuckDB file (default: cohort)
 ##   docker_image          - geac Docker image, e.g. gcr.io/my-project/geac:latest
 ##
@@ -36,6 +40,8 @@ workflow GeacCohort {
         Array[File]    input_bam_indices
         Array[String]? sample_ids       # optional; if provided must be same length as input_bams
         Array[File]?   variants_tsvs    # optional; if provided must be same length as input_bams
+        Array[File]?   vcfs             # optional; if provided must be same length as input_bams
+        Array[File]?   vcf_indices      # optional; required when vcfs is provided
 
         # Shared inputs
         File   reference_fasta
@@ -43,8 +49,10 @@ workflow GeacCohort {
         String read_type = "duplex"
         String pipeline  = "fgbio"
 
-        File? targets
-        File? gene_annotations
+        File?   targets
+        File?   gene_annotations
+        String? region
+        Int     repeat_window = 10
 
         Int min_base_qual = 1
         Int min_map_qual  = 20
@@ -72,6 +80,12 @@ workflow GeacCohort {
         if (defined(variants_tsvs)) {
             File   this_variants_tsv = select_first([variants_tsvs])[i]
         }
+        if (defined(vcfs)) {
+            File   this_vcf          = select_first([vcfs])[i]
+        }
+        if (defined(vcf_indices)) {
+            File   this_vcf_index    = select_first([vcf_indices])[i]
+        }
 
         call Collect {
             input:
@@ -83,8 +97,12 @@ workflow GeacCohort {
                 pipeline              = pipeline,
                 sample_id             = this_sample_id,
                 variants_tsv          = this_variants_tsv,
+                vcf                   = this_vcf,
+                vcf_index             = this_vcf_index,
                 targets               = targets,
                 gene_annotations      = gene_annotations,
+                region                = region,
+                repeat_window         = repeat_window,
                 min_base_qual         = min_base_qual,
                 min_map_qual          = min_map_qual,
                 threads               = threads,
@@ -125,8 +143,12 @@ task Collect {
 
         String? sample_id
         File?   variants_tsv
+        File?   vcf
+        File?   vcf_index
         File?   targets
         File?   gene_annotations
+        String? region
+        Int     repeat_window
 
         Int min_base_qual
         Int min_map_qual
@@ -153,9 +175,12 @@ task Collect {
             --min-map-qual     ~{min_map_qual} \
             --threads          ~{threads} \
             ~{"--sample-id "        + sample_id} \
+            ~{"--vcf "              + vcf} \
             ~{"--variants-tsv "     + variants_tsv} \
             ~{"--targets "          + targets} \
-            ~{"--gene-annotations " + gene_annotations}
+            ~{"--gene-annotations " + gene_annotations} \
+            ~{"--region "           + region} \
+            --repeat-window ~{repeat_window}
     >>>
 
     output {
