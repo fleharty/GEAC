@@ -227,6 +227,7 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
         )
 
     if n > IGV_CAP:
+        _total_records = len(display_df)
         st.warning(
             f"{n} samples in this selection. IGV session capped at {IGV_CAP}. "
             "Select specific samples below, or check the box to load all "
@@ -239,6 +240,8 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
             key=f"{key}_sample_pick",
         )
         cap_samples = chosen if chosen else cap_samples
+        _chosen_records = len(display_df[display_df["sample_id"].isin(cap_samples)])
+        st.caption(f"{_chosen_records:,} / {_total_records:,} records from selected samples")
         if st.checkbox(f"Load all {n} samples instead", key=f"{key}_override"):
             cap_samples = sample_ids
 
