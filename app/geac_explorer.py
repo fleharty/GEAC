@@ -104,10 +104,11 @@ if _genes_available:
 else:
     gene_text = ""
     st.sidebar.caption("Gene filter unavailable — run geac collect with --gene-annotations to enable.")
+if "variant_sel" not in st.session_state:
+    st.session_state["variant_sel"] = ["SNV", "insertion", "deletion", "MNV"]
 variant_sel = st.sidebar.multiselect(
     "Variant type",
     ["SNV", "insertion", "deletion", "MNV"],
-    default=["SNV", "insertion", "deletion", "MNV"],
     key="variant_sel",
 )
 vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01, key="vaf_range")
