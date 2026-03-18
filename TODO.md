@@ -88,6 +88,49 @@ Two output files per sample from `geac collect`:
   - [ ] Step 5: SBS96 heatmap — samples as rows, 96 trinucleotide contexts as columns, color = normalized count; reveals samples with unusual mutational profiles
 - [x] NMF decomposition — fit the per-sample SBS96 spectrum against COSMIC reference signatures using NNLS; show the largest contributing signatures and their weights
 
+## Coverage Analysis
+
+**Motivation:** Identify genomic regions that are systematically undercovered across a cohort —
+positions where a meaningful fraction of samples fall below a minimum depth threshold.
+This is complementary to artifact detection: low coverage reduces confidence in both
+variant calls and clean sites.
+
+### Design
+
+New `geac coverage` subcommand:
+- Inputs: BAM/CRAM + `--targets` BED/interval list + `--reference`
+- Outputs: `{sample}.coverage.parquet` with one row per target position:
+  - `sample_id`, `chrom`, `pos`, `total_depth`
+- Covers every position in targets, including positions with zero alt reads
+- Merged across samples with `geac merge` (second DuckDB table: `coverage`)
+
+Cohort-level analysis via DuckDB:
+```sql
+SELECT chrom, pos,
+       COUNT(DISTINCT sample_id)  AS n_covered,
+       AVG(total_depth)           AS mean_depth,
+       MIN(total_depth)           AS min_depth
+FROM coverage
+WHERE total_depth < 20
+GROUP BY chrom, pos
+HAVING n_covered > 0.5 * (SELECT COUNT(DISTINCT sample_id) FROM coverage)
+ORDER BY n_covered DESC
+```
+
+### Implementation steps
+
+- [ ] Step 1: Add `geac coverage` subcommand (`src/coverage.rs` + CLI args):
+  `--input`, `--reference`, `--targets` (required), `--output`, `--sample-id`,
+  `--min-map-qual`, `--threads`
+- [ ] Step 2: Pileup over every position in `--targets`; record `total_depth` even if zero
+- [ ] Step 3: Write output as `{stem}.coverage.parquet`
+- [ ] Step 4: Update `geac merge` to ingest `.coverage.parquet` files into a `coverage`
+  DuckDB table alongside `alt_bases`
+- [ ] Step 5: Add WDL task and workflow for `geac coverage` scatter + merge
+- [ ] Step 6: Explorer — add "Coverage" tab showing a table of systematically undercovered
+  positions (configurable depth threshold and fraction-of-samples threshold);
+  click a row to drill down to per-sample depths at that locus
+
 ## WDL / Terra
 
 - [x] WDL task wrapping `geac collect` — single-sample workflow in `wdl/geac_collect.wdl`
