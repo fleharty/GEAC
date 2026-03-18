@@ -906,11 +906,14 @@ with tab3:
 
     sample_df = df.sample(min(2000, len(df))).copy()
 
+    # Round linear values used as tick labels when in log1p mode.
+    _log1p_ticks_linear = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
+
     if _use_log1p:
         sample_df["fwd_plot"] = np.log1p(sample_df["fwd_alt_count"])
         sample_df["rev_plot"] = np.log1p(sample_df["rev_alt_count"])
-        _x_title = "log1p(Forward alt reads)"
-        _y_title = "log1p(Reverse alt reads)"
+        _x_title = "Forward alt reads"
+        _y_title = "Reverse alt reads"
     else:
         sample_df["fwd_plot"] = sample_df["fwd_alt_count"]
         sample_df["rev_plot"] = sample_df["rev_alt_count"]
@@ -964,12 +967,36 @@ with tab3:
             alt.Y("rev:Q"),
         )
     )
+    _sb_title = (
+        "Strand Bias (log1p scale) — dashed line: perfect balance; shaded band: 95% CI under Binomial(n, 0.5)"
+        if _use_log1p else
+        "Strand Bias — dashed line: perfect balance; shaded band: 95% CI under Binomial(n, 0.5)"
+    )
+
+    if _use_log1p:
+        _max_linear = max(
+            int(sample_df["fwd_alt_count"].max()),
+            int(sample_df["rev_alt_count"].max()),
+        )
+        _tick_vals = [np.log1p(v) for v in _log1p_ticks_linear if v <= _max_linear * 1.1]
+        _log1p_axis = alt.Axis(
+            values=_tick_vals,
+            labelExpr="format(exp(datum.value) - 1, 'd')",
+        )
+        _enc_x = alt.X("fwd_plot:Q", title=_x_title, axis=_log1p_axis,
+                        scale=alt.Scale(domain=[0, max_val]))
+        _enc_y = alt.Y("rev_plot:Q", title=_y_title, axis=_log1p_axis,
+                        scale=alt.Scale(domain=[0, max_val]))
+    else:
+        _enc_x = alt.X("fwd_plot:Q", title=_x_title)
+        _enc_y = alt.Y("rev_plot:Q", title=_y_title)
+
     scatter = (
         alt.Chart(sample_df)
         .mark_point(opacity=0.5, size=30)
         .encode(
-            alt.X("fwd_plot:Q", title=_x_title),
-            alt.Y("rev_plot:Q", title=_y_title),
+            _enc_x,
+            _enc_y,
             alt.Color("variant_type:N", title="Variant type"),
             tooltip=(
                 ["sample_id", "chrom", "pos", "ref_allele", "alt_allele",
@@ -977,10 +1004,7 @@ with tab3:
                 + (["gene"] if _genes_available else [])
             ),
         )
-        .properties(
-            title="Strand Bias — dashed line: perfect balance; shaded band: 95% CI under Binomial(n, 0.5)",
-            height=350,
-        )
+        .properties(title=_sb_title, height=350)
     )
     st.altair_chart(
         (ci_area + diag_line + scatter).resolve_scale(color="independent"),
