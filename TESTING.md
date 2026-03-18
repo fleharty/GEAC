@@ -182,6 +182,12 @@ Work through each item top to bottom. Check off items as verified, note failures
 - [ ] Focus button sets sample filter for all other tabs
 - [ ] VAF distribution overlay shows one curve per sample
 - [ ] Strand balance scatter shows one dot per sample with dashed reference at 0.5
+- [ ] SNV count bar chart renders with one bar per sample sorted by total count
+- [ ] SBS6 stacking shows correct substitution type breakdown per sample
+- [ ] SBS96 heatmap renders with samples as rows and 96 contexts as columns
+- [ ] Heatmap color reflects normalized fraction (not raw count)
+- [ ] Heatmap and SBS6 chart show "No SNVs" message when no data present
+- [ ] Heatmap shows "Trinucleotide context unavailable" when column absent
 
 ---
 
