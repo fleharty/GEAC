@@ -229,9 +229,17 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
     if n > IGV_CAP:
         st.warning(
             f"{n} samples in this selection. IGV session capped at {IGV_CAP}. "
-            "Check the box below to override (may crash IGV — you're on your own)."
+            "Select specific samples below, or check the box to load all "
+            "(may crash IGV — you're on your own)."
         )
-        if st.checkbox(f"Load all {n} samples", key=f"{key}_override"):
+        chosen = st.multiselect(
+            "Samples to include in IGV session",
+            options=sample_ids,
+            default=cap_samples,
+            key=f"{key}_sample_pick",
+        )
+        cap_samples = chosen if chosen else cap_samples
+        if st.checkbox(f"Load all {n} samples instead", key=f"{key}_override"):
             cap_samples = sample_ids
 
     if st.button("Prepare IGV session", key=f"{key}_prepare"):
