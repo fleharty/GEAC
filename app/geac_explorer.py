@@ -1409,9 +1409,7 @@ with tab_cohort:
                             alt.Y("sample_id:N", title="Sample"),
                             alt.Color("fraction:Q", title="Fraction of SNVs",
                                       scale=alt.Scale(scheme="blues")),
-                            alt.Tooltip(["sample_id:N", "sbs_label:N",
-                                         alt.Tooltip("n:Q", title="Count"),
-                                         alt.Tooltip("fraction:Q", title="Fraction", format=".4f")]),
+                            alt.Tooltip(["sample_id:N", "sbs_label:N", "n:Q", "fraction:Q"]),
                         )
                         .properties(
                             height=max(200, 20 * _hm_full["sample_id"].nunique()),
