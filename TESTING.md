@@ -4,10 +4,19 @@ Work through each item top to bottom. Check off items as verified, note failures
 
 ---
 
+## Testing Sessions
+
+| Date | Version | Tester | Notes |
+|---|---|---|---|
+| 2026-03-18 | v0.1.1 | MF | Initial manual test session |
+
+---
+
 ## CLI — `geac collect`
 
 ### Basic operation
-- [ ] Runs on a BAM with no optional flags; produces valid Parquet
+- [x] Runs on a BAM with no optional flags; produces valid Parquet
+- [x] DuckDB query against output Parquet returns valid rows
 - [ ] Reads sample ID from BAM SM tag when `--sample-id` is omitted
 - [ ] `--sample-id` overrides SM tag correctly
 - [ ] `--read-type` and `--pipeline` values stored correctly in output
