@@ -11,6 +11,13 @@
 - [x] Variant annotation — `--vcf` and `--variants-tsv` flags; annotates `variant_called` / `variant_filter` columns
 - [x] Fragment overlap metrics — `overlap_alt_agree`, `overlap_alt_disagree`, `overlap_ref_agree` columns for read-pair concordance
 - [ ] Integration tests — generate synthetic BAM data and write end-to-end tests
+- [ ] Read-end proximity metrics — record distance of each alt base from the nearest read end; enables detection of end-repair artifacts (alt bases enriched near read ends are likely artifactual). New columns: `dist_from_read_end` (int), optionally a boolean `near_read_end` flag with a configurable threshold (e.g. `--end-repair-window`, default 10 bp)
+- [ ] Consensus family size metrics — for duplex/simplex reads, record the number of raw fragments that contributed to the consensus. New columns: `ab_count` (top-strand family size), `ba_count` (bottom-strand family size), `family_size` (ab_count + ba_count). Requires parsing fgbio/DRAGEN consensus tags (e.g. `cD`, `cE`, or `RX`/`MI` tags depending on pipeline). Useful for filtering low-confidence consensus calls.
+
+## Intra-sample comparison (read-type)
+
+- [ ] Multi-BAM collect — allow `geac collect` to accept multiple input BAMs for the same sample (raw, simplex, duplex) and tag each record with its `read_type`; output a single merged Parquet with a `read_type` column
+- [ ] Read-type comparison view in Explorer — given a Parquet or DuckDB with mixed read types, show side-by-side or overlaid metrics (VAF distribution, strand balance, SBS96 spectrum) broken down by `read_type` (raw / simplex / duplex / mixed); goal is to quantify what duplex consensus processing removes vs retains
 
 ## Explorer (Streamlit)
 
