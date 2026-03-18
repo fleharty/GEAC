@@ -628,9 +628,9 @@ with tab2:
 
             pts = (event.selection or {}).get("bar_click", [])
             if pts:
-                clicked = pts[0].get("sbs_label")
-                if clicked:
-                    matching = raw[raw["sbs_label"] == clicked][["trinuc_context", "ref_allele", "alt_allele"]]
+                clicked_labels = [p.get("sbs_label") for p in pts if p.get("sbs_label")]
+                if clicked_labels:
+                    matching = raw[raw["sbs_label"].isin(clicked_labels)][["trinuc_context", "ref_allele", "alt_allele"]]
                     if not matching.empty:
                         or_clauses = " OR ".join(
                             f"(trinuc_context = '{r.trinuc_context}' AND ref_allele = '{r.ref_allele}' AND alt_allele = '{r.alt_allele}')"
@@ -638,9 +638,10 @@ with tab2:
                         )
                         extra_cond = f"variant_type = 'SNV' AND ({or_clauses})"
                         sel = query_records([extra_cond])
-                        st.caption(f"{len(sel):,} records with context {clicked}")
+                        label_str = ", ".join(clicked_labels)
+                        st.caption(f"{len(sel):,} records matching {len(clicked_labels)} selected context(s): {label_str}")
                         st.dataframe(sel[_table_cols], use_container_width=True)
-                        igv_buttons([extra_cond], sel, key=f"sbs_{clicked}")
+                        igv_buttons([extra_cond], sel, key=f"sbs_{'_'.join(clicked_labels)}")
 
             # ── COSMIC signature known-cause annotations ──────────────────────
             _SBS_ETIOLOGY = {
