@@ -1001,11 +1001,13 @@ with tab3:
         _enc_x = alt.X("fwd_plot:Q", title=_x_title)
         _enc_y = alt.Y("rev_plot:Q", title=_y_title)
 
-    _color_field, _color_title = {
-        "Variant type":   ("variant_type:N",   "Variant type"),
-        "Sample":         ("sample_id:N",       "Sample"),
-        "On target":      ("on_target:N",       "On target"),
-        "Called variant": ("variant_called:N",  "Called variant"),
+    _color_field, _color_title, _color_scale = {
+        "Variant type":   ("variant_type:N",  "Variant type",   alt.Scale()),
+        "Sample":         ("sample_id:N",      "Sample",         alt.Scale()),
+        "On target":      ("on_target:N",      "On target",
+                           alt.Scale(domain=[True, False], range=["#2ca02c", "#d62728"])),
+        "Called variant": ("variant_called:N", "Called variant",
+                           alt.Scale(domain=[True, False], range=["#2ca02c", "#d62728"])),
     }[_color_by]
 
     scatter = (
@@ -1014,7 +1016,7 @@ with tab3:
         .encode(
             _enc_x,
             _enc_y,
-            alt.Color(_color_field, title=_color_title),
+            alt.Color(_color_field, title=_color_title, scale=_color_scale),
             tooltip=(
                 ["sample_id", "chrom", "pos", "ref_allele", "alt_allele",
                  "variant_type", "fwd_alt_count", "rev_alt_count", "vaf"]
