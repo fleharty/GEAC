@@ -66,7 +66,9 @@ pct_called  = f"{100 * n_called / n_annotated:.1f}%" if n_annotated > 0 else "N/
 # ── Filters (sidebar) ─────────────────────────────────────────────────────────
 _FILTER_KEYS = [
     "chrom_sel", "sample_sel", "gene_text", "variant_sel", "vaf_range",
-    "min_alt", "min_fwd_alt", "min_rev_alt", "variant_called_sel", "on_target_sel",
+    "min_alt", "min_fwd_alt", "min_rev_alt",
+    "min_overlap_agree", "min_overlap_disagree",
+    "variant_called_sel", "on_target_sel",
     "homopolymer_range", "str_len_range", "min_depth", "max_depth", "limit_sel",
 ]
 
@@ -81,6 +83,8 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["min_alt"]            = 1
     st.session_state["min_fwd_alt"]        = 0
     st.session_state["min_rev_alt"]        = 0
+    st.session_state["min_overlap_agree"]   = 0
+    st.session_state["min_overlap_disagree"] = 0
     st.session_state["variant_called_sel"] = "All"
     st.session_state["on_target_sel"]      = "All"
     st.session_state["homopolymer_range"]  = (0, 20)
@@ -123,6 +127,8 @@ vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01, key=
 min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, value=1, step=1, key="min_alt")
 min_fwd_alt = st.sidebar.number_input("Min fwd alt count (0 = no minimum)", min_value=0, max_value=10000, value=0, step=1, key="min_fwd_alt")
 min_rev_alt = st.sidebar.number_input("Min rev alt count (0 = no minimum)", min_value=0, max_value=10000, value=0, step=1, key="min_rev_alt")
+min_overlap_agree    = st.sidebar.number_input("Min overlap alt agree (0 = no minimum)",    min_value=0, max_value=10000, value=0, step=1, key="min_overlap_agree")
+min_overlap_disagree = st.sidebar.number_input("Min overlap alt disagree (0 = no minimum)", min_value=0, max_value=10000, value=0, step=1, key="min_overlap_disagree")
 variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No", "Unknown (no VCF/TSV)"], key="variant_called_sel")
 on_target_sel = st.sidebar.selectbox("Target bases", ["All", "On target", "Off target"], key="on_target_sel")
 
@@ -359,6 +365,10 @@ if min_fwd_alt > 0:
     conditions.append(f"fwd_alt_count >= {min_fwd_alt}")
 if min_rev_alt > 0:
     conditions.append(f"rev_alt_count >= {min_rev_alt}")
+if min_overlap_agree > 0:
+    conditions.append(f"overlap_alt_agree >= {min_overlap_agree}")
+if min_overlap_disagree > 0:
+    conditions.append(f"overlap_alt_disagree >= {min_overlap_disagree}")
 if min_depth > 0:
     conditions.append(f"total_depth >= {min_depth}")
 if max_depth > 0:
