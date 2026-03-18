@@ -61,7 +61,7 @@ pct_called  = f"{100 * n_called / n_annotated:.1f}%" if n_annotated > 0 else "N/
 # ── Filters (sidebar) ─────────────────────────────────────────────────────────
 _FILTER_KEYS = [
     "chrom_sel", "sample_sel", "gene_text", "variant_sel", "vaf_range",
-    "min_alt", "variant_called_sel", "on_target_sel",
+    "min_alt", "min_rev_alt", "variant_called_sel", "on_target_sel",
     "homopolymer_range", "str_len_range", "min_depth", "max_depth", "limit_sel",
 ]
 
@@ -74,6 +74,7 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["variant_sel"]        = ["SNV", "insertion", "deletion", "MNV"]
     st.session_state["vaf_range"]          = (0.0, 1.0)
     st.session_state["min_alt"]            = 1
+    st.session_state["min_rev_alt"]        = 0
     st.session_state["variant_called_sel"] = "All"
     st.session_state["on_target_sel"]      = "All"
     st.session_state["homopolymer_range"]  = (0, 20)
@@ -114,6 +115,7 @@ variant_sel = st.sidebar.multiselect(
 )
 vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01, key="vaf_range")
 min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, value=1, step=1, key="min_alt")
+min_rev_alt = st.sidebar.number_input("Min rev alt count (0 = no minimum)", min_value=0, max_value=10000, value=0, step=1, key="min_rev_alt")
 variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No", "Unknown (no VCF/TSV)"], key="variant_called_sel")
 on_target_sel = st.sidebar.selectbox("Target bases", ["All", "On target", "Off target"], key="on_target_sel")
 
@@ -340,6 +342,8 @@ if sample_sel:
 if variant_sel:
     t_list = ", ".join(f"'{t}'" for t in variant_sel)
     conditions.append(f"variant_type IN ({t_list})")
+if min_rev_alt > 0:
+    conditions.append(f"rev_alt_count >= {min_rev_alt}")
 if min_depth > 0:
     conditions.append(f"total_depth >= {min_depth}")
 if max_depth > 0:
