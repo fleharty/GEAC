@@ -76,6 +76,7 @@ Two output files per sample from `geac collect`:
 - [x] Gene filter — sidebar text input with partial match (ILIKE); depends on `gene` column being populated
 - [x] Repeat filter — sidebar range sliders for `homopolymer_len` and `str_len`
 - [x] Strand bias plot — dashed y=x diagonal + 95% binomial CI band; gene name in hover tooltip
+- [ ] Strand bias click drill-down — clicking a point should show all samples at that locus in a table with IGV button; disabled for now, needs debugging
 - [x] SNV trinucleotide spectrum (SBS96) — 3×2 grid of per-mutation-type panels with shared y-axis; click drill-down
 - [ ] Cohort comparison view — side-by-side stats across samples loaded from a DuckDB
   - [x] Step 1: Per-sample summary table — one row per sample_id with n_snv, n_insertion, n_deletion, mean_depth, mean_vaf, strand_balance, overlap_concordance; clicking a row filters all other tabs to that sample
