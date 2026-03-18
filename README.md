@@ -65,10 +65,14 @@ Optional flags:
 | Flag | Default | Description |
 |---|---|---|
 | `--sample-id` | from SM tag | Override the sample identifier |
-| `--vcf calls.vcf.gz` | — | Annotate loci with variant calling status from a VCF |
+| `--vcf` | — | Annotate loci with variant calling status from a VCF/BCF. Mutually exclusive with `--variants-tsv` |
+| `--variants-tsv` | — | TSV variant list (columns: chrom, pos_start, pos_end, ref, var; 0-based). Alternative to `--vcf` |
+| `--targets` | — | BED or Picard interval list of target regions; adds `on_target` bool column |
+| `--gene-annotations` | — | GFF3, GTF, or UCSC genePred file; adds `gene` string column |
+| `--repeat-window` | 10 | Bases on each side of locus to scan for homopolymers and STRs |
 | `--min-base-qual` | 1 | Minimum base quality to count a read |
 | `--min-map-qual` | 20 | Minimum mapping quality |
-| `--region chr1:1-1000` | whole genome | Restrict to a genomic region |
+| `--region` | whole genome | Restrict to a genomic region (e.g. `chr1:1-1000000`) |
 | `--threads` | 1 | Parallel processing threads |
 | `--progress-interval` | 30 | Seconds between progress reports to stderr |
 
@@ -162,14 +166,24 @@ Features:
 - **Summary statistics** — alt records, samples, total alt bases, mean VAF, mean depth,
   % variant called
 - **Sidebar filters** — chromosome, samples, variant type, VAF range, min alt count,
-  variant called status, min/max depth
+  variant called status, min/max depth, on-target, gene name (partial match), homopolymer
+  length, STR length; **Clear all filters** button resets all filters at once
 - **Data table** — sortable, all schema columns, IGV session download button
 - **Tabbed plots**
-  - VAF distribution — separate histograms for SNV, insertion, deletion; click a bar
+  - *VAF distribution* — separate histograms for SNV, insertion, deletion; click a bar
     to see matching records and download an IGV session
-  - SNV error spectrum — click a substitution bar to see matching records and IGV session
-  - Strand bias (forward vs reverse alt read scatter)
-  - Overlap agreement fraction (histogram)
+  - *SNV error spectrum* — click a substitution bar to see matching records and IGV session
+  - *Strand bias* — forward vs. reverse alt reads scatter with 95% CI boundary lines;
+    log1p or linear axis toggle; color by variant type, sample, on-target, or called status;
+    click/shift-click to select points and view a drill-down table + IGV session
+  - *SNV Trinucleotide Spectrum (SBS96)* — 3×2 grid of per-mutation-type panels with shared
+    y-axis; shift-click to select multiple contexts; drill-down table and IGV session
+  - *COSMIC Signature Decomposition* — NNLS fit of the SBS96 spectrum against COSMIC
+    reference signatures; shows top N signatures with weights, etiology annotations,
+    cosine similarity, and residual percentage
+  - *Overlap agreement* — histogram of overlap concordance fractions
+  - *Cohort* (DuckDB only) — per-sample summary table, VAF distribution overlay, strand
+    balance scatter; click a sample row to focus all other views
 - **IGV integration** — provide a manifest TSV (`sample_id`, `bam_path`) in the sidebar
   to enable "Download IGV session" buttons throughout the app. Downloads a zip containing
   `session.xml` (BAM tracks + BED track) and `positions.bed` (one row per unique locus).
@@ -213,8 +227,14 @@ Each Parquet file contains one row per alt allele observed at a locus.
 | `overlap_ref_agree` | int32 | Overlapping pairs where both mates support the reference |
 | `read_type` | string | `raw` / `simplex` / `duplex` |
 | `pipeline` | string | `fgbio` / `dragen` / `raw` |
-| `variant_called` | bool? | Whether a variant was called here (null if no VCF provided) |
+| `variant_called` | bool? | Whether a variant was called here (null if no VCF/TSV provided) |
 | `variant_filter` | string? | VCF FILTER value (`PASS`, filter reason, or null) |
+| `on_target` | bool? | Whether locus overlaps a target region (null if no `--targets` provided) |
+| `gene` | string? | Gene name at locus (null if no `--gene-annotations` provided or intergenic) |
+| `homopolymer_len` | int32? | Length of longest homopolymer overlapping locus within `--repeat-window` |
+| `str_period` | int32? | Period of shortest tandem repeat unit at locus (null if no STR detected) |
+| `str_len` | int32? | Total length of STR tract at locus (null if no STR detected) |
+| `trinuc_context` | string? | Trinucleotide context for SNVs, e.g. `A[C>T]G` (null for indels/MNVs) |
 
 ## Docker
 
@@ -256,10 +276,15 @@ git add VERSION Cargo.toml && git commit -m "Bump version to 0.2.0"
 
 ## WDL / Terra
 
-`wdl/geac_collect.wdl` is a single-sample WDL 1.0 workflow that wraps `geac collect`.
-Run it on a sample set in Terra to scatter across all samples in parallel.
+Three WDL 1.0 workflows are provided in `wdl/`:
 
-### Inputs
+| Workflow | Purpose |
+|---|---|
+| `geac_collect.wdl` | Single-sample wrapper around `geac collect`; use this to scatter across a sample table |
+| `geac_cohort.wdl` | Full cohort workflow: scatters `geac collect` then gathers with `geac merge` |
+| `geac_merge.wdl` | Standalone merge — takes existing Parquets and builds a DuckDB |
+
+### `geac_collect.wdl` inputs
 
 | Input | Type | Description |
 |---|---|---|
@@ -271,8 +296,11 @@ Run it on a sample set in Terra to scatter across all samples in parallel.
 | `pipeline` | String | `fgbio` / `dragen` / `raw` |
 | `docker_image` | String | e.g. `gcr.io/my-project/geac:0.1.0` |
 | `sample_id` | String? | Override sample ID (default: BAM SM tag) |
-| `vcf` | File? | VCF for variant call annotation |
-| `vcf_index` | File? | `.tbi` or `.csi` index |
+| `vcf` | File? | VCF/BCF for variant call annotation |
+| `vcf_index` | File? | `.tbi` or `.csi` index for VCF |
+| `variants_tsv` | File? | TSV variant list (alternative to `--vcf`) |
+| `targets` | File? | BED or Picard interval list for on-target annotation |
+| `gene_annotations` | File? | GFF3, GTF, or UCSC genePred for gene annotation |
 | `region` | String? | Restrict to a region, e.g. `chr1:1-1000000` |
 | `min_base_qual` | Int | Default: 1 |
 | `min_map_qual` | Int | Default: 20 |
@@ -281,20 +309,37 @@ Run it on a sample set in Terra to scatter across all samples in parallel.
 | `disk_gb` | Int | Default: 100 |
 | `preemptible` | Int | Default: 2 |
 
-### Output
+Output: `parquet` (File) — per-sample alt base Parquet file.
 
-| Output | Type | Description |
+### `geac_cohort.wdl` inputs
+
+Accepts the same per-sample and shared inputs as `geac_collect.wdl` but as parallel arrays
+(`input_bams`, `input_bam_indices`, optional `sample_ids`, optional `variants_tsvs`).
+Shared annotation inputs (`targets`, `gene_annotations`, `reference_fasta`) apply to all samples.
+
+Outputs: `parquets` (Array[File]) and `cohort_db` (File, the merged DuckDB).
+
+### `geac_merge.wdl` inputs
+
+| Input | Type | Description |
 |---|---|---|
-| `parquet` | File | Per-sample alt base Parquet file |
+| `parquets` | Array[File] | Per-sample Parquet files |
+| `cohort_name` | String | Base name for the output DuckDB (default: `cohort`) |
+| `docker_image` | String | geac Docker image |
+| `memory_gb` | Int | Default: 16 |
+| `disk_gb` | Int | Default: 50 |
+| `preemptible` | Int | Default: 2 |
+
+Output: `cohort_db` (File) — merged DuckDB database.
 
 ### Running on Terra
 
-1. Import `wdl/geac_collect.wdl` into your Terra workspace.
+1. Import the desired WDL into your Terra workspace.
 2. Set `docker_image` to your pushed GCR image (e.g. `gcr.io/my-project/geac:0.1.0`).
-3. Link `input_bam`, `input_bam_index`, `reference_fasta`, and `reference_fasta_index`
-   to your workspace data table columns.
-4. Run on a sample set — Terra will scatter across samples automatically.
-5. Collect the output `parquet` files and run `geac merge` to build the cohort DuckDB.
+3. For `geac_collect.wdl`: link `input_bam`, `input_bam_index`, `reference_fasta`, and
+   `reference_fasta_index` to your workspace data table columns; Terra will scatter automatically.
+4. For `geac_cohort.wdl`: provide parallel arrays directly and let the workflow scatter and merge.
+5. To merge existing Parquets, use `geac_merge.wdl` with the list of Parquet files.
 
 ## Architecture
 
