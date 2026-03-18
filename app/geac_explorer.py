@@ -585,7 +585,7 @@ with tab2:
     _COMP = str.maketrans('ACGT', 'TGCA')
     _SBS_MUT_TYPES = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G"]
     _SBS_COLORS    = {
-        "C>A": "#1BBDEB", "C>G": "#231F20", "C>T": "#E22926",
+        "C>A": "#1BBDEB", "C>G": "#808080", "C>T": "#E22926",
         "T>A": "#CBCACB", "T>C": "#97D54C", "T>G": "#ECC6C5",
     }
     _SBS_ORDER = [
