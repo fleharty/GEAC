@@ -6,5 +6,4 @@ wdl/
 docker/
 *.md
 *.yml
-*.lock
 .dockerignore

@@ -249,6 +249,17 @@ the final image, keeping it small. Images are built with [Podman](https://podman
 
 **Prerequisites:** Podman installed, and `gcloud` CLI authenticated.
 
+> **Podman on macOS (Apple Silicon):** The build compiles DuckDB from C++ source and
+> requires at least 8 GB of RAM in the Podman VM. 16 GB is recommended:
+> ```bash
+> podman machine stop
+> podman machine set --memory 16384
+> podman machine start
+> ```
+> If the build hangs or the VM becomes unresponsive, `pkill -9 krunkit` will force-kill
+> it. If `apt-get update` fails with a clock-skew error, restart the VM
+> (`podman machine stop && podman machine start`) to resync its clock.
+
 ```bash
 # Authenticate Podman to GCR (once per session)
 gcloud auth print-access-token | podman login -u oauth2accesstoken --password-stdin gcr.io

@@ -4,10 +4,12 @@ FROM ubuntu:22.04 AS builder
 ARG HTSLIB_VERSION=1.21
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get -o Acquire::Check-Valid-Until=false update && apt-get install -y \
     curl \
     build-essential \
     pkg-config \
+    clang \
+    libclang-dev \
     libbz2-dev \
     liblzma-dev \
     libcurl4-openssl-dev \
@@ -36,14 +38,14 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
-RUN cargo build --release
+RUN cargo build --release --jobs 4
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM ubuntu:22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get -o Acquire::Check-Valid-Until=false update && apt-get install -y \
     libbz2-1.0 \
     liblzma5 \
     libcurl4 \
