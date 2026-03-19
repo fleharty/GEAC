@@ -122,6 +122,7 @@ geac coverage \
   [--read-type     raw|simplex|duplex]
   [--pipeline      fgbio|dragen|raw]
   [--min-map-qual  20]
+  [--min-base-qual 20]                           # threshold for frac_low_bq; default 20
   [--min-depth     0]                            # suppress positions with total_depth below this
   [--bin-size      1]                            # aggregate N bp into one row (1 = per-position)
   [--threads       1]
@@ -176,6 +177,19 @@ frac_overlap:     f32          # overlap_depth / fragment_count at this position
 mean_mapq:        f32          # mean MAPQ of all (non-dup) reads at this position
 frac_mapq0:       f32          # fraction with MAPQ = 0 (definitive multi-mappers)
 frac_low_mapq:    f32          # fraction with MAPQ < --min-map-qual
+
+# ── Base quality signals ──────────────────────────────────────────────────────
+# Computed over bases at this position that pass the --min-map-qual filter.
+# Systematically low base quality at a site reduces effective depth just as low
+# read depth does — a site with total_depth=50 but frac_low_bq=0.8 has only ~10
+# usable bases. min/max capture the spread; a wide range is a different problem
+# from uniformly low quality.
+# --min-base-qual defaults to 20 (same default as geac collect).
+
+mean_base_qual:   f32          # mean base quality across all bases at this position
+min_base_qual:    u8           # lowest base quality observed (Phred 0–93)
+max_base_qual:    u8           # highest base quality observed
+frac_low_bq:      f32          # fraction of bases below --min-base-qual (default 20)
 
 # ── Pre-computed annotation tracks ───────────────────────────────────────────
 # One column per --track NAME:file entry. Column name = NAME, type = Float32, nullable.
