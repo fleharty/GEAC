@@ -32,23 +32,32 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
     let conn = Connection::open(&args.output)
         .with_context(|| format!("failed to create DuckDB database: {}", args.output.display()))?;
 
-    // Build a DuckDB array literal: ['file1.parquet', 'file2.parquet', ...]
-    // Paths are escaped to handle spaces and special characters.
-    let file_list: Vec<String> = args
-        .inputs
-        .iter()
-        .map(|p| format!("'{}'", p.display().to_string().replace('\'', "''")))
-        .collect();
-    let file_array = file_list.join(", ");
-
-    // Create the main table by reading all Parquet files in parallel.
-    // DuckDB infers the schema from the Parquet files automatically.
+    // Create the table from the first file to establish the schema, then
+    // INSERT the remaining files one at a time.  This avoids the multi-file
+    // schema-inference path in DuckDB which can segfault when given a large
+    // array literal or when files have subtly different nullable/type metadata.
     info!("reading Parquet files and creating alt_bases table...");
+
+    let first = &args.inputs[0];
+    let first_escaped = first.display().to_string().replace('\'', "''");
     conn.execute_batch(&format!(
-        "CREATE TABLE alt_bases AS
-         SELECT * FROM read_parquet([{file_array}]);"
+        "CREATE TABLE alt_bases AS SELECT * FROM read_parquet('{first_escaped}');"
     ))
-    .context("failed to create alt_bases table")?;
+    .context("failed to create alt_bases table from first file")?;
+
+    for (idx, path) in args.inputs[1..].iter().enumerate() {
+        let escaped = path.display().to_string().replace('\'', "''");
+        info!(
+            file = %path.display(),
+            idx = idx + 1,
+            total = args.inputs.len(),
+            "inserting"
+        );
+        conn.execute_batch(&format!(
+            "INSERT INTO alt_bases SELECT * FROM read_parquet('{escaped}');"
+        ))
+        .with_context(|| format!("failed to insert {}", path.display()))?;
+    }
 
     let n_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM alt_bases", [], |row| row.get(0))
