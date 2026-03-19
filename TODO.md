@@ -10,7 +10,7 @@
 - [x] Trinucleotide context — `trinuc_context` column computed from reference at each SNV locus
 - [x] Variant annotation — `--vcf` and `--variants-tsv` flags; annotates `variant_called` / `variant_filter` columns
 - [x] Fragment overlap metrics — `overlap_alt_agree`, `overlap_alt_disagree`, `overlap_ref_agree` columns for read-pair concordance
-- [ ] Integration tests — generate synthetic BAM data and write end-to-end tests
+- [x] Integration tests — generate synthetic BAM data and write end-to-end tests
 ## Per-read detail table (two-table design)
 
 **Motivation:** Read-end proximity and family size are inherently per-read properties.
@@ -90,46 +90,160 @@ Two output files per sample from `geac collect`:
 
 ## Coverage Analysis
 
-**Motivation:** Identify genomic regions that are systematically undercovered across a cohort —
-positions where a meaningful fraction of samples fall below a minimum depth threshold.
-This is complementary to artifact detection: low coverage reduces confidence in both
-variant calls and clean sites.
+**Motivation:** `geac collect` only records positions where an alt base was observed.
+`geac coverage` fills the denominator — depth at every covered position — enabling true
+per-base error rates (`alt_count / total_depth` across all positions, not just alt positions)
+and identification of systematically undercovered or low-mappability sites across a cohort.
 
-### Design
+Coverage is confounded by mappability: a region may appear undercovered simply because
+reads that originate there cannot be placed uniquely by the aligner. Without mappability
+context, low-coverage sites and low-mappability sites are indistinguishable from each other
+or from genuine dropout (e.g. FFPE degradation, GC bias). The schema below captures both.
 
-New `geac coverage` subcommand:
-- Inputs: BAM/CRAM + `--targets` BED/interval list + `--reference`
-- Outputs: `{sample}.coverage.parquet` with one row per target position:
-  - `sample_id`, `chrom`, `pos`, `total_depth`
-- Covers every position in targets, including positions with zero alt reads
-- Merged across samples with `geac merge` (second DuckDB table: `coverage`)
+### CLI
 
-Cohort-level analysis via DuckDB:
+```
+geac coverage \
+  --input        sample.bam \
+  --reference    ref.fa \
+  --output       sample.coverage.parquet \
+  [--targets     targets.bed]            # BED or Picard interval list; restricts to these positions
+  [--region      chr1:1-50000]           # genomic region (alternative to --targets)
+  [--mappability mappability.bedgraph]   # pre-computed mappability track (BEDGraph, score col 4)
+  [--sample-id   override]
+  [--read-type   raw|simplex|duplex]
+  [--pipeline    fgbio|dragen|raw]
+  [--min-map-qual 20]                    # same as collect; also used to compute frac_low_mapq
+  [--min-depth   0]                      # suppress positions with depth below this value
+  [--bin-size    1]                      # aggregate N bp into one row (1 = per-position)
+  [--threads     1]
+```
+
+`--targets` is strongly recommended for targeted panels — it bounds output size and ensures
+zero-depth positions (complete dropout) are still recorded. Without `--targets` or `--region`
+the whole BAM is scanned; useful for targeted panels but impractical for WGS without `--bin-size`.
+
+### Output schema (`CoverageRecord`)
+
+One row per position (or per bin when `--bin-size > 1`). Positions are 0-based.
+
+```
+sample_id:       String
+
+chrom:           String
+pos:             i64        # 0-based start of the position or bin
+end:             i64        # pos + 1 normally; pos + bin_size with --bin-size > 1
+
+# Depth — reads passing --min-map-qual
+total_depth:     i32
+fwd_depth:       i32
+rev_depth:       i32
+overlap_depth:   i32        # number of fragment pairs where both reads cover this position
+
+# BAM-derived mappability signals (computed over ALL reads before any MAPQ filter)
+# These are always populated; they cost nothing since we are already doing the pileup.
+mean_mapq:       f32        # mean MAPQ of all reads at this position
+frac_mapq0:      f32        # fraction of reads with MAPQ = 0 (definitive multi-mappers)
+frac_low_mapq:   f32        # fraction with MAPQ < --min-map-qual threshold
+
+# Pre-computed mappability (optional, populated when --mappability is provided)
+# Score is 0.0–1.0 where 1.0 = perfectly unique, 0.0 = never uniquely mappable at this k-mer length.
+# Common sources: ENCODE GEM mappability tracks (150-mer), genmap, Umap.
+mappability:     Option<f32>
+
+# Optional annotations
+on_target:       Option<bool>   # populated when --targets is given
+
+# Provenance
+read_type:       ReadType
+pipeline:        Pipeline
+```
+
+**Why two mappability signals?**
+
+`frac_mapq0` is the empirical signal — it reflects what actually happened in this experiment
+at this read length and mapper version. `mappability` is the theoretical signal — it reflects
+the intrinsic repetitiveness of the reference sequence. Together they support three diagnostic
+cases:
+
+| `frac_mapq0` | `mappability` | Interpretation |
+|---|---|---|
+| High | Low | Classic multi-mapping locus — expected, filter with confidence |
+| High | High | Unexpected low MAPQ — structural variant, misassembly, or aligner artifact |
+| Low  | Low | Mappability track may be outdated or wrong k-mer length |
+| Low  | Low, `total_depth` also low | Genuine biological dropout (GC bias, FFPE, etc.) |
+
+### Pre-computed mappability track (`--mappability`)
+
+Accepted format: **BEDGraph** (chrom, start, end, score). This covers the ENCODE GEM tracks
+and output from genmap and Umap. bigWig support can be added later if needed (requires an
+additional crate dependency).
+
+Implementation: load into a sorted `Vec<(i64, i64, f32)>` per chromosome, then binary-search
+for each pileup position. For targeted panels (tens of thousands of positions) this is fast
+and fits comfortably in memory. For WGS the track itself is ~2 GB uncompressed; a streaming
+approach (advance through the sorted track in lock-step with the sorted pileup) is more
+appropriate and should be used if `--targets` is not provided.
+
+### DuckDB integration
+
+`geac coverage` outputs `{sample}.coverage.parquet`. When this file is passed to `geac merge`,
+it is inserted into a `coverage` table in the cohort DuckDB (alongside `alt_bases`). `geac merge`
+detects coverage Parquets by schema (presence of `mean_mapq` column; absence of `alt_allele`).
+
+This enables cross-table queries in the Explorer — for example, joining alt bases to their
+coverage context:
+
 ```sql
+-- Alt bases at systematically low-coverage, low-mappability loci
+SELECT a.*, c.mean_depth, c.mean_mapq
+FROM alt_bases a
+JOIN (
+    SELECT chrom, pos,
+           AVG(total_depth) AS mean_depth,
+           AVG(mean_mapq)   AS mean_mapq
+    FROM coverage
+    GROUP BY chrom, pos
+) c ON a.chrom = c.chrom AND a.pos = c.pos
+WHERE c.mean_depth < 20 AND c.mean_mapq < 30
+ORDER BY c.mean_depth;
+```
+
+```sql
+-- Systematically undercovered positions across the cohort
 SELECT chrom, pos,
-       COUNT(DISTINCT sample_id)  AS n_covered,
-       AVG(total_depth)           AS mean_depth,
-       MIN(total_depth)           AS min_depth
+       COUNT(DISTINCT sample_id)          AS n_covered,
+       AVG(total_depth)                   AS mean_depth,
+       AVG(frac_mapq0)                    AS mean_frac_mapq0,
+       AVG(mappability)                   AS mean_mappability
 FROM coverage
-WHERE total_depth < 20
 GROUP BY chrom, pos
-HAVING n_covered > 0.5 * (SELECT COUNT(DISTINCT sample_id) FROM coverage)
-ORDER BY n_covered DESC
+HAVING AVG(total_depth) < 20
+ORDER BY mean_depth;
 ```
 
 ### Implementation steps
 
-- [ ] Step 1: Add `geac coverage` subcommand (`src/coverage.rs` + CLI args):
-  `--input`, `--reference`, `--targets` (required), `--output`, `--sample-id`,
-  `--min-map-qual`, `--threads`
-- [ ] Step 2: Pileup over every position in `--targets`; record `total_depth` even if zero
-- [ ] Step 3: Write output as `{stem}.coverage.parquet`
-- [ ] Step 4: Update `geac merge` to ingest `.coverage.parquet` files into a `coverage`
-  DuckDB table alongside `alt_bases`
-- [ ] Step 5: Add WDL task and workflow for `geac coverage` scatter + merge
-- [ ] Step 6: Explorer — add "Coverage" tab showing a table of systematically undercovered
-  positions (configurable depth threshold and fraction-of-samples threshold);
-  click a row to drill down to per-sample depths at that locus
+- [ ] Step 1: Add `CoverageRecord` struct to `src/record.rs` with the schema above
+- [ ] Step 2: Add `CoverageArgs` to `src/cli.rs` and `Command::Coverage` variant
+- [ ] Step 3: Add `src/coverage/mod.rs` — pileup loop that records all positions
+  (including zero-depth if `--targets` given); compute BAM-derived mappability signals
+  by iterating over all reads before MAPQ filter; handle `--bin-size` aggregation
+- [ ] Step 4: Add `src/mappability.rs` — `MappabilityTrack` struct; BEDGraph loader;
+  `get(chrom, pos) -> Option<f32>` with binary search; streaming mode for WGS
+- [ ] Step 5: Add `src/writer/parquet_coverage.rs` — write `CoverageRecord` to Parquet
+- [ ] Step 6: Update `src/main.rs` to handle `Command::Coverage`
+- [ ] Step 7: Update `geac merge` (`src/merge.rs`) to detect coverage Parquets by schema
+  and insert into `coverage` table in DuckDB
+- [ ] Step 8: Add `wdl/geac_coverage.wdl` task and scatter/gather workflow
+- [ ] Step 9: Integration tests — synthetic BAM; assert row count, depth values,
+  `frac_mapq0` correctness for reads with known MAPQ=0
+- [ ] Step 10: Explorer — "Coverage" tab (DuckDB mode only):
+  - Systematically undercovered positions table (configurable depth and
+    fraction-of-samples threshold); click to drill down to per-sample depths
+  - Scatter plot of `mean_mapq` vs `mean_depth` per position — low-mappability
+    sites cluster in the lower-left; color by `mappability` score if available
+  - Per-sample depth distribution histogram across target positions
 
 ## WDL / Terra
 
