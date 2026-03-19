@@ -444,6 +444,14 @@ WHERE c.frac_mapq0 > 0.3;
 - [ ] Design longitudinal tracking — `run_id` / `run_date` provenance in coverage schema
   to support tracking coverage stability across instrument runs and reagent lots
 
+## CI / Release
+
+- [ ] GitHub Actions release workflow — on push of a `v*.*.*` tag, build the Docker image
+  natively on an `ubuntu-latest` (x86_64) runner using `docker/Dockerfile`, push
+  `gcr.io/<project>/geac:<version>` and `gcr.io/<project>/geac:latest` to GCR.
+  Cross-compilation from Apple Silicon is not viable (DuckDB C++ segfaults at runtime);
+  a native Linux build is required. Store the GCR service account key as a GitHub secret.
+
 ## WDL / Terra
 
 - [x] WDL task wrapping `geac collect` — single-sample workflow in `wdl/geac_collect.wdl`
