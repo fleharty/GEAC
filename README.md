@@ -240,72 +240,46 @@ Each Parquet file contains one row per alt allele observed at a locus.
 
 ## Docker
 
-Two Dockerfiles are provided:
+**The Docker image must be built on a native Linux x86_64 machine.** Do not attempt to
+cross-compile from Apple Silicon.
 
-| File | When to use |
+### Why cross-compilation does not work
+
+geac bundles DuckDB (a C++ library) via the `duckdb` Rust crate. Two cross-compilation
+approaches were attempted and both fail:
+
+| Approach | Failure |
 |---|---|
-| `docker/Dockerfile` | Linux/CI — compiles geac inside Docker (two-stage build) |
-| `docker/Dockerfile.prebuilt` | Apple Silicon Mac — copies a pre-compiled binary into a minimal image |
+| `podman build --platform linux/amd64` | rustc SIGSEGV under QEMU during compilation |
+| `cargo-zigbuild --target x86_64-unknown-linux-gnu` + `Dockerfile.prebuilt` | Binary compiles and starts, but DuckDB's parquet reader SIGSEGV on first `read_parquet` call on Linux x86_64 |
 
-On Apple Silicon, `docker/Dockerfile` fails because compiling Rust + DuckDB C++ under
-QEMU emulation (`--platform linux/amd64`) causes a SIGSEGV in `rustc`. The prebuilt
-approach cross-compiles the binary natively on the Mac and copies it into the image,
-avoiding QEMU entirely.
+The root cause is that cross-compiling the DuckDB C++ library produces a binary that
+is subtly broken on Linux x86_64 — it crashes silently in production rather than at
+compile time, making it especially dangerous. The only reliable approach is a native
+Linux x86_64 build.
 
-### Building on Apple Silicon (recommended)
+### Building on Linux x86_64
 
-**Prerequisites:** Podman, `gcloud` CLI, Zig, and `cargo-zigbuild` installed.
+Use an x86_64 Linux machine (a GCE VM, a CI runner, or WSL2 on Windows):
 
 ```bash
-# Install build tools (once)
-brew install zig
-cargo install cargo-zigbuild
-rustup target add x86_64-unknown-linux-gnu
-
-# Authenticate Podman to GCR (once per session)
+# Authenticate to GCR (once per session)
 gcloud auth print-access-token | podman login -u oauth2accesstoken --password-stdin gcr.io
+
+# Build and push (compiles geac natively inside Docker)
+bash scripts/build_docker.sh my-gcp-project --push
 ```
 
 > **Note:** `gcloud auth configure-docker gcr.io` configures the Docker credential helper
 > but Podman does not use it. Always use the `podman login` command above instead.
-
-```bash
-# 1. Cross-compile the geac binary for Linux/AMD64 on your Mac
-cargo zigbuild --release --target x86_64-unknown-linux-gnu
-
-# 2. Build the Docker image (no --platform flag needed — binary is already AMD64)
-podman build -t gcr.io/my-gcp-project/geac:$(cat VERSION) -f docker/Dockerfile.prebuilt .
-
-# 3. Push
-podman push gcr.io/my-gcp-project/geac:$(cat VERSION)
-```
-
-### Building on Linux / CI
-
-```bash
-# Authenticate Podman to GCR (once per session)
-gcloud auth print-access-token | podman login -u oauth2accesstoken --password-stdin gcr.io
-
-# Build and push
-bash scripts/build_docker.sh my-gcp-project --push
-```
-
-### Authenticating Podman to GCR
-
-`gcloud auth configure-docker` only configures the Docker credential helper — Podman
-does not read it. Authenticate Podman directly each session:
-
-```bash
-gcloud auth print-access-token | podman login -u oauth2accesstoken --password-stdin gcr.io
-```
 
 ### Updating the version
 
 ```bash
 echo "0.3.0" > VERSION
 # also update version = "..." in Cargo.toml
-# rebuild and push using the Apple Silicon steps above
 git add VERSION Cargo.toml && git commit -m "Bump version to 0.3.0"
+# then build and push from a Linux x86_64 machine as above
 ```
 
 ## WDL / Terra
