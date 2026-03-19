@@ -55,7 +55,7 @@ workflow GeacCohort {
         Int     repeat_window = 10
 
         Int min_base_qual = 1
-        Int min_map_qual  = 20
+        Int min_map_qual  = 0
         Int threads       = 4
 
         String cohort_name = "cohort"

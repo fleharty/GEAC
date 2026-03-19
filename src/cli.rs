@@ -90,7 +90,7 @@ pub struct CollectArgs {
     pub min_base_qual: u8,
 
     /// Minimum mapping quality to consider a read
-    #[arg(long, default_value_t = 20)]
+    #[arg(long, default_value_t = 0)]
     pub min_map_qual: u8,
 
     /// Restrict processing to this region (e.g. "chr1:1000-2000")
