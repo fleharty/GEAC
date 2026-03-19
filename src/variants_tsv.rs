@@ -8,11 +8,13 @@ use crate::vcf::{VcfAnnotation, VariantAnnotator};
 /// Pre-loaded lookup built from a tab-separated variant list.
 ///
 /// Expected columns (tab-separated, optional header line is auto-detected):
-///   chrom   pos_start   pos_end   ref   var
+///   chrom   pos_start   pos_end   ref   var   [post_filter_flag]
 ///
 /// Coordinates are 0-based half-open (BED convention): a SNV at chromosome
-/// position N has pos_start = N, pos_end = N+1.  All matched loci are
-/// annotated as variant_called = true, variant_filter = "PASS".
+/// position N has pos_start = N, pos_end = N+1.  Matched loci are annotated
+/// as variant_called = true.  The variant_filter value is taken from the
+/// post_filter_flag column when present; "NoRules" is treated as "PASS".
+/// If the column is absent, all variants are annotated as "PASS".
 pub struct VariantsTsv {
     by_allele:   HashMap<(String, i64, String), VcfAnnotation>,
     by_position: HashMap<(String, i64), VcfAnnotation>,
@@ -23,8 +25,6 @@ impl VariantsTsv {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read variants TSV: {}", path.display()))?;
 
-        let annotation = VcfAnnotation { filter: "PASS".to_string() };
-
         let mut by_allele:   HashMap<(String, i64, String), VcfAnnotation> = HashMap::new();
         let mut by_position: HashMap<(String, i64), VcfAnnotation>         = HashMap::new();
 
@@ -34,7 +34,7 @@ impl VariantsTsv {
                 continue;
             }
 
-            let cols: Vec<&str> = line.splitn(6, '\t').collect();
+            let cols: Vec<&str> = line.split('\t').collect();
             if cols.len() < 5 {
                 continue;
             }
@@ -47,6 +47,16 @@ impl VariantsTsv {
 
             let chrom = cols[0].to_string();
             let var   = cols[4].to_string();
+
+            // Column 5 is post_filter_flag when present.
+            // "NoRules" means no filter rule fired — equivalent to PASS.
+            let filter = match cols.get(5).map(|s| s.trim()) {
+                None | Some("") => "PASS".to_string(),
+                Some("NoRules") => "PASS".to_string(),
+                Some(f)         => f.to_string(),
+            };
+
+            let annotation = VcfAnnotation { filter };
 
             by_position
                 .entry((chrom.clone(), pos_start))
