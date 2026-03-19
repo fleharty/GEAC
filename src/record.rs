@@ -97,6 +97,7 @@ pub struct AltBase {
     // Provenance
     pub read_type: ReadType,
     pub pipeline: Pipeline,
+    pub batch: Option<String>,
 
     // Variant calling annotation (None if no VCF was provided)
     pub variant_called: Option<bool>,

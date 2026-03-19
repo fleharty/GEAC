@@ -46,6 +46,12 @@ pub struct CollectArgs {
     #[arg(short, long)]
     pub sample_id: Option<String>,
 
+    /// Optional batch label stored as a column in the output Parquet.
+    /// Use this to tag samples with a processing group name so cohorts
+    /// processed in separate runs can be filtered or compared in the Explorer.
+    #[arg(long)]
+    pub batch: Option<String>,
+
     /// Output Parquet file path
     #[arg(short, long)]
     pub output: PathBuf,

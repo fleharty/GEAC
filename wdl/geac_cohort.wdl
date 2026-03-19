@@ -48,6 +48,7 @@ workflow GeacCohort {
         File   reference_fasta_index
         Array[String]? read_types      # optional; if provided must be same length as input_bams
         Array[String]? pipelines       # optional; if provided must be same length as input_bams
+        Array[String]? batches         # optional; per-sample batch/group label stored as a column
 
         File?   targets
         File?   gene_annotations
@@ -88,6 +89,9 @@ workflow GeacCohort {
         }
         String this_read_type = if defined(read_types) then select_first([read_types])[i] else "duplex"
         String this_pipeline  = if defined(pipelines)  then select_first([pipelines])[i]  else "fgbio"
+        if (defined(batches)) {
+            String this_batch = select_first([batches])[i]
+        }
 
         call Collect {
             input:
@@ -97,6 +101,7 @@ workflow GeacCohort {
                 reference_fasta_index = reference_fasta_index,
                 read_type             = this_read_type,
                 pipeline              = this_pipeline,
+                batch                 = this_batch,
                 sample_id             = this_sample_id,
                 variants_tsv          = this_variants_tsv,
                 vcf                   = this_vcf,
@@ -144,6 +149,7 @@ task Collect {
         String pipeline
 
         String? sample_id
+        String? batch
         File?   variants_tsv
         File?   vcf
         File?   vcf_index
@@ -177,6 +183,7 @@ task Collect {
             --min-map-qual     ~{min_map_qual} \
             --threads          ~{threads} \
             ~{"--sample-id "        + sample_id} \
+            ~{"--batch "            + batch} \
             ~{"--vcf "              + vcf} \
             ~{"--variants-tsv "     + variants_tsv} \
             ~{"--targets "          + targets} \
