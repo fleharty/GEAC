@@ -7,14 +7,15 @@ use crate::vcf::{VcfAnnotation, VariantAnnotator};
 
 /// Pre-loaded lookup built from a tab-separated variant list.
 ///
-/// Expected columns (tab-separated, optional header line is auto-detected):
-///   chrom   pos_start   pos_end   ref   var   [post_filter_flag]
+/// Expected columns (tab-separated):
+///   chrom   pos_start   pos_end   ref   var   [...optional additional columns...]
 ///
 /// Coordinates are 0-based half-open (BED convention): a SNV at chromosome
 /// position N has pos_start = N, pos_end = N+1.  Matched loci are annotated
-/// as variant_called = true.  The variant_filter value is taken from the
-/// post_filter_flag column when present; "NoRules" is treated as "PASS".
-/// If the column is absent, all variants are annotated as "PASS".
+/// as variant_called = true.  If a header row is present and contains a
+/// "post_filter_flag" column, that column's value is used as variant_filter;
+/// "NoRules" is treated as "PASS".  If the column is absent or there is no
+/// header, all variants are annotated as "PASS".
 pub struct VariantsTsv {
     by_allele:   HashMap<(String, i64, String), VcfAnnotation>,
     by_position: HashMap<(String, i64), VcfAnnotation>,
@@ -28,7 +29,17 @@ impl VariantsTsv {
         let mut by_allele:   HashMap<(String, i64, String), VcfAnnotation> = HashMap::new();
         let mut by_position: HashMap<(String, i64), VcfAnnotation>         = HashMap::new();
 
-        for line in content.lines() {
+        // Find the post_filter_flag column index from the header row, if present.
+        // The header is identified by a non-numeric value in the pos_start column (col 1).
+        let mut lines = content.lines().peekable();
+        let filter_col: Option<usize> = match lines.peek() {
+            Some(first) if first.split('\t').nth(1).map(|v| v.parse::<i64>().is_err()).unwrap_or(false) => {
+                first.split('\t').position(|h| h.trim() == "post_filter_flag")
+            }
+            _ => None,
+        };
+
+        for line in lines {
             let line = line.trim();
             if line.is_empty() {
                 continue;
@@ -39,7 +50,7 @@ impl VariantsTsv {
                 continue;
             }
 
-            // Auto-detect and skip a header line (pos_start column is not numeric)
+            // Skip the header row
             let pos_start: i64 = match cols[1].parse() {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -48,9 +59,9 @@ impl VariantsTsv {
             let chrom = cols[0].to_string();
             let var   = cols[4].to_string();
 
-            // Column 5 is post_filter_flag when present.
+            // Use post_filter_flag column if we found it in the header.
             // "NoRules" means no filter rule fired — equivalent to PASS.
-            let filter = match cols.get(5).map(|s| s.trim()) {
+            let filter = match filter_col.and_then(|i| cols.get(i)).map(|s| s.trim()) {
                 None | Some("") => "PASS".to_string(),
                 Some("NoRules") => "PASS".to_string(),
                 Some(f)         => f.to_string(),
