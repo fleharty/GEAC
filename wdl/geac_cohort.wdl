@@ -19,8 +19,8 @@ version 1.0
 ## Inputs (shared across all samples):
 ##   reference_fasta       - Reference FASTA
 ##   reference_fasta_index - Corresponding .fai index
-##   read_type             - duplex | simplex | raw  (default: duplex)
-##   pipeline              - fgbio | dragen | raw    (default: fgbio)
+##   read_types            - (optional) per-sample array of duplex|simplex|raw; defaults to "duplex" for all
+##   pipelines             - (optional) per-sample array of fgbio|dragen|raw; defaults to "fgbio" for all
 ##   targets               - (optional) BED or Picard interval list
 ##   gene_annotations      - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
 ##   region                - (optional) restrict all samples to a genomic region
@@ -46,8 +46,8 @@ workflow GeacCohort {
         # Shared inputs
         File   reference_fasta
         File   reference_fasta_index
-        String read_type = "duplex"
-        String pipeline  = "fgbio"
+        Array[String]? read_types      # optional; if provided must be same length as input_bams
+        Array[String]? pipelines       # optional; if provided must be same length as input_bams
 
         File?   targets
         File?   gene_annotations
@@ -86,6 +86,8 @@ workflow GeacCohort {
         if (defined(vcf_indices)) {
             File   this_vcf_index    = select_first([vcf_indices])[i]
         }
+        String this_read_type = if defined(read_types) then select_first([read_types])[i] else "duplex"
+        String this_pipeline  = if defined(pipelines)  then select_first([pipelines])[i]  else "fgbio"
 
         call Collect {
             input:
@@ -93,8 +95,8 @@ workflow GeacCohort {
                 input_bam_index       = input_bam_indices[i],
                 reference_fasta       = reference_fasta,
                 reference_fasta_index = reference_fasta_index,
-                read_type             = read_type,
-                pipeline              = pipeline,
+                read_type             = this_read_type,
+                pipeline              = this_pipeline,
                 sample_id             = this_sample_id,
                 variants_tsv          = this_variants_tsv,
                 vcf                   = this_vcf,

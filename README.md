@@ -240,40 +240,72 @@ Each Parquet file contains one row per alt allele observed at a locus.
 
 ## Docker
 
-The `docker/Dockerfile` performs a two-stage build: htslib and the `geac` binary are
-compiled in a builder stage, then only the runtime libraries and binary are copied into
-the final image, keeping it small. Images are built with [Podman](https://podman.io)
-(no daemon required, drop-in compatible with Dockerfile syntax).
+Two Dockerfiles are provided:
 
-### Build and push to GCR
+| File | When to use |
+|---|---|
+| `docker/Dockerfile` | Linux/CI — compiles geac inside Docker (two-stage build) |
+| `docker/Dockerfile.prebuilt` | Apple Silicon Mac — copies a pre-compiled binary into a minimal image |
 
-**Prerequisites:** Podman installed, and `gcloud` CLI authenticated.
+On Apple Silicon, `docker/Dockerfile` fails because compiling Rust + DuckDB C++ under
+QEMU emulation (`--platform linux/amd64`) causes a SIGSEGV in `rustc`. The prebuilt
+approach cross-compiles the binary natively on the Mac and copies it into the image,
+avoiding QEMU entirely.
+
+### Building on Apple Silicon (recommended)
+
+**Prerequisites:** Podman, `gcloud` CLI, Zig, and `cargo-zigbuild` installed.
+
+```bash
+# Install build tools (once)
+brew install zig
+cargo install cargo-zigbuild
+rustup target add x86_64-unknown-linux-gnu
+
+# Authenticate Podman to GCR (once per session)
+gcloud auth print-access-token | podman login -u oauth2accesstoken --password-stdin gcr.io
+```
+
+> **Note:** `gcloud auth configure-docker gcr.io` configures the Docker credential helper
+> but Podman does not use it. Always use the `podman login` command above instead.
+
+```bash
+# 1. Cross-compile the geac binary for Linux/AMD64 on your Mac
+cargo zigbuild --release --target x86_64-unknown-linux-gnu
+
+# 2. Build the Docker image (no --platform flag needed — binary is already AMD64)
+podman build -t gcr.io/my-gcp-project/geac:$(cat VERSION) -f docker/Dockerfile.prebuilt .
+
+# 3. Push
+podman push gcr.io/my-gcp-project/geac:$(cat VERSION)
+```
+
+### Building on Linux / CI
 
 ```bash
 # Authenticate Podman to GCR (once per session)
 gcloud auth print-access-token | podman login -u oauth2accesstoken --password-stdin gcr.io
 
-# Build locally (tagged with VERSION and latest)
-bash scripts/build_docker.sh my-gcp-project
-
-# Build and push in one step
+# Build and push
 bash scripts/build_docker.sh my-gcp-project --push
 ```
 
-The version is read from the `VERSION` file in the repo root. Images are tagged as:
-- `gcr.io/my-gcp-project/geac:0.1.0`
-- `gcr.io/my-gcp-project/geac:latest`
+### Authenticating Podman to GCR
 
-When releasing a new version, update `VERSION`, rebuild, and push. Commit the `VERSION`
-change so the git history and image tags stay in sync.
+`gcloud auth configure-docker` only configures the Docker credential helper — Podman
+does not read it. Authenticate Podman directly each session:
+
+```bash
+gcloud auth print-access-token | podman login -u oauth2accesstoken --password-stdin gcr.io
+```
 
 ### Updating the version
 
 ```bash
-echo "0.2.0" > VERSION
+echo "0.3.0" > VERSION
 # also update version = "..." in Cargo.toml
-bash scripts/build_docker.sh my-gcp-project --push
-git add VERSION Cargo.toml && git commit -m "Bump version to 0.2.0"
+# rebuild and push using the Apple Silicon steps above
+git add VERSION Cargo.toml && git commit -m "Bump version to 0.3.0"
 ```
 
 ## WDL / Terra

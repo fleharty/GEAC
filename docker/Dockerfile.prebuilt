@@ -1,0 +1,22 @@
+# Runtime image for a pre-compiled geac binary.
+# Use this when cross-compiling on Apple Silicon with `cross`:
+#
+#   CROSS_CONTAINER_ENGINE=podman cross build --release --target x86_64-unknown-linux-gnu
+#   podman build -t gcr.io/<project>/geac:<tag> -f docker/Dockerfile.prebuilt .
+
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    libbz2-1.0 \
+    liblzma5 \
+    libcurl4 \
+    zlib1g \
+    libssl3 \
+    libdeflate0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY target/x86_64-unknown-linux-gnu/release/geac /usr/local/bin/geac
+
+ENTRYPOINT ["geac"]

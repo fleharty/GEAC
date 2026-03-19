@@ -1,0 +1,5 @@
+[target.x86_64-unknown-linux-gnu]
+pre-build = [
+    "apt-get update -qq",
+    "apt-get install -y --no-install-recommends libbz2-dev liblzma-dev libcurl4-openssl-dev zlib1g-dev libssl-dev libdeflate-dev pkg-config cmake"
+]

@@ -1,4 +1,5 @@
 target/
+!target/x86_64-unknown-linux-gnu/release/geac
 .git/
 app/
 scripts/
@@ -6,5 +7,4 @@ wdl/
 docker/
 *.md
 *.yml
-*.lock
 .dockerignore
