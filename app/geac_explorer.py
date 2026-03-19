@@ -65,7 +65,7 @@ pct_called  = f"{100 * n_called / n_annotated:.1f}%" if n_annotated > 0 else "N/
 
 # ── Filters (sidebar) ─────────────────────────────────────────────────────────
 _FILTER_KEYS = [
-    "chrom_sel", "sample_sel", "gene_text", "variant_sel", "vaf_range",
+    "chrom_sel", "sample_sel", "batch_sel", "gene_text", "variant_sel", "vaf_range",
     "min_alt", "min_fwd_alt", "min_rev_alt",
     "min_overlap_agree", "min_overlap_disagree",
     "variant_called_sel", "on_target_sel",
@@ -77,6 +77,7 @@ _hdr_col.header("Filters")
 if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["chrom_sel"]          = "All"
     st.session_state["sample_sel"]         = []
+    st.session_state["batch_sel"]          = []
     st.session_state["gene_text"]          = ""
     st.session_state["variant_sel"]        = ["SNV", "insertion", "deletion", "MNV"]
     st.session_state["vaf_range"]          = (0.0, 1.0)
@@ -109,6 +110,14 @@ def _has_data(col: str) -> bool:
     if col not in _schema_cols:
         return False
     return con.execute(f"SELECT COUNT(*) FROM {table_expr} WHERE {col} IS NOT NULL").fetchone()[0] > 0
+
+if _has_data("batch"):
+    _batches = con.execute(f"SELECT DISTINCT batch FROM {table_expr} WHERE batch IS NOT NULL ORDER BY batch").df()["batch"].tolist()
+    if "batch_sel" not in st.session_state:
+        st.session_state["batch_sel"] = []
+    batch_sel = st.sidebar.multiselect("Batch (blank = all)", _batches, key="batch_sel")
+else:
+    batch_sel = []
 
 _genes_available = _has_data("gene")
 if _genes_available:
@@ -358,6 +367,9 @@ if chrom_sel != "All":
 if sample_sel:
     s_list = ", ".join(f"'{s}'" for s in sample_sel)
     conditions.append(f"sample_id IN ({s_list})")
+if batch_sel:
+    b_list = ", ".join(f"'{b}'" for b in batch_sel)
+    conditions.append(f"batch IN ({b_list})")
 if variant_sel:
     t_list = ", ".join(f"'{t}'" for t in variant_sel)
     conditions.append(f"variant_type IN ({t_list})")
@@ -1178,6 +1190,7 @@ with tab_cohort:
         _cohort_stats = con.execute(f"""
             SELECT
                 sample_id,
+                {'ANY_VALUE(batch) AS batch,' if _has_data('batch') else ''}
                 COUNT(*) FILTER (WHERE variant_type = 'SNV')       AS n_snv,
                 COUNT(*) FILTER (WHERE variant_type = 'insertion')  AS n_insertion,
                 COUNT(*) FILTER (WHERE variant_type = 'deletion')   AS n_deletion,
