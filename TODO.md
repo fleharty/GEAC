@@ -123,8 +123,10 @@ geac coverage \
   [--pipeline      fgbio|dragen|raw]
   [--min-map-qual  20]
   [--min-base-qual 20]                           # threshold for frac_low_bq; default 20
+  [--gc-window     100]                          # bp window for GC content (centred on position)
   [--min-depth     0]                            # suppress positions with total_depth below this
   [--bin-size      1]                            # aggregate N bp into one row (1 = per-position)
+  [--summarize-intervals]                        # emit one row per target interval instead of per position
   [--threads       1]
 ```
 
@@ -191,6 +193,45 @@ min_base_qual:    u8           # lowest base quality observed (Phred 0–93)
 max_base_qual:    u8           # highest base quality observed
 frac_low_bq:      f32          # fraction of bases below --min-base-qual (default 20)
 
+# ── Soft-clipping signal ──────────────────────────────────────────────────────
+# Computed over non-duplicate reads passing --min-map-qual.
+# Heavy soft-clipping at a position indicates reads that partially align — a sign
+# of structural variation, probe edge effects, or adapter contamination.
+# frac_soft_clipped is the fraction of reads where the query position falls within
+# a soft-clipped region of the CIGAR (i.e. the base is present in the read but
+# not contributing to the alignment at this reference position).
+
+frac_soft_clipped: f32        # fraction of reads soft-clipped at this position
+
+# ── Insert size distribution ──────────────────────────────────────────────────
+# Computed from properly paired, non-duplicate reads passing --min-map-qual.
+# Insert size = TLEN (template length) from the BAM record; only meaningful for
+# paired-end reads where both mates are mapped (FLAG: properly paired, 0x2).
+# Short inserts relative to read length explain high frac_overlap and reduced
+# effective depth. High variance indicates a heterogeneous library.
+# Unpaired or single-end reads contribute 0 usable insert size observations;
+# n_insert_size_obs records how many paired reads contributed to these stats.
+
+mean_insert_size:     f32     # mean insert size across paired reads at this position
+median_insert_size:   f32     # median insert size (requires buffering; see note below)
+min_insert_size:      i32     # smallest insert size observed
+max_insert_size:      i32     # largest insert size observed
+n_insert_size_obs:    i32     # number of properly paired reads contributing
+
+# Note on median_insert_size: computing a true median requires storing all insert
+# sizes seen at each position, which is memory-intensive for deep coverage. Use
+# reservoir sampling (e.g. keep up to 1000 values) or an approximate algorithm
+# (e.g. t-digest) to keep memory bounded. The median is more robust to outliers
+# (e.g. chimeric read pairs) than the mean.
+
+# ── GC content ────────────────────────────────────────────────────────────────
+# Computed directly from the reference FASTA (already required as --reference).
+# No external track needed. Window size is configurable via --gc-window (default:
+# 100 bp centred on the position). GC content is the primary explainer of
+# amplification/capture dropout that is independent of mappability.
+
+gc_content:       f32         # fraction of G+C bases in --gc-window around this position
+
 # ── Pre-computed annotation tracks ───────────────────────────────────────────
 # One column per --track NAME:file entry. Column name = NAME, type = Float32, nullable.
 # Example: --track gem150:gem_150mer.bedgraph  →  column "gem150"
@@ -237,6 +278,61 @@ This means `total_depth` is directly comparable to the `total_depth` in `alt_bas
 | High | High | Low | Unexpected low MAPQ — SV, misassembly, or aligner artifact |
 | Low | Low | Low | Genuine dropout (GC bias, FFPE, probe failure) |
 | Low | Low | Normal | Mappability track k-mer length may not match read length |
+
+### Per-interval summary mode (`--summarize-intervals`)
+
+When `--summarize-intervals` is given alongside `--targets`, `geac coverage` emits one row
+per target interval instead of one row per position. This is the natural output format for
+the customer-facing Coverage Explorer — customers want to know "exon 3 of BRCA1: mean depth
+45x, 94% at ≥30x", not a table of 200 individual positions.
+
+The per-interval schema adds aggregated columns and drops the position-level ones:
+
+```
+sample_id:           String
+chrom:               String
+start:               i64          # 0-based interval start (from targets file)
+end:                 i64          # 0-based interval end
+interval_name:       Option<String>  # name field from BED col 4 / Picard interval name
+gene:                Option<String>
+feature_type:        Option<String>
+exon_number:         Option<i32>
+
+# Depth summary across all positions in the interval
+mean_depth:          f32
+median_depth:        f32
+min_depth:           i32
+max_depth:           i32
+frac_at_1x:          f32          # fraction of bases with total_depth >= 1
+frac_at_10x:         f32
+frac_at_20x:         f32
+frac_at_30x:         f32
+frac_at_50x:         f32
+frac_at_100x:        f32
+n_bases:             i32          # total number of positions in the interval
+
+# Aggregated signals (means across positions in the interval)
+mean_gc_content:     f32
+mean_mapq:           f32
+mean_frac_mapq0:     f32
+mean_frac_dup:       f32
+mean_frac_overlap:   f32
+mean_frac_soft_clipped: f32
+mean_base_qual:      f32
+mean_insert_size:    f32
+
+read_type:           ReadType
+pipeline:            Pipeline
+```
+
+The depth threshold columns (`frac_at_Nx`) use fixed thresholds rather than a configurable
+value so that interval summaries from different runs are directly comparable. The customer
+explorer can then filter by whichever threshold is meaningful for that panel.
+
+Per-interval and per-position outputs are written to separate Parquet files:
+`{sample}.coverage.parquet` (per-position) and `{sample}.coverage.intervals.parquet`
+(per-interval). `geac merge` inserts both into the DuckDB as `coverage` and
+`coverage_intervals` tables respectively.
 
 ### Pre-computed annotation tracks (`--track`)
 
@@ -305,28 +401,48 @@ WHERE c.frac_mapq0 > 0.3;
   the annotation lookup result; update GTF/GFF3 parser to extract the `exon_number` attribute
 - [ ] Step 2: Add `src/track.rs` — `AnnotationTrack` struct; BEDGraph loader; binary-search
   lookup; streaming loader for WGS; `TrackSet` holding multiple named tracks
-- [ ] Step 3: Add `CoverageArgs` to `src/cli.rs` with `--track` as a repeatable
-  `Vec<String>` parsed as `NAME:path` pairs; add `Command::Coverage` variant
+- [ ] Step 3: Add `CoverageArgs` to `src/cli.rs` with `--track`, `--gc-window`,
+  `--min-base-qual`, `--summarize-intervals` flags; add `Command::Coverage` variant
 - [ ] Step 4: Add `src/coverage/mod.rs` — pileup loop that records every position in
   `--targets` / `--region` (including zero-depth); three-layer read counting
-  (raw → de-dup → de-overlap → total_depth); compute all BAM-derived signals
-- [ ] Step 5: Add `src/writer/parquet_coverage.rs` — dynamic Arrow schema built from
-  fixed columns + one Float32 column per named track; write to Parquet
-- [ ] Step 6: Update `src/main.rs` to handle `Command::Coverage`
-- [ ] Step 7: Update `src/merge.rs` — detect coverage Parquets by schema and insert into
-  `coverage` table; handle `union_by_name` for variable track columns across samples
-- [ ] Step 8: Add `wdl/geac_coverage.wdl` task and scatter/gather workflow
-- [ ] Step 9: Integration tests — synthetic BAM with known duplicates (BAM_FDUP reads),
-  MAPQ=0 reads, and overlapping pairs; assert `frac_dup`, `frac_mapq0`, `frac_overlap`,
-  and `total_depth` correctness
-- [ ] Step 10: Explorer — "Coverage" tab (DuckDB mode only):
-  - Systematically undercovered positions table with configurable depth threshold and
-    minimum fraction-of-samples; columns include gene, exon_number, mean_mappability
-  - Scatter plot: `mean_mapq` vs `mean_depth` per position; color by track score if
-    available; low-mappability sites cluster visibly in lower-left
-  - Per-sample depth distribution histogram; `frac_dup` and `frac_overlap` summary bars
-  - Per-exon coverage heatmap when gene annotations are present (genes as rows,
-    exons as columns, color = mean depth)
+  (raw → de-dup → de-overlap → total_depth); compute all BAM-derived signals including
+  soft-clipping fraction, insert size stats (reservoir sampling for median), base quality
+  stats, and GC content from the reference cache (already used in collect)
+- [ ] Step 5: Add per-interval aggregation pass in `src/coverage/mod.rs` — after the
+  per-position pass, group positions by target interval and compute the interval summary
+  schema; emit as a separate `Vec<IntervalRecord>`
+- [ ] Step 6: Add `src/writer/parquet_coverage.rs` — dynamic Arrow schema for per-position
+  output (fixed columns + named track columns); static schema for per-interval output
+- [ ] Step 7: Update `src/main.rs` to handle `Command::Coverage`; write both output files
+  when `--summarize-intervals` is given
+- [ ] Step 8: Update `src/merge.rs` — detect coverage Parquets and interval Parquets by
+  schema; insert into `coverage` and `coverage_intervals` DuckDB tables respectively;
+  handle `union_by_name` for variable track columns
+- [ ] Step 9: Add `wdl/geac_coverage.wdl` task and scatter/gather workflow; propagate
+  both per-position and interval Parquet outputs through to merge
+- [ ] Step 10: Integration tests — synthetic BAM with known duplicates (BAM_FDUP),
+  MAPQ=0 reads, soft-clipped reads, paired reads with known TLEN, and a reference with
+  known GC content; assert all signals compute correctly; assert interval summary
+  `frac_at_30x` against expected value
+- [ ] Step 11: Explorer — "Coverage" tab (DuckDB mode only):
+  - Systematically undercovered intervals table (from `coverage_intervals`): configurable
+    depth threshold and fraction-of-samples; columns include gene, exon_number, mean_gc,
+    mean_mappability; explains whether dropout is GC, mappability, or other
+  - Scatter plot: `mean_gc_content` vs `mean_depth` per interval — GC bias visible as
+    a U-shaped curve; color by `mean_frac_mapq0` to overlay mappability
+  - Per-sample depth distribution histogram; `frac_dup`, `frac_overlap`, `frac_soft_clipped`
+    summary bars for QC overview
+  - Per-exon coverage heatmap (genes as rows, exons as columns, color = mean depth or
+    frac_at_30x) — the primary customer-facing view
+
+## Customer-facing Coverage Explorer
+
+- [ ] Design `app/geac_coverage_explorer.py` — separate pre-loaded Streamlit app for
+  public panel QC dashboards; config-file-per-panel specifying DuckDB path, panel name,
+  depth thresholds, and which signals to display; no file upload, no authentication
+- [ ] Document panel config schema (`config/panel_example.toml`)
+- [ ] Design longitudinal tracking — `run_id` / `run_date` provenance in coverage schema
+  to support tracking coverage stability across instrument runs and reagent lots
 
 ## WDL / Terra
 
