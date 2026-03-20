@@ -252,7 +252,7 @@ def launch_igv_session(session_xml: str, bed: str) -> str:
     # Try REST API first
     url = f"http://localhost:60151/load?file={urllib.request.pathname2url(session_path)}&merge=false"
     try:
-        urllib.request.urlopen(url, timeout=2)
+        urllib.request.urlopen(url, timeout=8)
         return f"Session loaded into running IGV instance."
     except (urllib.error.URLError, TimeoutError, OSError):
         pass
