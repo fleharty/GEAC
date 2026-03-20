@@ -1034,6 +1034,8 @@ with tab3:
     _use_log1p = _sb_scale == "log1p"
 
     _color_options = ["Variant type", "Sample"]
+    if _has_data("batch"):
+        _color_options.append("Batch")
     if _has_data("on_target"):
         _color_options.append("On target")
     if _has_data("variant_called"):
@@ -1133,6 +1135,7 @@ with tab3:
     _color_field, _color_title, _color_scale = {
         "Variant type":   ("variant_type:N",  "Variant type",   alt.Scale()),
         "Sample":         ("sample_id:N",      "Sample",         alt.Scale()),
+        "Batch":          ("batch:N",          "Batch",          alt.Scale()),
         "On target":      ("on_target:N",      "On target",
                            alt.Scale(domain=[True, False], range=["#2ca02c", "#d62728"])),
         "Called variant": ("variant_called:N", "Called variant",
