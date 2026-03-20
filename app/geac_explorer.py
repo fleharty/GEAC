@@ -226,7 +226,7 @@ def make_bed(df: pd.DataFrame) -> str:
         .sort_values(["chrom", "pos"])
     )
     lines = [
-        f"{row.chrom}\t{int(row.pos)}\t{int(row.bed_end)}"
+        f"{row.chrom}\t{int(row.pos) + 1}\t{int(row.bed_end) + 1}"
         for row in positions.itertuples(index=False)
     ]
     return "\n".join(lines) + "\n"
