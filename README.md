@@ -95,6 +95,15 @@ When `--vcf` is provided, each alt allele record is annotated with:
 SNVs are matched exactly by chrom/pos/alt allele. Indels are matched by position only,
 since VCF left-aligned representation differs from GEAC's `+seq`/`-seq` notation.
 
+#### Multi-nucleotide variants (MNVs)
+
+GEAC processes one reference position at a time (standard pileup model). MNVs — adjacent
+substitutions on the same haplotype, e.g. `AG→TC` — are therefore split into individual
+SNV records, one per position. There is no way to distinguish a true MNV from two
+independent SNVs at neighbouring positions using only the locus table. Identifying MNVs
+requires read-level phasing: checking whether both substitutions appear on the same read.
+This is not currently implemented; it would require the per-read detail table (see TODO).
+
 #### Soft-clipped bases
 
 Soft-clipped bases are **not** counted. `rust-htslib` pileup only yields bases that are

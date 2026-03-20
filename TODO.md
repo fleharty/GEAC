@@ -14,6 +14,7 @@
 - [x] Audit `alt_count` double-counting — resolved: `total_depth`, `alt_count`, and `ref_count` are now fragment-level counts. Each overlapping pair contributes 1 to `total_depth` regardless of how many reads cover the position. See `tally_pileup` doc comment for full classification rules.
 - [x] Fix N-base handling in overlap tally — in `tally_pileup` (`src/bam/mod.rs`), if one read of an overlapping pair has an `N` at the position, `overlap_alt_disagree` is incorrectly incremented for the other read's alt base. An `N` is uninformative and should not count as a disagreement. Fix: skip the overlap agreement/disagreement logic when either base is `N`, and exclude `N` bases from `total_depth` and alt tallies entirely.
 - [x] **Re-examine N-base handling before v0.3.0** — resolved as part of the fragment-level depth overhaul. See `tally_pileup` doc comment for the full classification table including N cases.
+- [ ] MNV detection — adjacent substitutions on the same haplotype (e.g. `AG→TC`) are currently split into individual SNV records, one per position. Distinguishing true MNVs from independent SNVs at neighbouring positions requires read-level phasing: checking whether both substitutions co-occur on the same read. This is not possible from the locus table alone and would require the per-read detail table (see below). Prerequisite: implement `geac collect --reads-output`.
 ## Per-read detail table (two-table design)
 
 **Motivation:** Read-end proximity and family size are inherently per-read properties.
