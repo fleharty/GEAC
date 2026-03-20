@@ -85,7 +85,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
             fwd_depth,
             rev_depth,
             overlap_depth,
-        } = tally_pileup(&pileup, args.min_base_qual, args.min_map_qual);
+        } = tally_pileup(&pileup, args.min_base_qual, args.min_map_qual, ref_base);
 
         progress.positions_processed.fetch_add(1, Ordering::Relaxed);
         progress.reads_processed.fetch_add(total_depth as u64, Ordering::Relaxed);
@@ -252,14 +252,34 @@ struct BaseTally {
 ///
 /// Overlap is detected by grouping reads by query name. A query name appearing
 /// twice at the same position means both reads of the fragment cover that position.
+///
+/// Depth is counted at the **fragment level** — each overlapping pair contributes 1 to
+/// `total_depth`. Strand attribution for overlapping pairs uses the R1 read's orientation
+/// (BAM flag 0x40). Non-overlapping singleton N bases are excluded from all tallies.
+///
+/// Overlapping pair classification rules:
+///
+/// | Pair (read 1 + read 2)          | total_depth | base tally      | agree / disagree  | overlap_depth |
+/// |---------------------------------|-------------|-----------------|-------------------|---------------|
+/// | same base + same base (non-N)   | +1          | that base +1    | agree +1          | +1            |
+/// | alt + ref                       | +1          | alt +1          | disagree +1       | +1            |
+/// | alt₁ + alt₂ (different alts)    | +1          | both +1         | disagree +1 each  | +1            |
+/// | alt + N                         | +1          | alt +1          | —                 | +1            |
+/// | ref + N                         | +1          | ref +1          | —                 | +1            |
+/// | N + N                           | +1          | —               | —                 | +1            |
+///
+/// For `alt + ref` pairs, `overlap_alt_disagree` is still incremented even though the
+/// fragment is classified as alt — the disagreement is a useful quality signal.
 fn tally_pileup(
     pileup: &rust_htslib::bam::pileup::Pileup,
     min_base_qual: u8,
     min_map_qual: u8,
+    ref_base: char,
 ) -> PileupResult {
-    // First pass: collect (base, is_reverse) per query name.
+    // First pass: collect (base, is_reverse, is_first_in_pair) per query name.
     // Query names are stored as Vec<u8> to avoid UTF-8 allocation overhead.
-    let mut by_qname: HashMap<Vec<u8>, Vec<(char, bool)>> = HashMap::new();
+    // is_first_in_pair is BAM flag 0x40 — used to attribute strand to the fragment.
+    let mut by_qname: HashMap<Vec<u8>, Vec<(char, bool, bool)>> = HashMap::new();
 
     for alignment in pileup.alignments() {
         if alignment.is_del() || alignment.is_refskip() {
@@ -284,11 +304,12 @@ fn tally_pileup(
 
         let base = record.seq()[qpos].to_ascii_uppercase() as char;
         let is_reverse = record.is_reverse();
+        let is_first_in_pair = record.flags() & 0x40 != 0;
 
         by_qname
             .entry(record.qname().to_vec())
             .or_default()
-            .push((base, is_reverse));
+            .push((base, is_reverse, is_first_in_pair));
     }
 
     // Second pass: tally with overlap detection.
@@ -300,7 +321,7 @@ fn tally_pileup(
 
     for reads in by_qname.values() {
         match reads.as_slice() {
-            [(base, is_rev)] => {
+            [(base, is_rev, _)] => {
                 // Non-overlapping read; skip uninformative N bases entirely.
                 if *base == 'N' {
                     continue;
@@ -312,37 +333,66 @@ fn tally_pileup(
                 t.total += 1;
                 if *is_rev { t.rev += 1; } else { t.fwd += 1; }
             }
-            [(base1, is_rev1), (base2, is_rev2)] => {
-                // Overlapping fragment: both reads cover this position.
-                // Count each read independently, skipping N bases.
-                // Skip overlap agreement/disagreement when either base is N.
+            [(base1, is_rev1, is_first1), (base2, is_rev2, _is_first2)] => {
+                // Overlapping fragment: fragment-level depth — always counts as 1.
                 overlap_depth += 1;
+                total_depth += 1;
 
-                for (base, is_rev) in [(*base1, *is_rev1), (*base2, *is_rev2)] {
-                    if base == 'N' {
-                        continue;
-                    }
-                    total_depth += 1;
-                    if is_rev { rev_depth += 1; } else { fwd_depth += 1; }
-                    let t = bases.entry(base).or_default();
+                // Strand is attributed using R1's orientation (BAM flag 0x40).
+                let r1_is_rev = if *is_first1 { *is_rev1 } else { *is_rev2 };
+                if r1_is_rev { rev_depth += 1; } else { fwd_depth += 1; }
+
+                let b1 = *base1;
+                let b2 = *base2;
+
+                if b1 == 'N' && b2 == 'N' {
+                    // N + N: fragment counted in depth but no base tally.
+                } else if b1 == 'N' {
+                    // N + informative: tally the informative base.
+                    let t = bases.entry(b2).or_default();
                     t.total += 1;
-                    if is_rev { t.rev += 1; } else { t.fwd += 1; }
-                }
+                    if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
+                } else if b2 == 'N' {
+                    // informative + N: tally the informative base.
+                    let t = bases.entry(b1).or_default();
+                    t.total += 1;
+                    if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
+                } else if b1 == b2 {
+                    // Both reads agree on the same base.
+                    let t = bases.entry(b1).or_default();
+                    t.total += 1;
+                    if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
+                    t.overlap_alt_agree += 1;
+                } else if b1 == ref_base {
+                    // b2 is alt, b1 is ref — alt wins; classify as alt.
+                    let t = bases.entry(b2).or_default();
+                    t.total += 1;
+                    if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
+                    t.overlap_alt_disagree += 1;
+                } else if b2 == ref_base {
+                    // b1 is alt, b2 is ref — alt wins; classify as alt.
+                    let t = bases.entry(b1).or_default();
+                    t.total += 1;
+                    if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
+                    t.overlap_alt_disagree += 1;
+                } else {
+                    // alt₁ + alt₂ — two different non-ref bases; tally both.
+                    // Note: sum of base counts will exceed total_depth for this fragment.
+                    let t1 = bases.entry(b1).or_default();
+                    t1.total += 1;
+                    if r1_is_rev { t1.rev += 1; } else { t1.fwd += 1; }
+                    t1.overlap_alt_disagree += 1;
 
-                // Only tally overlap agreement/disagreement when both bases are informative.
-                if *base1 != 'N' && *base2 != 'N' {
-                    if base1 == base2 {
-                        bases.entry(*base1).or_default().overlap_alt_agree += 1;
-                    } else {
-                        bases.entry(*base1).or_default().overlap_alt_disagree += 1;
-                        bases.entry(*base2).or_default().overlap_alt_disagree += 1;
-                    }
+                    let t2 = bases.entry(b2).or_default();
+                    t2.total += 1;
+                    if r1_is_rev { t2.rev += 1; } else { t2.fwd += 1; }
+                    t2.overlap_alt_disagree += 1;
                 }
             }
             _ => {
                 // More than 2 reads with the same query name: shouldn't happen in
                 // practice but handle gracefully by treating as non-overlapping.
-                for &(base, is_rev) in reads {
+                for &(base, is_rev, _) in reads {
                     if base == 'N' {
                         continue;
                     }
@@ -392,8 +442,8 @@ fn tally_indels(
     chrom_seq: &[u8],
     min_map_qual: u8,
 ) -> HashMap<String, IndelCount> {
-    // First pass: collect (indel_allele_or_none, is_reverse) per query name.
-    let mut by_qname: HashMap<Vec<u8>, Vec<(IndelAllele, bool)>> = HashMap::new();
+    // First pass: collect (indel_allele_or_none, is_reverse, is_first_in_pair) per query name.
+    let mut by_qname: HashMap<Vec<u8>, Vec<(IndelAllele, bool, bool)>> = HashMap::new();
 
     for alignment in pileup.alignments() {
         if alignment.is_refskip() {
@@ -405,18 +455,19 @@ fn tally_indels(
         }
 
         let is_reverse = record.is_reverse();
+        let is_first_in_pair = record.flags() & 0x40 != 0;
         let qname = record.qname().to_vec();
 
         let allele: IndelAllele = match alignment.indel() {
             Indel::Ins(len) => {
                 let Some(qpos) = alignment.qpos() else {
-                    by_qname.entry(qname).or_default().push((None, is_reverse));
+                    by_qname.entry(qname).or_default().push((None, is_reverse, is_first_in_pair));
                     continue;
                 };
                 let seq = record.seq();
                 let len = len as usize;
                 if qpos + len >= seq.len() {
-                    by_qname.entry(qname).or_default().push((None, is_reverse));
+                    by_qname.entry(qname).or_default().push((None, is_reverse, is_first_in_pair));
                     continue;
                 }
                 let inserted: String = (1..=len)
@@ -439,7 +490,7 @@ fn tally_indels(
                     .map(|&b| b as char)
                     .collect();
                 if deleted.len() != len as usize {
-                    by_qname.entry(qname).or_default().push((None, is_reverse));
+                    by_qname.entry(qname).or_default().push((None, is_reverse, is_first_in_pair));
                     continue;
                 }
                 Some((format!("-{deleted}"), deleted.clone(), VariantType::Deletion))
@@ -448,7 +499,7 @@ fn tally_indels(
             Indel::None => None,
         };
 
-        by_qname.entry(qname).or_default().push((allele, is_reverse));
+        by_qname.entry(qname).or_default().push((allele, is_reverse, is_first_in_pair));
     }
 
     // Second pass: tally with overlap detection.
@@ -456,7 +507,7 @@ fn tally_indels(
 
     for reads in by_qname.values() {
         match reads.as_slice() {
-            [(allele, is_rev)] => {
+            [(allele, is_rev, _)] => {
                 // Non-overlapping read
                 if let Some((alt, ref_a, vt)) = allele {
                     let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
@@ -469,46 +520,64 @@ fn tally_indels(
                 }
             }
 
-            [(allele1, is_rev1), (allele2, is_rev2)] => {
-                // Overlapping fragment — count both reads
-                for (allele, is_rev) in [(allele1, is_rev1), (allele2, is_rev2)] {
-                    if let Some((alt, ref_a, vt)) = allele {
+            [(allele1, is_rev1, is_first1), (allele2, is_rev2, _is_first2)] => {
+                // Overlapping fragment — fragment-level counting.
+                // Strand is attributed using R1's orientation (BAM flag 0x40).
+                let r1_is_rev = if *is_first1 { *is_rev1 } else { *is_rev2 };
+
+                match (allele1, allele2) {
+                    (None, None) => {
+                        // Neither read has an indel — nothing to tally.
+                    }
+                    (Some((alt, ref_a, vt)), None) | (None, Some((alt, ref_a, vt))) => {
+                        // Indel + no indel: alt wins; classify as indel with disagree.
                         let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
                             ref_allele: ref_a.clone(), alt_allele: alt.clone(),
                             variant_type: *vt, total: 0, fwd: 0, rev: 0,
                             overlap_alt_agree: 0, overlap_alt_disagree: 0,
                         });
                         e.total += 1;
-                        if *is_rev { e.rev += 1; } else { e.fwd += 1; }
+                        if r1_is_rev { e.rev += 1; } else { e.fwd += 1; }
+                        e.overlap_alt_disagree += 1;
                     }
-                }
-
-                // Determine agreement
-                let key1 = allele1.as_ref().map(|(a, _, _)| a.as_str());
-                let key2 = allele2.as_ref().map(|(a, _, _)| a.as_str());
-                match (key1, key2) {
-                    (Some(a1), Some(a2)) if a1 == a2 => {
-                        if let Some(e) = indels.get_mut(a1) {
+                    (Some((alt1, ref_a1, vt1)), Some((alt2, ref_a2, vt2))) => {
+                        if alt1 == alt2 {
+                            // Same indel: count once with agree.
+                            let e = indels.entry(alt1.clone()).or_insert_with(|| IndelCount {
+                                ref_allele: ref_a1.clone(), alt_allele: alt1.clone(),
+                                variant_type: *vt1, total: 0, fwd: 0, rev: 0,
+                                overlap_alt_agree: 0, overlap_alt_disagree: 0,
+                            });
+                            e.total += 1;
+                            if r1_is_rev { e.rev += 1; } else { e.fwd += 1; }
                             e.overlap_alt_agree += 1;
+                        } else {
+                            // Different indels: tally both with disagree (edge case).
+                            let e1 = indels.entry(alt1.clone()).or_insert_with(|| IndelCount {
+                                ref_allele: ref_a1.clone(), alt_allele: alt1.clone(),
+                                variant_type: *vt1, total: 0, fwd: 0, rev: 0,
+                                overlap_alt_agree: 0, overlap_alt_disagree: 0,
+                            });
+                            e1.total += 1;
+                            if r1_is_rev { e1.rev += 1; } else { e1.fwd += 1; }
+                            e1.overlap_alt_disagree += 1;
+
+                            let e2 = indels.entry(alt2.clone()).or_insert_with(|| IndelCount {
+                                ref_allele: ref_a2.clone(), alt_allele: alt2.clone(),
+                                variant_type: *vt2, total: 0, fwd: 0, rev: 0,
+                                overlap_alt_agree: 0, overlap_alt_disagree: 0,
+                            });
+                            e2.total += 1;
+                            if r1_is_rev { e2.rev += 1; } else { e2.fwd += 1; }
+                            e2.overlap_alt_disagree += 1;
                         }
                     }
-                    (Some(a1), Some(a2)) => {
-                        if let Some(e) = indels.get_mut(a1) { e.overlap_alt_disagree += 1; }
-                        if let Some(e) = indels.get_mut(a2) { e.overlap_alt_disagree += 1; }
-                    }
-                    (Some(a1), None) => {
-                        if let Some(e) = indels.get_mut(a1) { e.overlap_alt_disagree += 1; }
-                    }
-                    (None, Some(a2)) => {
-                        if let Some(e) = indels.get_mut(a2) { e.overlap_alt_disagree += 1; }
-                    }
-                    (None, None) => {}
                 }
             }
 
             _ => {
-                // More than 2 reads with same name — treat as non-overlapping
-                for (allele, is_rev) in reads {
+                // More than 2 reads with same name — treat as non-overlapping.
+                for (allele, is_rev, _) in reads {
                     if let Some((alt, ref_a, vt)) = allele {
                         let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
                             ref_allele: ref_a.clone(), alt_allele: alt.clone(),

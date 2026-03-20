@@ -103,11 +103,26 @@ aligned to the reference at each position; soft clips are excluded by design.
 #### Overlap detection
 
 For paired-end reads where the two mates overlap the same locus, GEAC detects the overlap
-by grouping pileup reads at a position by query name. If both mates are present at the
-same locus, the pair is counted in `overlap_depth`. If both agree on the alt allele,
-`overlap_alt_agree` is incremented; if they disagree, `overlap_alt_disagree` is incremented.
-This is an integer count (not boolean) because multiple overlapping pairs can cover the same
-locus in a deep pileup.
+by grouping pileup reads at a position by query name. Depth is counted at the **fragment
+level** — each overlapping pair contributes 1 to `total_depth` regardless of how many
+reads cover the position. Strand (`fwd_depth` / `rev_depth`) is attributed using the R1
+read's orientation (BAM flag `0x40`).
+
+The following rules govern how each overlapping pair is tallied:
+
+| Pair (read 1 + read 2) | `total_depth` | base tally | `overlap_alt_agree` / `overlap_alt_disagree` | `overlap_depth` |
+|---|---|---|---|---|
+| same base + same base (non-N) | +1 | that base +1 | agree +1 | +1 |
+| alt + ref | +1 | alt +1 | disagree +1 | +1 |
+| alt₁ + alt₂ (two different alts) | +1 | both +1 | disagree +1 each | +1 |
+| alt + N | +1 | alt +1 | — | +1 |
+| ref + N | +1 | ref +1 | — | +1 |
+| N + N | +1 | — | — | +1 |
+
+For non-overlapping singleton reads, N bases are excluded from all tallies entirely.
+`overlap_alt_disagree` for `alt + ref` pairs records that the two mates disagreed, even
+though the fragment is classified as alt — this is intentional, as the disagreement is
+itself a useful quality signal.
 
 ### Merge — combine samples into a cohort DuckDB
 
@@ -214,18 +229,18 @@ Each Parquet file contains one row per alt allele observed at a locus.
 | `ref_allele` | string | Reference allele |
 | `alt_allele` | string | Alt allele (e.g. `T`, `+ACG`, `-2`) |
 | `variant_type` | string | `SNV` / `insertion` / `deletion` / `MNV` |
-| `total_depth` | int32 | Total read depth at position |
-| `alt_count` | int32 | Reads supporting the alt allele |
-| `ref_count` | int32 | Reads supporting the reference allele |
-| `fwd_depth` | int32 | Forward strand depth |
-| `rev_depth` | int32 | Reverse strand depth |
-| `fwd_alt_count` | int32 | Forward strand alt reads |
-| `rev_alt_count` | int32 | Reverse strand alt reads |
-| `fwd_ref_count` | int32 | Forward strand reference reads |
-| `rev_ref_count` | int32 | Reverse strand reference reads |
-| `overlap_depth` | int32 | Number of reads at this locus that have an overlapping mate |
+| `total_depth` | int32 | Fragment depth at position (each overlapping pair counts as 1) |
+| `alt_count` | int32 | Fragments supporting the alt allele |
+| `ref_count` | int32 | Fragments supporting the reference allele |
+| `fwd_depth` | int32 | Forward strand fragment depth (R1 orientation for overlapping pairs) |
+| `rev_depth` | int32 | Reverse strand fragment depth |
+| `fwd_alt_count` | int32 | Forward strand alt fragments |
+| `rev_alt_count` | int32 | Reverse strand alt fragments |
+| `fwd_ref_count` | int32 | Forward strand reference fragments |
+| `rev_ref_count` | int32 | Reverse strand reference fragments |
+| `overlap_depth` | int32 | Number of overlapping fragment pairs at this locus |
 | `overlap_alt_agree` | int32 | Overlapping pairs where both mates support the alt |
-| `overlap_alt_disagree` | int32 | Overlapping pairs where mates disagree on the alt |
+| `overlap_alt_disagree` | int32 | Overlapping pairs where mates disagree (one alt, one ref or different alt) |
 | `overlap_ref_agree` | int32 | Overlapping pairs where both mates support the reference |
 | `read_type` | string | `raw` / `simplex` / `duplex` |
 | `pipeline` | string | `fgbio` / `dragen` / `raw` |
