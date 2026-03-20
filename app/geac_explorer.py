@@ -121,7 +121,7 @@ else:
 
 _genes_available = _has_data("gene")
 if _genes_available:
-    gene_text = st.sidebar.text_input("Gene (partial match, blank = all)", "", key="gene_text")
+    gene_text = st.sidebar.text_input("Gene (exact match, blank = all)", "", key="gene_text")
 else:
     gene_text = ""
     st.sidebar.caption("Gene filter unavailable — run geac collect with --gene-annotations to enable.")
@@ -462,7 +462,7 @@ if "on_target" in _schema_cols:
         conditions.append("on_target = false")
 if gene_text.strip() and "gene" in _schema_cols:
     _gene_escaped = gene_text.strip().replace("'", "''")
-    conditions.append(f"gene ILIKE '%{_gene_escaped}%'")
+    conditions.append(f"gene = '{_gene_escaped}'")
 
 if _repeat_cols_present:
     conditions.append(f"homopolymer_len BETWEEN {homopolymer_range[0]} AND {homopolymer_range[1]}")
