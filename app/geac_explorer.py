@@ -169,7 +169,7 @@ _default_manifest = (
 manifest_path = st.sidebar.text_input(
     "Manifest file (optional)",
     value=_default_manifest,
-    help="Tab-separated file with columns: sample_id, bam_path, bai_path",
+    help="Tab-separated file with columns: collaborator_sample_id, duplex_output_bam, duplex_output_bam_index, final_annotated_variants",
 )
 _genome_options = ["hg19", "hg38", "mm10", "mm39", "other"]
 _cfg_genome = _cfg.get("genome", "hg38")
@@ -183,8 +183,9 @@ def load_manifest(p: str) -> dict:
     mdf = pd.read_csv(p.strip(), sep="\t")
     result = {}
     for row in mdf.itertuples(index=False):
-        bai = str(row.bai_path) if hasattr(row, "bai_path") and pd.notna(row.bai_path) else None
-        result[str(row.sample_id)] = {"bam": str(row.bam_path), "bai": bai}
+        bai = str(row.duplex_output_bam_index) if hasattr(row, "duplex_output_bam_index") and pd.notna(row.duplex_output_bam_index) else None
+        variants = str(row.final_annotated_variants) if hasattr(row, "final_annotated_variants") and pd.notna(row.final_annotated_variants) else None
+        result[str(row.collaborator_sample_id)] = {"bam": str(row.duplex_output_bam), "bai": bai, "variants_tsv": variants}
     return result
 
 manifest = {}
