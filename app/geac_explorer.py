@@ -283,7 +283,7 @@ def launch_igv_session(session_xml: str, bed: str) -> str:
 def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str) -> str:
     sample_ids = df["sample_id"].unique().tolist()
     first = df.sort_values(["chrom", "pos"]).iloc[0]
-    locus = f"{first['chrom']}:{max(0, int(first['pos']) - 100)}-{int(first['pos']) + 100}"
+    locus = f"{first['chrom']}:{max(0, int(first['pos']) - 99)}-{int(first['pos']) + 101}"
 
     resources, tracks = [], []
     for sid in sample_ids:
