@@ -11,6 +11,7 @@
 - [x] Variant annotation — `--vcf` and `--variants-tsv` flags; annotates `variant_called` / `variant_filter` columns
 - [x] Fragment overlap metrics — `overlap_alt_agree`, `overlap_alt_disagree`, `overlap_ref_agree` columns for read-pair concordance
 - [x] Integration tests — generate synthetic BAM data and write end-to-end tests
+- [ ] Audit `alt_count` double-counting — if read 1 and read 2 of a fragment both overlap a locus and both carry the alt allele, `alt_count` may count both reads as independent observations. `overlap_alt_agree` tracks this but it is not yet clear whether `alt_count` and `total_depth` are fragment-collapsed or read-level counts. Verify the pileup logic in `src/bam/mod.rs` and determine whether the desired behavior is fragment-level counting (each insert = 1) or read-level counting (each read = 1), and document the semantics clearly. Compare against how `total_depth` handles the same overlap case.
 ## Per-read detail table (two-table design)
 
 **Motivation:** Read-end proximity and family size are inherently per-read properties.
