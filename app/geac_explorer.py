@@ -1481,7 +1481,7 @@ with tab_cohort:
                         alt.Chart(_hm_full)
                         .mark_rect()
                         .encode(
-                            alt.X("sbs_label:N", sort=_SBS_ORDER, title="Trinucleotide context",
+                            alt.X("sbs_label:N", sort=_SBS_ORDER, title=None,
                                   axis=alt.Axis(labels=False, ticks=False)),
                             alt.Y("sample_id:N", title="Sample"),
                             alt.Color("fraction:Q", title="Fraction of SNVs",
@@ -1493,7 +1493,33 @@ with tab_cohort:
                             title="Normalised SBS96 profile per sample (fraction of SNVs)",
                         )
                     )
-                    st.altair_chart(_hm_chart, use_container_width=True)
+
+                    # Label strip — one label per mutation type at the group midpoint
+                    _hm_label_df = pd.DataFrame([
+                        {"sbs_label": [l for l in _SBS_ORDER if f"[{mt}]" in l][8], "mut_type": mt}
+                        for mt in _SBS_MUT_TYPES
+                    ])
+                    _hm_label_strip = (
+                        alt.Chart(_hm_label_df)
+                        .mark_text(align="center", fontSize=11, fontWeight="bold")
+                        .encode(
+                            alt.X("sbs_label:N", sort=_SBS_ORDER,
+                                  axis=alt.Axis(labels=False, ticks=False, title=None)),
+                            alt.Y(value=15),
+                            alt.Color("mut_type:N", legend=None,
+                                      scale=alt.Scale(
+                                          domain=list(_SBS_COLORS.keys()),
+                                          range=list(_SBS_COLORS.values()),
+                                      )),
+                            alt.Text("mut_type:N"),
+                        )
+                        .properties(height=30)
+                    )
+                    st.altair_chart(
+                        alt.vconcat(_hm_chart, _hm_label_strip, spacing=2)
+                        .resolve_scale(x="shared"),
+                        use_container_width=True,
+                    )
                     st.caption(
                         "Color = fraction of that sample's SNVs falling in each trinucleotide context. "
                         "Contexts ordered by mutation type (C>A, C>G, C>T, T>A, T>C, T>G) then flanking bases."
