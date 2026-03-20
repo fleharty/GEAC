@@ -12,7 +12,8 @@
 - [x] Fragment overlap metrics — `overlap_alt_agree`, `overlap_alt_disagree`, `overlap_ref_agree` columns for read-pair concordance
 - [x] Integration tests — generate synthetic BAM data and write end-to-end tests
 - [ ] Audit `alt_count` double-counting — if read 1 and read 2 of a fragment both overlap a locus and both carry the alt allele, `alt_count` may count both reads as independent observations. `overlap_alt_agree` tracks this but it is not yet clear whether `alt_count` and `total_depth` are fragment-collapsed or read-level counts. Verify the pileup logic in `src/bam/mod.rs` and determine whether the desired behavior is fragment-level counting (each insert = 1) or read-level counting (each read = 1), and document the semantics clearly. Compare against how `total_depth` handles the same overlap case.
-- [ ] Fix N-base handling in overlap tally — in `tally_pileup` (`src/bam/mod.rs`), if one read of an overlapping pair has an `N` at the position, `overlap_alt_disagree` is incorrectly incremented for the other read's alt base. An `N` is uninformative and should not count as a disagreement. Fix: skip the overlap agreement/disagreement logic when either base is `N`, and exclude `N` bases from `total_depth` and alt tallies entirely.
+- [x] Fix N-base handling in overlap tally — in `tally_pileup` (`src/bam/mod.rs`), if one read of an overlapping pair has an `N` at the position, `overlap_alt_disagree` is incorrectly incremented for the other read's alt base. An `N` is uninformative and should not count as a disagreement. Fix: skip the overlap agreement/disagreement logic when either base is `N`, and exclude `N` bases from `total_depth` and alt tallies entirely.
+- [ ] **Re-examine N-base handling before v0.3.0** — the current approach (skip N bases from `total_depth`, `fwd_depth`, `rev_depth`, and base tallies; skip overlap agreement/disagreement when either base is N) may not be correct. Need to think through the desired semantics carefully: should an N read count toward depth at all? If one read of an overlapping pair is N, should `overlap_depth` still be incremented? Should the informative read of the pair contribute to `total_depth` as a regular non-overlapping read instead? The right answer isn't obvious — resolve before v0.3.0.
 ## Per-read detail table (two-table design)
 
 **Motivation:** Read-end proximity and family size are inherently per-read properties.
@@ -448,11 +449,10 @@ WHERE c.frac_mapq0 > 0.3;
 
 ## CI / Release
 
-- [ ] GitHub Actions release workflow — on push of a `v*.*.*` tag, build the Docker image
-  natively on an `ubuntu-latest` (x86_64) runner using `docker/Dockerfile`, push
-  `gcr.io/<project>/geac:<version>` and `gcr.io/<project>/geac:latest` to GCR.
-  Cross-compilation from Apple Silicon is not viable (DuckDB C++ segfaults at runtime);
-  a native Linux build is required. Store the GCR service account key as a GitHub secret.
+- [x] GitHub Actions release workflow — on push of a `v*.*.*` tag, build the Docker image
+  natively on an `ubuntu-latest` (x86_64) runner using `docker/Dockerfile`, push to
+  `ghcr.io/fleharty/geac:<version>` and `ghcr.io/fleharty/geac:latest`.
+  Uses `GITHUB_TOKEN` — no external credentials needed.
 
 ## WDL / Terra
 

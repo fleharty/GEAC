@@ -301,7 +301,10 @@ fn tally_pileup(
     for reads in by_qname.values() {
         match reads.as_slice() {
             [(base, is_rev)] => {
-                // Non-overlapping read
+                // Non-overlapping read; skip uninformative N bases entirely.
+                if *base == 'N' {
+                    continue;
+                }
                 total_depth += 1;
                 if *is_rev { rev_depth += 1; } else { fwd_depth += 1; }
 
@@ -310,31 +313,39 @@ fn tally_pileup(
                 if *is_rev { t.rev += 1; } else { t.fwd += 1; }
             }
             [(base1, is_rev1), (base2, is_rev2)] => {
-                // Overlapping fragment: both reads cover this position
+                // Overlapping fragment: both reads cover this position.
+                // Count each read independently, skipping N bases.
+                // Skip overlap agreement/disagreement when either base is N.
                 overlap_depth += 1;
-                total_depth += 2;
-                if *is_rev1 { rev_depth += 1; } else { fwd_depth += 1; }
-                if *is_rev2 { rev_depth += 1; } else { fwd_depth += 1; }
 
-                let t1 = bases.entry(*base1).or_default();
-                t1.total += 1;
-                if *is_rev1 { t1.rev += 1; } else { t1.fwd += 1; }
+                for (base, is_rev) in [(*base1, *is_rev1), (*base2, *is_rev2)] {
+                    if base == 'N' {
+                        continue;
+                    }
+                    total_depth += 1;
+                    if is_rev { rev_depth += 1; } else { fwd_depth += 1; }
+                    let t = bases.entry(base).or_default();
+                    t.total += 1;
+                    if is_rev { t.rev += 1; } else { t.fwd += 1; }
+                }
 
-                let t2 = bases.entry(*base2).or_default();
-                t2.total += 1;
-                if *is_rev2 { t2.rev += 1; } else { t2.fwd += 1; }
-
-                if base1 == base2 {
-                    bases.entry(*base1).or_default().overlap_alt_agree += 1;
-                } else {
-                    bases.entry(*base1).or_default().overlap_alt_disagree += 1;
-                    bases.entry(*base2).or_default().overlap_alt_disagree += 1;
+                // Only tally overlap agreement/disagreement when both bases are informative.
+                if *base1 != 'N' && *base2 != 'N' {
+                    if base1 == base2 {
+                        bases.entry(*base1).or_default().overlap_alt_agree += 1;
+                    } else {
+                        bases.entry(*base1).or_default().overlap_alt_disagree += 1;
+                        bases.entry(*base2).or_default().overlap_alt_disagree += 1;
+                    }
                 }
             }
             _ => {
                 // More than 2 reads with the same query name: shouldn't happen in
                 // practice but handle gracefully by treating as non-overlapping.
                 for &(base, is_rev) in reads {
+                    if base == 'N' {
+                        continue;
+                    }
                     total_depth += 1;
                     if is_rev { rev_depth += 1; } else { fwd_depth += 1; }
                     let t = bases.entry(base).or_default();
