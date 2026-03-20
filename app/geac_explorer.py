@@ -362,7 +362,7 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
         st.caption(f"{_chosen_records:,} / {_total_records:,} records from selected samples")
         _override_label = f"Load all {n} samples instead"
         if n > 10:
-            _override_label += "  :red[don't do it!]"
+            _override_label += "  :red[(Too many samples, it's a bad idea to click this!)]"
         if st.checkbox(_override_label, key=f"{key}_override"):
             cap_samples = sample_ids
 
