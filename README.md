@@ -242,7 +242,7 @@ Each Parquet file contains one row per alt allele observed at a locus.
 | `pos` | int64 | 0-based position |
 | `ref_allele` | string | Reference allele |
 | `alt_allele` | string | Alt allele (e.g. `T`, `+ACG`, `-2`) |
-| `variant_type` | string | `SNV` / `insertion` / `deletion` / `MNV` |
+| `variant_type` | string | `SNV` / `insertion` / `deletion` |
 | `total_depth` | int32 | Fragment depth at position (each overlapping pair counts as 1) |
 | `alt_count` | int32 | Fragments supporting the alt allele |
 | `ref_count` | int32 | Fragments supporting the reference allele |

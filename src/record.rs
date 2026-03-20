@@ -7,7 +7,6 @@ pub enum VariantType {
     Snv,
     Insertion,
     Deletion,
-    Mnv,
 }
 
 impl std::fmt::Display for VariantType {
@@ -16,7 +15,6 @@ impl std::fmt::Display for VariantType {
             VariantType::Snv => write!(f, "SNV"),
             VariantType::Insertion => write!(f, "insertion"),
             VariantType::Deletion => write!(f, "deletion"),
-            VariantType::Mnv => write!(f, "MNV"),
         }
     }
 }
@@ -121,6 +119,6 @@ pub struct AltBase {
     pub str_len: i32,
 
     // Trinucleotide context for SNVs (5'-base, ref-base, 3'-base from reference).
-    // Null for indels/MNVs, or when the locus is at a chromosome boundary.
+    // Null for indels or when the locus is at a chromosome boundary.
     pub trinuc_context: Option<String>,
 }
