@@ -1309,6 +1309,10 @@ with tab_cohort:
             if _vaf_raw.empty:
                 st.info("No SNVs in current selection.")
             else:
+                _vaf_yscale = st.radio(
+                    "Y-axis scale", ["Linear", "Symlog"], horizontal=True,
+                    key="vaf_yscale",
+                )
                 _vaf_chart = (
                     alt.Chart(_vaf_raw)
                     .transform_density(
@@ -1320,7 +1324,8 @@ with tab_cohort:
                     .mark_line(opacity=0.8)
                     .encode(
                         alt.X("value:Q", title="VAF"),
-                        alt.Y("density:Q", title="Density"),
+                        alt.Y("density:Q", title="Density",
+                              scale=alt.Scale(type="symlog" if _vaf_yscale == "Symlog" else "linear")),
                         alt.Color("sample_id:N", title="Sample"),
                         tooltip=["sample_id:N",
                                  alt.Tooltip("value:Q", format=".3f", title="VAF")],
