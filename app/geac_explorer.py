@@ -1320,7 +1320,7 @@ with tab_cohort:
                     .mark_line(opacity=0.8)
                     .encode(
                         alt.X("value:Q", title="VAF"),
-                        alt.Y("density:Q", title="Density", scale=alt.Scale(type="log")),
+                        alt.Y("density:Q", title="Density"),
                         alt.Color("sample_id:N", title="Sample"),
                         tooltip=["sample_id:N",
                                  alt.Tooltip("value:Q", format=".3f", title="VAF")],
