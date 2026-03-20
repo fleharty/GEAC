@@ -72,7 +72,7 @@ Two output files per sample from `geac collect`:
 ## Explorer (Streamlit)
 
 - [x] IGV session download — manifest-driven BAM tracks + BED positions zip, capped at 5 samples
-- [ ] IGV sample picker — verify that the BED file only contains positions with alt bases in the selected samples; suspected bug where non-selected sample loci still appear in the session
+- [x] IGV sample picker — verified: BED file correctly contains only positions from selected samples. The SQL query always includes a `sample_id IN (...)` clause before fetching `igv_df`; `make_bed` and `make_igv_session` both operate on that already-filtered dataframe.
 - [x] BED file has some incorrect entries — fixed: deletion loci now span the full deleted region [pos, pos+del_len)
 - [x] Position-level drill-down — click a locus and see all samples/alleles at that position
 - [x] Export filtered data to CSV — handled by Streamlit's built-in dataframe toolbar download button
