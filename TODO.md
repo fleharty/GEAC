@@ -12,6 +12,7 @@
 - [x] Fragment overlap metrics — `overlap_alt_agree`, `overlap_alt_disagree`, `overlap_ref_agree` columns for read-pair concordance
 - [x] Integration tests — generate synthetic BAM data and write end-to-end tests
 - [ ] Audit `alt_count` double-counting — if read 1 and read 2 of a fragment both overlap a locus and both carry the alt allele, `alt_count` may count both reads as independent observations. `overlap_alt_agree` tracks this but it is not yet clear whether `alt_count` and `total_depth` are fragment-collapsed or read-level counts. Verify the pileup logic in `src/bam/mod.rs` and determine whether the desired behavior is fragment-level counting (each insert = 1) or read-level counting (each read = 1), and document the semantics clearly. Compare against how `total_depth` handles the same overlap case.
+- [ ] Fix N-base handling in overlap tally — in `tally_pileup` (`src/bam/mod.rs`), if one read of an overlapping pair has an `N` at the position, `overlap_alt_disagree` is incorrectly incremented for the other read's alt base. An `N` is uninformative and should not count as a disagreement. Fix: skip the overlap agreement/disagreement logic when either base is `N`, and exclude `N` bases from `total_depth` and alt tallies entirely.
 ## Per-read detail table (two-table design)
 
 **Motivation:** Read-end proximity and family size are inherently per-read properties.
