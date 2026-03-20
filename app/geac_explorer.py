@@ -254,7 +254,7 @@ def launch_igv_session(session_xml: str, bed: str) -> str:
     try:
         urllib.request.urlopen(url, timeout=2)
         return f"Session loaded into running IGV instance."
-    except urllib.error.URLError:
+    except (urllib.error.URLError, TimeoutError, OSError):
         pass
 
     # Fall back to launching IGV
