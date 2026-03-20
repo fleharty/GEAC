@@ -79,7 +79,7 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["sample_sel"]         = []
     st.session_state["batch_sel"]          = []
     st.session_state["gene_text"]          = ""
-    st.session_state["variant_sel"]        = ["SNV", "insertion", "deletion", "MNV"]
+    st.session_state["variant_sel"]        = ["SNV", "insertion", "deletion"]
     st.session_state["vaf_range"]          = (0.0, 1.0)
     st.session_state["min_alt"]            = 1
     st.session_state["min_fwd_alt"]        = 0
@@ -126,10 +126,10 @@ else:
     gene_text = ""
     st.sidebar.caption("Gene filter unavailable — run geac collect with --gene-annotations to enable.")
 if "variant_sel" not in st.session_state:
-    st.session_state["variant_sel"] = ["SNV", "insertion", "deletion", "MNV"]
+    st.session_state["variant_sel"] = ["SNV", "insertion", "deletion"]
 variant_sel = st.sidebar.multiselect(
     "Variant type",
-    ["SNV", "insertion", "deletion", "MNV"],
+    ["SNV", "insertion", "deletion"],
     key="variant_sel",
 )
 vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01, key="vaf_range")
