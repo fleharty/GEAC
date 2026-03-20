@@ -360,7 +360,10 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
             f"AND sample_id IN ({_cap_list})"
         ).fetchone()[0]
         st.caption(f"{_chosen_records:,} / {_total_records:,} records from selected samples")
-        if st.checkbox(f"Load all {n} samples instead", key=f"{key}_override"):
+        _override_label = f"Load all {n} samples instead"
+        if n > 10:
+            _override_label += "  :red[don't do it!]"
+        if st.checkbox(_override_label, key=f"{key}_override"):
             cap_samples = sample_ids
 
     if st.button("Prepare IGV session", key=f"{key}_prepare"):
