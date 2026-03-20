@@ -1477,7 +1477,7 @@ with tab_cohort:
                     )
                     _hm_full["mut_type"] = _hm_full["sbs_label"].str.extract(r'\[([A-Z]>[A-Z])\]')[0]
 
-                    _hm_base = (
+                    _hm_chart = (
                         alt.Chart(_hm_full)
                         .mark_rect()
                         .encode(
@@ -1488,21 +1488,6 @@ with tab_cohort:
                                       scale=alt.Scale(scheme="blues")),
                             alt.Tooltip(["sample_id:N", "sbs_label:N", "n:Q", "fraction:Q"]),
                         )
-                    )
-
-                    # Vertical dividers at the boundary between mutation type groups
-                    _hm_dividers_df = pd.DataFrame([
-                        {"sbs_label": [l for l in _SBS_ORDER if f"[{mt}]" in l][0]}
-                        for mt in _SBS_MUT_TYPES[1:]  # skip first group — no divider before it
-                    ])
-                    _hm_dividers = (
-                        alt.Chart(_hm_dividers_df)
-                        .mark_rule(color="black", strokeWidth=2)
-                        .encode(alt.X("sbs_label:N", sort=_SBS_ORDER))
-                    )
-
-                    _hm_chart = (
-                        alt.layer(_hm_base, _hm_dividers)
                         .properties(
                             height=max(200, 20 * _hm_full["sample_id"].nunique()),
                             title="Normalised SBS96 profile per sample (fraction of SNVs)",
