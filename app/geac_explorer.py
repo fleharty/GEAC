@@ -172,7 +172,7 @@ manifest_path = st.sidebar.text_input(
     help="Tab-separated file with columns: collaborator_sample_id, duplex_output_bam, duplex_output_bam_index, final_annotated_variants",
 )
 _genome_options = ["hg19", "hg38", "mm10", "mm39", "other"]
-_cfg_genome = _cfg.get("genome", "hg38")
+_cfg_genome = _cfg.get("genome", "hg19")
 _genome_default_idx = _genome_options.index(_cfg_genome) if _cfg_genome in _genome_options else 0
 genome = st.sidebar.selectbox("Genome", _genome_options, index=_genome_default_idx)
 if genome == "other":
