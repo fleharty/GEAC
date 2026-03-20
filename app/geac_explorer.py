@@ -161,7 +161,7 @@ st.sidebar.divider()
 st.sidebar.header("IGV Integration")
 auto_launch_igv = st.sidebar.checkbox(
     "Auto-launch IGV",
-    value=False,
+    value=_cfg.get("auto_launch_igv", False),
     help="Write session files to a temp directory and load them in IGV automatically. "
          "Uses IGV's REST API (port 60151) if IGV is already running, otherwise launches IGV.",
 )
@@ -178,11 +178,14 @@ manifest_path = st.sidebar.text_input(
     help="Tab-separated file with columns: collaborator_sample_id, duplex_output_bam, duplex_output_bam_index, final_annotated_variants",
 )
 _genome_options = ["hg19", "hg38", "mm10", "mm39", "other"]
-_cfg_genome = _cfg.get("genome", "hg19")
-_genome_default_idx = _genome_options.index(_cfg_genome) if _cfg_genome in _genome_options else 0
+_cfg_genome = _cfg.get("genome_build") or _cfg.get("genome", "hg19")
+if _cfg_genome in _genome_options:
+    _genome_default_idx = _genome_options.index(_cfg_genome)
+else:
+    _genome_default_idx = _genome_options.index("other")
 genome = st.sidebar.selectbox("Genome", _genome_options, index=_genome_default_idx)
 if genome == "other":
-    genome = st.sidebar.text_input("Genome ID", value="hg38")
+    genome = st.sidebar.text_input("Genome ID", value=_cfg_genome if _cfg_genome not in _genome_options else "hg38")
 
 @st.cache_data
 def load_manifest(p: str) -> dict:

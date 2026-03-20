@@ -206,6 +206,20 @@ Features:
   `session.xml` (BAM tracks + BED track) and `positions.bed` (one row per unique locus).
   Sessions are capped at 5 samples by default with an override option.
 
+### Project config (geac.toml)
+
+Place a `geac.toml` file in the directory where you run Streamlit (or pass `--config /path/to/geac.toml` after `--` on the command line) to pre-populate sidebar fields:
+
+```toml
+data             = "/path/to/cohort.duckdb"         # pre-fill the data file path
+manifest         = "/path/to/manifest.tsv"           # pre-fill the manifest path
+cosmic           = "/path/to/COSMIC_v3.4_SBS_GRCh37.txt"
+genome_build     = "hg19"                            # hg19 | hg38 | mm10 | mm39 | <any IGV ID>
+auto_launch_igv  = false                             # auto-load sessions into running IGV
+```
+
+All keys are optional. `genome_build` accepts any IGV genome identifier — known values (`hg19`, `hg38`, `mm10`, `mm39`) are selected directly from the dropdown; anything else selects "other" and pre-fills the custom genome ID text box. `auto_launch_igv = true` checks the "Auto-launch IGV" checkbox by default, so every session is automatically sent to IGV via its REST API (port 60151) or launched as a subprocess if IGV is not already running.
+
 ### Manifest format
 
 ```tsv

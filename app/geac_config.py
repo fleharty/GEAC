@@ -7,10 +7,12 @@ Discovery order:
 
 Supported keys (all optional):
 
-    data     = "/path/to/cohort.duckdb"   # or a .parquet file
-    manifest = "/path/to/manifest.tsv"
-    cosmic   = "/path/to/COSMIC_v3.4_SBS_GRCh37.txt"
-    genome   = "hg38"                     # hg19 | hg38 | mm10 | mm39 | other
+    data             = "/path/to/cohort.duckdb"   # or a .parquet file
+    manifest         = "/path/to/manifest.tsv"
+    cosmic           = "/path/to/COSMIC_v3.4_SBS_GRCh37.txt"
+    genome_build     = "hg19"                     # hg19 | hg38 | mm10 | mm39 | other  (preferred)
+    genome           = "hg19"                     # alias for genome_build (kept for compatibility)
+    auto_launch_igv  = false                      # auto-launch IGV when a session is created
 """
 
 from __future__ import annotations
@@ -28,14 +30,17 @@ except ImportError:
         tomllib = None  # type: ignore[assignment]
 
 
-_KNOWN_KEYS = {"data", "manifest", "cosmic", "genome"}
+_STRING_KEYS = {"data", "manifest", "cosmic", "genome", "genome_build"}
+_BOOL_KEYS   = {"auto_launch_igv"}
+_KNOWN_KEYS  = _STRING_KEYS | _BOOL_KEYS
 
 
-def load() -> dict[str, str]:
-    """Return config dict with string values for known keys.
+def load() -> dict:
+    """Return config dict for known keys.
 
+    String keys are returned as str; boolean keys are returned as bool.
     Missing keys are absent from the returned dict (not None), so callers
-    can use .get("data", "") to obtain a safe default.
+    can use .get("data", "") or .get("auto_launch_igv", False) for safe defaults.
     """
     path = _find_config_path()
     if path is None:
@@ -63,7 +68,13 @@ def load() -> dict[str, str]:
         import streamlit as st
         st.warning(f"geac.toml: unknown key(s) ignored: {', '.join(sorted(unknown))}")
 
-    return {k: str(v) for k, v in raw.items() if k in _KNOWN_KEYS}
+    result = {}
+    for k, v in raw.items():
+        if k in _STRING_KEYS:
+            result[k] = str(v)
+        elif k in _BOOL_KEYS:
+            result[k] = bool(v)
+    return result
 
 
 def _find_config_path() -> str | None:
