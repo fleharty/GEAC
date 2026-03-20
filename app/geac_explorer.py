@@ -159,6 +159,12 @@ display_limit = None if _limit_sel == "All" else int(_limit_sel)
 # ── IGV integration (sidebar) ─────────────────────────────────────────────────
 st.sidebar.divider()
 st.sidebar.header("IGV Integration")
+auto_launch_igv = st.sidebar.checkbox(
+    "Auto-launch IGV",
+    value=False,
+    help="Write session files to a temp directory and load them in IGV automatically. "
+         "Uses IGV's REST API (port 60151) if IGV is already running, otherwise launches IGV.",
+)
 
 import os as _os
 _default_manifest = (
@@ -224,6 +230,54 @@ def make_bed(df: pd.DataFrame) -> str:
         for row in positions.itertuples(index=False)
     ]
     return "\n".join(lines) + "\n"
+
+
+def launch_igv_session(session_xml: str, bed: str) -> str:
+    """Write session.xml and positions.bed to a temp dir and load in IGV.
+
+    Tries the IGV REST API (localhost:60151) first — works if IGV is already
+    running. If the connection is refused, launches IGV via subprocess.
+    Returns a status message suitable for st.info / st.success / st.error.
+    """
+    import tempfile, subprocess, urllib.request, urllib.error
+
+    tmp = tempfile.mkdtemp(prefix="geac_igv_")
+    session_path = _os.path.join(tmp, "session.xml")
+    bed_path     = _os.path.join(tmp, "positions.bed")
+    with open(session_path, "w") as f:
+        f.write(session_xml)
+    with open(bed_path, "w") as f:
+        f.write(bed)
+
+    # Try REST API first
+    url = f"http://localhost:60151/load?file={urllib.request.pathname2url(session_path)}&merge=false"
+    try:
+        urllib.request.urlopen(url, timeout=2)
+        return f"Session loaded into running IGV instance."
+    except urllib.error.URLError:
+        pass
+
+    # Fall back to launching IGV
+    candidates = ["igv", "igv.sh"]
+    if _os.path.exists("/Applications/IGV.app"):
+        candidates = ["open", "-a", "IGV", session_path]
+        try:
+            subprocess.Popen(candidates)
+            return f"Launched IGV with session at {session_path}"
+        except FileNotFoundError:
+            pass
+    else:
+        for cmd in ["igv", "igv.sh"]:
+            try:
+                subprocess.Popen([cmd, session_path])
+                return f"Launched IGV with session at {session_path}"
+            except FileNotFoundError:
+                continue
+
+    return (
+        f"Could not launch IGV automatically. Session written to:\n{session_path}\n"
+        "Open it manually in IGV, or install IGV to /Applications/IGV.app."
+    )
 
 
 def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str) -> str:
@@ -345,7 +399,13 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("session.xml", session)
             zf.writestr("positions.bed", bed)
-        st.session_state[f"{key}_igv"] = buf.getvalue()
+        st.session_state[f"{key}_igv"]     = buf.getvalue()
+        st.session_state[f"{key}_session"] = session
+        st.session_state[f"{key}_bed"]     = bed
+
+        if auto_launch_igv:
+            msg = launch_igv_session(session, bed)
+            st.info(msg)
 
     if f"{key}_igv" in st.session_state:
         st.download_button(
