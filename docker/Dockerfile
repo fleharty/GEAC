@@ -7,32 +7,41 @@ ARG TARGETARCH
 ARG HTSLIB_VERSION=1.21
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Enable arm64 packages alongside native ones for cross-compilation deps
-RUN dpkg --add-architecture arm64 || true
-
+# Install native build tools (always needed)
 RUN apt-get -o Acquire::Check-Valid-Until=false update && apt-get install -y \
     curl \
     build-essential \
     pkg-config \
     clang \
     libclang-dev \
-    # native (amd64) htslib build deps — also needed for bindgen header parsing
     libbz2-dev \
     liblzma-dev \
     libcurl4-openssl-dev \
     zlib1g-dev \
     libssl-dev \
     libdeflate-dev \
-    # arm64 cross-compiler and arm64 htslib build deps
-    gcc-aarch64-linux-gnu \
-    g++-aarch64-linux-gnu \
-    libbz2-dev:arm64 \
-    liblzma-dev:arm64 \
-    libcurl4-openssl-dev:arm64 \
-    zlib1g-dev:arm64 \
-    libssl-dev:arm64 \
-    libdeflate-dev:arm64 \
     && rm -rf /var/lib/apt/lists/*
+
+# For arm64 cross-compilation: add cross-compiler and arm64 dev libraries.
+# arm64 packages live on ports.ubuntu.com, not the default archive,
+# so we add the ports sources and pin the existing sources to amd64.
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+    dpkg --add-architecture arm64 && \
+    sed -i 's/^deb http/deb [arch=amd64] http/g' /etc/apt/sources.list && \
+    echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" >> /etc/apt/sources.list && \
+    apt-get -o Acquire::Check-Valid-Until=false update && apt-get install -y \
+        gcc-aarch64-linux-gnu \
+        g++-aarch64-linux-gnu \
+        libbz2-dev:arm64 \
+        liblzma-dev:arm64 \
+        libcurl4-openssl-dev:arm64 \
+        zlib1g-dev:arm64 \
+        libssl-dev:arm64 \
+        libdeflate-dev:arm64 \
+    && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # Build htslib from source for the target architecture.
 # Always installs to /usr/local so the runtime COPY path is unconditional.
