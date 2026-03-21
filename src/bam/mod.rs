@@ -11,13 +11,17 @@ use rust_htslib::faidx;
 use crate::cli::CollectArgs;
 use crate::gene_annotations::GeneAnnotations;
 use crate::progress::ProgressReporter;
-use crate::record::{AltBase, VariantType};
+use crate::record::{AltBase, AltRead, VariantType};
 use crate::repeat::compute_repeat_metrics;
 use crate::targets::TargetIntervals;
 use crate::vcf::VariantAnnotator;
 
-/// Process a BAM/CRAM file and return all alt base records.
-pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnotator>, target_intervals: Option<&TargetIntervals>, gene_annots: Option<&GeneAnnotations>) -> Result<Vec<AltBase>> {
+/// Process a BAM/CRAM file and return all alt base records (and optionally per-read detail records).
+///
+/// When `args.reads_output` is true, the second element of the returned tuple contains one
+/// `AltRead` record per read (fragment) that supports an alt base. When false, the second
+/// element is always empty.
+pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnotator>, target_intervals: Option<&TargetIntervals>, gene_annots: Option<&GeneAnnotations>) -> Result<(Vec<AltBase>, Vec<AltRead>)> {
     let mut bam = open_bam(&args.input, &args.reference)?;
     let mut ref_cache = RefCache::new(&args.reference)?;
 
@@ -66,7 +70,9 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
             },
         }
     }
+    let collect_reads = args.reads_output;
     let mut records: Vec<AltBase> = Vec::new();
+    let mut read_records: Vec<AltRead> = Vec::new();
 
     for pileup in bam.pileup() {
         let pileup = pileup.context("error reading pileup")?;
@@ -85,7 +91,8 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
             fwd_depth,
             rev_depth,
             overlap_depth,
-        } = tally_pileup(&pileup, args.min_base_qual, args.min_map_qual, ref_base);
+            read_details,
+        } = tally_pileup(&pileup, args.min_base_qual, args.min_map_qual, ref_base, collect_reads);
 
         progress.positions_processed.fetch_add(1, Ordering::Relaxed);
         progress.reads_processed.fetch_add(total_depth as u64, Ordering::Relaxed);
@@ -142,7 +149,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                 chrom: chrom.clone(),
                 pos,
                 ref_allele: ref_base.to_string(),
-                alt_allele,
+                alt_allele: alt_allele.clone(),
                 variant_type: VariantType::Snv,
                 total_depth,
                 alt_count: tally.total,
@@ -169,6 +176,27 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                 str_len:         repeat.str_len,
                 trinuc_context:  trinuc_context.clone(),
             });
+
+            if collect_reads {
+                if let Some(details) = read_details.get(base) {
+                    for d in details {
+                        read_records.push(AltRead {
+                            sample_id: sample_id.clone(),
+                            chrom: chrom.clone(),
+                            pos,
+                            alt_allele: alt_allele.clone(),
+                            dist_from_read_start: d.qpos as i32,
+                            dist_from_read_end: (d.read_len as i32) - (d.qpos as i32) - 1,
+                            read_length: d.read_len as i32,
+                            ab_count: d.ab_count,
+                            ba_count: d.ba_count,
+                            family_size: d.family_size,
+                            base_qual: d.base_qual as i32,
+                            map_qual: d.map_qual as i32,
+                        });
+                    }
+                }
+            }
         }
 
         // ── Indel records ─────────────────────────────────────────────────────
@@ -220,10 +248,21 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
     }
 
     reporter.finish(start);
-    Ok(records)
+    Ok((records, read_records))
 }
 
 // ── Pileup tallying ───────────────────────────────────────────────────────────
+
+/// Per-read detail collected during tallying, used to build AltRead records.
+struct ReadDetail {
+    qpos: usize,
+    read_len: usize,
+    base_qual: u8,
+    map_qual: u8,
+    ab_count: Option<i32>,
+    ba_count: Option<i32>,
+    family_size: Option<i32>,
+}
 
 /// Position-level summary returned by `tally_pileup`.
 struct PileupResult {
@@ -234,6 +273,9 @@ struct PileupResult {
     rev_depth: i32,
     /// Number of overlapping fragment pairs at this position (pair count, not read count)
     overlap_depth: i32,
+    /// Per-read details keyed by base (only populated when collect_reads is true;
+    /// only non-ref, non-N bases are included)
+    read_details: HashMap<char, Vec<ReadDetail>>,
 }
 
 /// Per-base tally at a pileup position.
@@ -246,6 +288,23 @@ struct BaseTally {
     overlap_alt_agree: i32,
     /// Overlapping pairs where one read sees this base and the other sees something different
     overlap_alt_disagree: i32,
+}
+
+/// Full per-read data collected during the first pileup pass.
+struct LocusRead {
+    base: char,
+    is_reverse: bool,
+    is_first_in_pair: bool,
+    qpos: usize,
+    read_len: usize,
+    base_qual: u8,
+    map_qual: u8,
+    /// fgbio aD tag: AB (top-strand) raw read count
+    ab_count: Option<i32>,
+    /// fgbio bD tag: BA (bottom-strand) raw read count
+    ba_count: Option<i32>,
+    /// fgbio cD tag: total family size (aD + bD for duplex; sole count for simplex)
+    family_size: Option<i32>,
 }
 
 /// Tally each observed base at a pileup column with overlap detection.
@@ -270,16 +329,18 @@ struct BaseTally {
 ///
 /// For `alt + ref` pairs, `overlap_alt_disagree` is still incremented even though the
 /// fragment is classified as alt — the disagreement is a useful quality signal.
+///
+/// When `collect_reads` is true, `PileupResult.read_details` is populated with per-read
+/// detail for every non-ref, non-N base. When false, `read_details` is always empty.
 fn tally_pileup(
     pileup: &rust_htslib::bam::pileup::Pileup,
     min_base_qual: u8,
     min_map_qual: u8,
     ref_base: char,
+    collect_reads: bool,
 ) -> PileupResult {
-    // First pass: collect (base, is_reverse, is_first_in_pair) per query name.
-    // Query names are stored as Vec<u8> to avoid UTF-8 allocation overhead.
-    // is_first_in_pair is BAM flag 0x40 — used to attribute strand to the fragment.
-    let mut by_qname: HashMap<Vec<u8>, Vec<(char, bool, bool)>> = HashMap::new();
+    // First pass: collect LocusRead per query name.
+    let mut by_qname: HashMap<Vec<u8>, Vec<LocusRead>> = HashMap::new();
 
     for alignment in pileup.alignments() {
         if alignment.is_del() || alignment.is_refskip() {
@@ -305,45 +366,76 @@ fn tally_pileup(
         let base = record.seq()[qpos].to_ascii_uppercase() as char;
         let is_reverse = record.is_reverse();
         let is_first_in_pair = record.flags() & 0x40 != 0;
+        let map_qual = record.mapq();
+        let read_len = record.seq_len();
+
+        let (ab_count, ba_count, family_size) = if collect_reads {
+            let ab = aux_i32(&record, b"aD");
+            let ba = aux_i32(&record, b"bD");
+            let fs = aux_i32(&record, b"cD");
+            (ab, ba, fs)
+        } else {
+            (None, None, None)
+        };
 
         by_qname
             .entry(record.qname().to_vec())
             .or_default()
-            .push((base, is_reverse, is_first_in_pair));
+            .push(LocusRead { base, is_reverse, is_first_in_pair, qpos, read_len, base_qual, map_qual, ab_count, ba_count, family_size });
     }
 
     // Second pass: tally with overlap detection.
     let mut bases: HashMap<char, BaseTally> = HashMap::new();
+    let mut read_details: HashMap<char, Vec<ReadDetail>> = HashMap::new();
     let mut total_depth: i32 = 0;
     let mut fwd_depth: i32 = 0;
     let mut rev_depth: i32 = 0;
     let mut overlap_depth: i32 = 0;
 
+    // Helper macro: push a ReadDetail for base `b` from LocusRead `r` (only when collect_reads).
+    macro_rules! push_detail {
+        ($b:expr, $r:expr) => {
+            if collect_reads && $b != ref_base && $b != 'N' {
+                read_details.entry($b).or_default().push(ReadDetail {
+                    qpos: $r.qpos,
+                    read_len: $r.read_len,
+                    base_qual: $r.base_qual,
+                    map_qual: $r.map_qual,
+                    ab_count: $r.ab_count,
+                    ba_count: $r.ba_count,
+                    family_size: $r.family_size,
+                });
+            }
+        };
+    }
+
     for reads in by_qname.values() {
         match reads.as_slice() {
-            [(base, is_rev, _)] => {
+            [r] => {
                 // Non-overlapping read; skip uninformative N bases entirely.
-                if *base == 'N' {
+                if r.base == 'N' {
                     continue;
                 }
                 total_depth += 1;
-                if *is_rev { rev_depth += 1; } else { fwd_depth += 1; }
+                if r.is_reverse { rev_depth += 1; } else { fwd_depth += 1; }
 
-                let t = bases.entry(*base).or_default();
+                let t = bases.entry(r.base).or_default();
                 t.total += 1;
-                if *is_rev { t.rev += 1; } else { t.fwd += 1; }
+                if r.is_reverse { t.rev += 1; } else { t.fwd += 1; }
+
+                push_detail!(r.base, r);
             }
-            [(base1, is_rev1, is_first1), (base2, is_rev2, _is_first2)] => {
+            [r1, r2] => {
                 // Overlapping fragment: fragment-level depth — always counts as 1.
                 overlap_depth += 1;
                 total_depth += 1;
 
                 // Strand is attributed using R1's orientation (BAM flag 0x40).
-                let r1_is_rev = if *is_first1 { *is_rev1 } else { *is_rev2 };
+                let r1_is_rev = if r1.is_first_in_pair { r1.is_reverse } else { r2.is_reverse };
                 if r1_is_rev { rev_depth += 1; } else { fwd_depth += 1; }
 
-                let b1 = *base1;
-                let b2 = *base2;
+                let b1 = r1.base;
+                let b2 = r2.base;
 
                 if b1 == 'N' && b2 == 'N' {
                     // N + N: fragment counted in depth but no base tally.
@@ -352,29 +444,35 @@ fn tally_pileup(
                     let t = bases.entry(b2).or_default();
                     t.total += 1;
                     if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
+                    push_detail!(b2, r2);
                 } else if b2 == 'N' {
                     // informative + N: tally the informative base.
                     let t = bases.entry(b1).or_default();
                     t.total += 1;
                     if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
+                    push_detail!(b1, r1);
                 } else if b1 == b2 {
-                    // Both reads agree on the same base.
+                    // Both reads agree on the same base; use R1 for read details.
                     let t = bases.entry(b1).or_default();
                     t.total += 1;
                     if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
                     t.overlap_alt_agree += 1;
+                    let det = if r1.is_first_in_pair { r1 } else { r2 };
+                    push_detail!(b1, det);
                 } else if b1 == ref_base {
                     // b2 is alt, b1 is ref — alt wins; classify as alt.
                     let t = bases.entry(b2).or_default();
                     t.total += 1;
                     if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
                     t.overlap_alt_disagree += 1;
+                    push_detail!(b2, r2);
                 } else if b2 == ref_base {
                     // b1 is alt, b2 is ref — alt wins; classify as alt.
                     let t = bases.entry(b1).or_default();
                     t.total += 1;
                     if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
                     t.overlap_alt_disagree += 1;
+                    push_detail!(b1, r1);
                 } else {
                     // alt₁ + alt₂ — two different non-ref bases; tally both.
                     // Note: sum of base counts will exceed total_depth for this fragment.
@@ -382,31 +480,52 @@ fn tally_pileup(
                     t1.total += 1;
                     if r1_is_rev { t1.rev += 1; } else { t1.fwd += 1; }
                     t1.overlap_alt_disagree += 1;
+                    push_detail!(b1, r1);
 
                     let t2 = bases.entry(b2).or_default();
                     t2.total += 1;
                     if r1_is_rev { t2.rev += 1; } else { t2.fwd += 1; }
                     t2.overlap_alt_disagree += 1;
+                    push_detail!(b2, r2);
                 }
             }
             _ => {
                 // More than 2 reads with the same query name: shouldn't happen in
                 // practice but handle gracefully by treating as non-overlapping.
-                for &(base, is_rev, _) in reads {
-                    if base == 'N' {
+                for r in reads {
+                    if r.base == 'N' {
                         continue;
                     }
                     total_depth += 1;
-                    if is_rev { rev_depth += 1; } else { fwd_depth += 1; }
-                    let t = bases.entry(base).or_default();
+                    if r.is_reverse { rev_depth += 1; } else { fwd_depth += 1; }
+                    let t = bases.entry(r.base).or_default();
                     t.total += 1;
-                    if is_rev { t.rev += 1; } else { t.fwd += 1; }
+                    if r.is_reverse { t.rev += 1; } else { t.fwd += 1; }
+                    push_detail!(r.base, r);
                 }
             }
         }
     }
 
-    PileupResult { bases, total_depth, fwd_depth, rev_depth, overlap_depth }
+    PileupResult { bases, total_depth, fwd_depth, rev_depth, overlap_depth, read_details }
+}
+
+/// Read an integer auxiliary tag from a BAM record, returning None if absent or wrong type.
+/// Read an integer auxiliary tag from a BAM record, returning None if absent or non-integer.
+///
+/// Float tags are intentionally excluded. For fgbio simplex consensus reads, `cE` is the
+/// per-base error rate (float), not a family size count. For duplex consensus reads, `cE`
+/// is the BA strand count (integer) and will be read correctly here.
+fn aux_i32(record: &bam::Record, tag: &[u8; 2]) -> Option<i32> {
+    match record.aux(tag) {
+        Ok(bam::record::Aux::I8(v))  => Some(v as i32),
+        Ok(bam::record::Aux::U8(v))  => Some(v as i32),
+        Ok(bam::record::Aux::I16(v)) => Some(v as i32),
+        Ok(bam::record::Aux::U16(v)) => Some(v as i32),
+        Ok(bam::record::Aux::I32(v)) => Some(v),
+        Ok(bam::record::Aux::U32(v)) => Some(v as i32),
+        _ => None,
+    }
 }
 
 // ── Indel tallying ────────────────────────────────────────────────────────────

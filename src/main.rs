@@ -88,15 +88,33 @@ fn main() -> Result<()> {
                 info!(n_genes = ga.n_genes(), "gene annotations loaded");
             }
 
-            let records = bam::collect_alt_bases(
+            let (records, read_records) = bam::collect_alt_bases(
                 &args,
                 annotator,
                 target_intervals.as_ref().map(|t| t as &_),
                 gene_annots.as_ref(),
             )?;
 
-            info!(n_records = records.len(), "writing Parquet output");
-            writer::parquet::write_parquet(&records, &args.output)?;
+            let (locus_output, reads_output_path) = if args.reads_output {
+                let stem = args.output.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("output");
+                let parent = args.output.parent().unwrap_or(std::path::Path::new("."));
+                (
+                    parent.join(format!("{stem}.locus.parquet")),
+                    Some(parent.join(format!("{stem}.reads.parquet"))),
+                )
+            } else {
+                (args.output.clone(), None)
+            };
+
+            info!(n_records = records.len(), output = %locus_output.display(), "writing locus Parquet");
+            writer::parquet::write_parquet(&records, &locus_output)?;
+
+            if let Some(ref reads_path) = reads_output_path {
+                info!(n_records = read_records.len(), output = %reads_path.display(), "writing reads Parquet");
+                writer::parquet_reads::write_parquet(&read_records, reads_path)?;
+            }
 
             info!("done");
         }

@@ -24,11 +24,17 @@ version 1.0
 ##   repeat_window        - bases each side of locus to scan for homopolymers/STRs (default 10)
 ##   min_base_qual        - minimum base quality (default 1)
 ##   min_map_qual         - minimum mapping quality (default 20)
+##   reads_output         - also write per-read detail Parquet (default false)
 ##   threads              - CPU threads for geac (default 4)
 ##   docker_image         - geac Docker image, e.g. gcr.io/my-project/geac:0.1.0
 ##   memory_gb            - memory in GB (default 8)
 ##   disk_gb              - disk space in GB (default 100)
 ##   preemptible          - number of preemptible retries (default 2)
+##
+## Outputs:
+##   locus_parquet        - per-locus alt base Parquet ({stem}.locus.parquet or {stem}.parquet)
+##   reads_parquets       - per-read detail Parquet array (one element when reads_output=true,
+##                          empty array otherwise)
 
 workflow GeacCollect {
 
@@ -49,9 +55,10 @@ workflow GeacCollect {
         String? region
         Int repeat_window = 10
 
-        Int min_base_qual = 1
-        Int min_map_qual  = 20
-        Int threads       = 4
+        Int     min_base_qual  = 1
+        Int     min_map_qual   = 20
+        Boolean reads_output   = false
+        Int     threads        = 4
 
         String docker_image
         Int    memory_gb    = 8
@@ -77,6 +84,7 @@ workflow GeacCollect {
             repeat_window         = repeat_window,
             min_base_qual         = min_base_qual,
             min_map_qual          = min_map_qual,
+            reads_output          = reads_output,
             threads               = threads,
             docker_image          = docker_image,
             memory_gb             = memory_gb,
@@ -85,7 +93,8 @@ workflow GeacCollect {
     }
 
     output {
-        File parquet = Collect.parquet
+        File        locus_parquet  = Collect.locus_parquet
+        Array[File] reads_parquets = Collect.reads_parquets
     }
 }
 
@@ -106,11 +115,12 @@ task Collect {
         File?   targets
         File?   gene_annotations
         String? region
-        Int repeat_window
+        Int     repeat_window
 
-        Int min_base_qual
-        Int min_map_qual
-        Int threads
+        Int     min_base_qual
+        Int     min_map_qual
+        Boolean reads_output
+        Int     threads
 
         String docker_image
         Int    memory_gb
@@ -118,32 +128,37 @@ task Collect {
         Int    preemptible
     }
 
-    # Derive output filename from the input BAM/CRAM basename
-    String output_name = sub(basename(input_bam), "\\.(bam|cram)$", "") + ".parquet"
+    # When reads_output=true, geac derive two files: {stem}.locus.parquet and {stem}.reads.parquet.
+    # When reads_output=false, geac writes a single {stem}.parquet.
+    String stem        = sub(basename(input_bam), "\\.(bam|cram)$", "")
+    String output_arg  = stem + ".parquet"
+    String locus_name  = if reads_output then stem + ".locus.parquet" else stem + ".parquet"
 
     command <<<
         set -euo pipefail
 
         geac collect \
-            --input ~{input_bam} \
-            --reference ~{reference_fasta} \
-            --output ~{output_name} \
-            --read-type ~{read_type} \
-            --pipeline ~{pipeline} \
-            --min-base-qual ~{min_base_qual} \
-            --min-map-qual ~{min_map_qual} \
-            --threads ~{threads} \
-            ~{"--sample-id " + sample_id} \
-            ~{"--vcf " + vcf} \
-            ~{"--variants-tsv " + variants_tsv} \
-            ~{"--targets " + targets} \
+            --input            ~{input_bam} \
+            --reference        ~{reference_fasta} \
+            --output           ~{output_arg} \
+            --read-type        ~{read_type} \
+            --pipeline         ~{pipeline} \
+            --min-base-qual    ~{min_base_qual} \
+            --min-map-qual     ~{min_map_qual} \
+            --threads          ~{threads} \
+            ~{"--sample-id "        + sample_id} \
+            ~{"--vcf "              + vcf} \
+            ~{"--variants-tsv "     + variants_tsv} \
+            ~{"--targets "          + targets} \
             ~{"--gene-annotations " + gene_annotations} \
-            ~{"--region " + region} \
-            --repeat-window ~{repeat_window}
+            ~{"--region "           + region} \
+            --repeat-window ~{repeat_window} \
+            ~{if reads_output then "--reads-output" else ""}
     >>>
 
     output {
-        File parquet = output_name
+        File        locus_parquet  = locus_name
+        Array[File] reads_parquets = glob("*.reads.parquet")
     }
 
     runtime {

@@ -69,6 +69,19 @@ Two output files per sample from `geac collect`:
 - [ ] Multi-BAM collect — allow `geac collect` to accept multiple input BAMs for the same sample (raw, simplex, duplex) and tag each record with its `read_type`; output a single merged Parquet with a `read_type` column
 - [ ] Read-type comparison view in Explorer — given a Parquet or DuckDB with mixed read types, show side-by-side or overlaid metrics (VAF distribution, strand balance, SBS96 spectrum) broken down by `read_type` (raw / simplex / duplex / mixed); goal is to quantify what duplex consensus processing removes vs retains
 
+## Per-read filter validation
+
+- [ ] Single-site read-level filter test — run `geac collect --reads-output --region chr:start-end`
+  on one sample restricted to the region of a known het variant. This produces a single locus
+  record with a known number of alt-supporting reads. Use the Explorer to manipulate the
+  family size and dist-from-read-end sliders and verify that alt_count changes as expected.
+  Confirm include vs exclude toggle behaviour matches intuition.
+- [ ] Terra cohort test with reads output — after single-site validation, update the WDL
+  workflows to pass `--reads-output` to `geac collect` and propagate both `.locus.parquet`
+  and `.reads.parquet` outputs through to `geac merge`. Run on a moderate cohort on Terra
+  to validate end-to-end. Prerequisite: WDL step 6 (update `wdl/geac_collect.wdl` and
+  `wdl/geac_cohort.wdl` for reads output).
+
 ## Explorer (Streamlit)
 
 - [x] IGV session download — manifest-driven BAM tracks + BED positions zip, capped at 5 samples
@@ -448,6 +461,17 @@ WHERE c.frac_mapq0 > 0.3;
 - [ ] Design longitudinal tracking — `run_id` / `run_date` provenance in coverage schema
   to support tracking coverage stability across instrument runs and reagent lots
 
+## Release roadmap
+
+| Version | Theme | Key deliverables |
+|---------|-------|-----------------|
+| **v0.3.1** | Bug fix | fgbio tag names corrected (`aD`/`bD`/`cD`); `family_size` populated for simplex reads |
+| **v0.4.0** | Per-read detail complete | `--reads-output` validated; WDL updated for reads output; Terra cohort test with reads data passing |
+| **v0.5.0** | Coverage | `geac coverage` command; coverage Explorer tab; WDL coverage workflow |
+| **v0.6.0** | Analysis | MNV detection; intra-sample read-type comparison; customer-facing Coverage Explorer |
+| **v0.7.0** | External beta | First release shared with external users for feedback; documentation polished; onboarding guide |
+| **v1.0.0** | Stable | Feedback from v0.7.0 incorporated; API/schema stable; production-ready |
+
 ## CI / Release
 
 - [x] GitHub Actions release workflow — on push of a `v*.*.*` tag, build the Docker image
@@ -461,4 +485,4 @@ WHERE c.frac_mapq0 > 0.3;
 - [x] Terra-compatible Docker image — multi-stage `docker/Dockerfile` with htslib + geac binary
 - [x] WDL workflow — scatter `geac collect` across a sample list, then gather with `geac merge` (`wdl/geac_cohort.wdl`)
 - [x] WDL task wrapping `geac merge` — standalone workflow in `wdl/geac_merge.wdl`
-- [ ] Test on Terra with a small cohort
+- [x] Test on Terra with a small cohort — v0.3.0 successfully run on a cohort of samples

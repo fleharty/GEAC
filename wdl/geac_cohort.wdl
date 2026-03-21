@@ -25,11 +25,13 @@ version 1.0
 ##   gene_annotations      - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
 ##   region                - (optional) restrict all samples to a genomic region
 ##   repeat_window         - bases each side of locus for homopolymer/STR scan (default 10)
+##   reads_output          - also write per-read detail Parquets and merge into alt_reads table (default false)
 ##   cohort_name           - Base name for the output DuckDB file (default: cohort)
 ##   docker_image          - geac Docker image, e.g. gcr.io/my-project/geac:latest
 ##
 ## Outputs:
-##   parquets              - Per-sample Parquet files from geac collect
+##   locus_parquets        - Per-sample locus Parquet files from geac collect
+##   reads_parquets        - Per-sample reads Parquet files (empty when reads_output=false)
 ##   cohort_db             - Merged cohort DuckDB from geac merge
 
 workflow GeacCohort {
@@ -55,9 +57,10 @@ workflow GeacCohort {
         String? region
         Int     repeat_window = 10
 
-        Int min_base_qual = 1
-        Int min_map_qual  = 0
-        Int threads       = 4
+        Int     min_base_qual = 1
+        Int     min_map_qual  = 0
+        Boolean reads_output  = false
+        Int     threads       = 4
 
         String cohort_name = "cohort"
 
@@ -112,6 +115,7 @@ workflow GeacCohort {
                 repeat_window         = repeat_window,
                 min_base_qual         = min_base_qual,
                 min_map_qual          = min_map_qual,
+                reads_output          = reads_output,
                 threads               = threads,
                 docker_image          = docker_image,
                 memory_gb             = collect_memory_gb,
@@ -120,9 +124,13 @@ workflow GeacCohort {
         }
     }
 
+    # Flatten per-sample reads parquet arrays into a single array.
+    # When reads_output=false every inner array is empty, so the result is [].
+    Array[File] all_reads_parquets = flatten(Collect.reads_parquets)
+
     call Merge {
         input:
-            parquets     = Collect.parquet,
+            parquets     = flatten([Collect.locus_parquet, all_reads_parquets]),
             cohort_name  = cohort_name,
             docker_image = docker_image,
             memory_gb    = merge_memory_gb,
@@ -131,8 +139,9 @@ workflow GeacCohort {
     }
 
     output {
-        Array[File] parquets  = Collect.parquet
-        File        cohort_db = Merge.cohort_db
+        Array[File] locus_parquets = Collect.locus_parquet
+        Array[File] reads_parquets = all_reads_parquets
+        File        cohort_db      = Merge.cohort_db
     }
 }
 
@@ -158,9 +167,10 @@ task Collect {
         String? region
         Int     repeat_window
 
-        Int min_base_qual
-        Int min_map_qual
-        Int threads
+        Int     min_base_qual
+        Int     min_map_qual
+        Boolean reads_output
+        Int     threads
 
         String docker_image
         Int    memory_gb
@@ -168,7 +178,9 @@ task Collect {
         Int    preemptible
     }
 
-    String output_name = sub(basename(input_bam), "\\.(bam|cram)$", "") + ".parquet"
+    String stem       = sub(basename(input_bam), "\\.(bam|cram)$", "")
+    String output_arg = stem + ".parquet"
+    String locus_name = if reads_output then stem + ".locus.parquet" else stem + ".parquet"
 
     command <<<
         set -euo pipefail
@@ -176,7 +188,7 @@ task Collect {
         geac collect \
             --input            ~{input_bam} \
             --reference        ~{reference_fasta} \
-            --output           ~{output_name} \
+            --output           ~{output_arg} \
             --read-type        ~{read_type} \
             --pipeline         ~{pipeline} \
             --min-base-qual    ~{min_base_qual} \
@@ -189,11 +201,13 @@ task Collect {
             ~{"--targets "          + targets} \
             ~{"--gene-annotations " + gene_annotations} \
             ~{"--region "           + region} \
-            --repeat-window ~{repeat_window}
+            --repeat-window ~{repeat_window} \
+            ~{if reads_output then "--reads-output" else ""}
     >>>
 
     output {
-        File parquet = output_name
+        File        locus_parquet  = locus_name
+        Array[File] reads_parquets = glob("*.reads.parquet")
     }
 
     runtime {

@@ -52,9 +52,17 @@ pub struct CollectArgs {
     #[arg(long)]
     pub batch: Option<String>,
 
-    /// Output Parquet file path
+    /// Output Parquet file path.
+    /// When --reads-output is also set, this path is used as a stem:
+    /// e.g. "sample.parquet" → "sample.locus.parquet" + "sample.reads.parquet".
     #[arg(short, long)]
     pub output: PathBuf,
+
+    /// Write per-read detail Parquet alongside the locus Parquet.
+    /// The output path is derived from --output by replacing the extension:
+    /// "sample.parquet" → "sample.locus.parquet" and "sample.reads.parquet".
+    #[arg(long)]
+    pub reads_output: bool,
 
     /// Read type: raw, simplex, or duplex
     #[arg(long, default_value = "duplex")]

@@ -75,6 +75,26 @@ Optional flags:
 | `--region` | whole genome | Restrict to a genomic region (e.g. `chr1:1-1000000`) |
 | `--threads` | 1 | Parallel processing threads |
 | `--progress-interval` | 30 | Seconds between progress reports to stderr |
+| `--reads-output` | off | Also write per-read detail Parquet (see below) |
+
+#### Per-read detail output (`--reads-output`)
+
+When `--reads-output` is set, `geac collect` writes two files instead of one:
+
+- `{stem}.locus.parquet` — the standard locus table (same schema as a regular run)
+- `{stem}.reads.parquet` — one row per alt-supporting read (fragment) at each locus
+
+For example, `--output SAMPLE_001.parquet --reads-output` produces:
+- `SAMPLE_001.locus.parquet`
+- `SAMPLE_001.reads.parquet`
+
+The reads table is linked to the locus table by `(sample_id, chrom, pos, alt_allele)`.
+
+**When to use:** filtering by family size (fgbio duplex reads), diagnosing end-of-read
+artefacts via `dist_from_read_end`, or read-level phasing (e.g. MNV detection).
+
+When `geac merge` is given a mix of `.locus.parquet` and `.reads.parquet` files, it routes
+them automatically: locus files → `alt_bases` table; reads files → `alt_reads` table.
 
 #### Read types and pipelines
 
@@ -102,7 +122,9 @@ substitutions on the same haplotype, e.g. `AG→TC` — are therefore split into
 SNV records, one per position. There is no way to distinguish a true MNV from two
 independent SNVs at neighbouring positions using only the locus table. Identifying MNVs
 requires read-level phasing: checking whether both substitutions appear on the same read.
-This is not currently implemented; it would require the per-read detail table (see TODO).
+This is not currently implemented in the Explorer. The per-read detail table (produced by
+`--reads-output`) provides the data needed: join the locus table to the reads table and
+check whether the same read supports substitutions at adjacent positions.
 
 #### Soft-clipped bases
 
@@ -140,9 +162,16 @@ geac merge --output cohort.duckdb samples/*.parquet
 ```
 
 Creates a DuckDB database with:
-- `alt_bases` — all per-sample alt base records
+- `alt_bases` — all per-sample locus records
 - `samples` — one-row-per-sample summary (n_alt_loci, total_alt_reads, n_positions, etc.)
 - Indices on `(chrom, pos)` and `sample_id` for fast queries
+
+If any `.reads.parquet` files are present in the input list (produced by `--reads-output`),
+`geac merge` also creates:
+- `alt_reads` — all per-read detail records, linked to `alt_bases` by `(sample_id, chrom, pos, alt_allele)`
+- Index on `(sample_id, chrom, pos, alt_allele)` for efficient joins
+
+Files are routed automatically by filename suffix — no extra flag is needed.
 
 The output file must not already exist (use a new path or delete the old file first).
 
@@ -210,6 +239,28 @@ Features:
     balance scatter, SNV count bar chart stacked by SBS6 substitution type, and SBS96
     heatmap (samples × 96 contexts, normalised by sample); click a sample row to focus
     all other views
+- **Per-read filters** (DuckDB only, requires `--reads-output`) — when an `alt_reads`
+  table is present, a "Per-read filters" section appears in the sidebar with three
+  range sliders, each with an include/exclude toggle:
+  - *Family size* — filter by fgbio `cD` tag (total molecules per consensus read).
+    Raising the minimum excludes singleton families that are likely PCR or sequencing
+    errors. If a locus's alt count drops to zero after filtering, the locus is removed
+    from the table entirely. This is the most useful filter for error-corrected data:
+    a variant that disappears when singletons are excluded is almost certainly noise;
+    one that holds up at family size ≥ 2 or 3 has stronger support.
+  - *Dist from read end* — filter by distance of the alt base from the end of the read.
+    Variants clustered near read ends are a common alignment artefact; raising the
+    lower bound removes these reads.
+  - *Mapping quality* — filter by per-read MAPQ. Excluding low-MAPQ reads removes
+    potential multi-mapping artefacts at repetitive loci.
+
+  When any per-read filter is active, `alt_count` and `vaf` are re-aggregated from
+  the reads table using only reads that pass the filters. An `original_vaf` column
+  is shown alongside `vaf` so you can see the pre-filter allele frequency for
+  comparison. Note that `ref_count`, `total_depth`, and strand/overlap columns are
+  not recomputed — they always reflect the full pileup. Per-read filters are best
+  used as an exploratory tool: do variants hold up under quality thresholds?
+
 - **IGV integration** — provide a manifest TSV (`sample_id`, `bam_path`) in the sidebar
   to enable "Download IGV session" buttons throughout the app. Downloads a zip containing
   `session.xml` (BAM tracks + BED track) and `positions.bed` (one row per unique locus).
@@ -242,7 +293,9 @@ SAMPLE_003	/local/path/to/SAMPLE_003.bam	/local/path/to/SAMPLE_003.bam.bai
 
 ## Schema
 
-Each Parquet file contains one row per alt allele observed at a locus.
+### Locus table (`*.locus.parquet` / `*.parquet`)
+
+Each file contains one row per alt allele observed at a locus.
 
 | Column | Type | Description |
 |---|---|---|
@@ -275,6 +328,26 @@ Each Parquet file contains one row per alt allele observed at a locus.
 | `str_period` | int32? | Period of shortest tandem repeat unit at locus (null if no STR detected) |
 | `str_len` | int32? | Total length of STR tract at locus (null if no STR detected) |
 | `trinuc_context` | string? | Trinucleotide context for SNVs, e.g. `A[C>T]G` (null for indels/MNVs) |
+
+### Reads table (`*.reads.parquet`)
+
+Produced when `--reads-output` is passed to `geac collect`. One row per alt-supporting
+fragment at a locus. Linked to the locus table by `(sample_id, chrom, pos, alt_allele)`.
+
+| Column | Type | Description |
+|---|---|---|
+| `sample_id` | string | Sample identifier |
+| `chrom` | string | Chromosome |
+| `pos` | int64 | 0-based position |
+| `alt_allele` | string | Alt allele (links to locus table) |
+| `dist_from_read_start` | int32 | 0-based index of the alt base within the read |
+| `dist_from_read_end` | int32 | Bases from the alt to the end of the read (`read_length - dist_from_read_start - 1`) |
+| `read_length` | int32 | Total length of the read in bases |
+| `ab_count` | int32? | fgbio `aD` tag: AB (top-strand) raw read count; null if tag absent |
+| `ba_count` | int32? | fgbio `bD` tag: BA (bottom-strand) raw read count; null if tag absent |
+| `family_size` | int32? | fgbio `cD` tag: total raw read count (`aD + bD` for duplex; sole count for simplex); null if tag absent |
+| `base_qual` | int32 | Base quality at the alt position |
+| `map_qual` | int32 | Mapping quality of the read |
 
 ## Docker
 
@@ -351,6 +424,7 @@ Three WDL 1.0 workflows are provided in `wdl/`:
 | `repeat_window` | Int | Bases each side of locus for homopolymer/STR scan (default: 10) |
 | `min_base_qual` | Int | Default: 1 |
 | `min_map_qual` | Int | Default: 20 |
+| `reads_output` | Boolean | Also write per-read detail Parquet (default: false) |
 | `threads` | Int | Default: 4 |
 | `memory_gb` | Int | Default: 8 |
 | `disk_gb` | Int | Default: 100 |
@@ -365,7 +439,7 @@ optional `variants_tsvs`, optional `vcfs` + `vcf_indices` (per-sample VCF annota
 Shared inputs applied to all samples: `reference_fasta`, `targets`, `gene_annotations`,
 `region`, `repeat_window`, `read_type`, `pipeline`, `min_base_qual`, `min_map_qual`, `threads`.
 
-Outputs: `parquets` (Array[File]) and `cohort_db` (File, the merged DuckDB).
+Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty when `reads_output=false`), and `cohort_db` (File, the merged DuckDB).
 
 ### `geac_merge.wdl` inputs
 

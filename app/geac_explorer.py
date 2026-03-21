@@ -46,6 +46,15 @@ except Exception as e:
     st.error(f"Could not open file: {e}")
     st.stop()
 
+# Detect whether an alt_reads table is available (only possible in DuckDB mode).
+_has_alt_reads = False
+if path.endswith(".duckdb"):
+    try:
+        con.execute("SELECT 1 FROM alt_reads LIMIT 1")
+        _has_alt_reads = True
+    except Exception:
+        _has_alt_reads = False
+
 # ── Summary stats ─────────────────────────────────────────────────────────────
 stats = con.execute(f"""
     SELECT
@@ -93,6 +102,12 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["min_depth"]          = 0
     st.session_state["max_depth"]          = 0
     st.session_state["limit_sel"]          = 100
+    st.session_state.pop("family_size_range", None)
+    st.session_state.pop("dist_from_end_range", None)
+    st.session_state.pop("map_qual_range", None)
+    st.session_state["fs_exclude_mode"]  = False
+    st.session_state["dfe_exclude_mode"] = False
+    st.session_state["mq_exclude_mode"]  = False
     st.rerun()
 
 chroms = con.execute(f"SELECT DISTINCT chrom FROM {table_expr} ORDER BY chrom").df()["chrom"].tolist()
@@ -155,6 +170,144 @@ max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, v
 _limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
 _limit_sel = st.sidebar.selectbox("Display limit (rows)", _limit_options, index=0, key="limit_sel")
 display_limit = None if _limit_sel == "All" else int(_limit_sel)
+
+# ── Per-read filters (only when alt_reads table is present) ───────────────────
+_reads_conditions = []
+if _has_alt_reads:
+    _reads_maxes = con.execute("""
+        SELECT
+            MAX(family_size),
+            COALESCE(MAX(dist_from_read_end), 300),
+            COALESCE(MAX(map_qual), 60)
+        FROM alt_reads
+    """).fetchone()
+    _fs_max_raw = _reads_maxes[0]   # None if all NULL
+    _dfe_max    = int(_reads_maxes[1])
+    _mq_max     = int(_reads_maxes[2])
+    _fs_has_data = _fs_max_raw is not None
+    _fs_max = int(_fs_max_raw) if _fs_has_data else 0
+
+    st.sidebar.divider()
+    st.sidebar.subheader("Per-read filters")
+    st.sidebar.caption(
+        "When active, alt_count and VAF are re-computed from the reads table "
+        "using only reads that pass these filters. Loci with no passing reads are excluded."
+    )
+
+    if _fs_has_data:
+        _fs_slider_col, _fs_toggle_col = st.sidebar.columns([3, 1])
+        with _fs_slider_col:
+            family_size_range = st.slider(
+                "Family size range",
+                min_value=0, max_value=_fs_max, value=(0, _fs_max), step=1,
+                key="family_size_range",
+                help="family_size = cD tag (total raw read count per molecule).",
+            )
+        with _fs_toggle_col:
+            st.write("Mode")
+            fs_exclude_mode = st.toggle(
+                "Excl.",
+                key="fs_exclude_mode",
+                help="Off = include only reads within this range. "
+                     "On = exclude reads within this range (keep reads outside it).",
+            )
+    else:
+        family_size_range = (0, 0)
+        fs_exclude_mode = False
+        st.sidebar.caption("Family size unavailable — BAM has no fgbio cD tag.")
+
+    _dfe_slider_col, _dfe_toggle_col = st.sidebar.columns([3, 1])
+    with _dfe_slider_col:
+        dist_from_end_range = st.slider(
+            "Dist from read end",
+            min_value=0, max_value=_dfe_max, value=(0, _dfe_max), step=1,
+            key="dist_from_end_range",
+            help="Raise the lower bound to exclude reads clustered at read ends (a common artefact).",
+        )
+    with _dfe_toggle_col:
+        st.write("Mode")
+        dfe_exclude_mode = st.toggle(
+            "Excl.",
+            key="dfe_exclude_mode",
+            help="Off = include only reads within this range. "
+                 "On = exclude reads within this range (keep reads outside it).",
+        )
+
+    _mq_slider_col, _mq_toggle_col = st.sidebar.columns([3, 1])
+    with _mq_slider_col:
+        map_qual_range = st.slider(
+            "Mapping quality range",
+            min_value=0, max_value=_mq_max, value=(0, _mq_max), step=1,
+            key="map_qual_range",
+            help="Filter alt-supporting reads by mapping quality (MAPQ).",
+        )
+    with _mq_toggle_col:
+        st.write("Mode")
+        mq_exclude_mode = st.toggle(
+            "Excl.",
+            key="mq_exclude_mode",
+            help="Off = include only reads within this range. "
+                 "On = exclude reads within this range (keep reads outside it).",
+        )
+
+    _fs_lo, _fs_hi = family_size_range
+    _dfe_lo, _dfe_hi = dist_from_end_range
+    _mq_lo, _mq_hi = map_qual_range
+
+    if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
+        if fs_exclude_mode:
+            _reads_conditions.append(
+                f"(family_size IS NULL OR family_size < {_fs_lo} OR family_size > {_fs_hi})"
+            )
+        else:
+            _reads_conditions.append(f"family_size BETWEEN {_fs_lo} AND {_fs_hi}")
+
+    if _dfe_lo > 0 or _dfe_hi < _dfe_max:
+        if dfe_exclude_mode:
+            _reads_conditions.append(
+                f"(dist_from_read_end < {_dfe_lo} OR dist_from_read_end > {_dfe_hi})"
+            )
+        else:
+            _reads_conditions.append(f"dist_from_read_end BETWEEN {_dfe_lo} AND {_dfe_hi}")
+
+    if _mq_lo > 0 or _mq_hi < _mq_max:
+        if mq_exclude_mode:
+            _reads_conditions.append(
+                f"(map_qual < {_mq_lo} OR map_qual > {_mq_hi})"
+            )
+        else:
+            _reads_conditions.append(f"map_qual BETWEEN {_mq_lo} AND {_mq_hi}")
+else:
+    family_size_range = (0, 0)
+    dist_from_end_range = (0, 0)
+    map_qual_range = (0, 0)
+    fs_exclude_mode = False
+    dfe_exclude_mode = False
+    mq_exclude_mode = False
+    _fs_lo = _fs_hi = _dfe_lo = _dfe_hi = _mq_lo = _mq_hi = 0
+
+# When per-read filters are active, redefine table_expr as a JOIN subquery that
+# replaces alt_count with the filtered fragment count. Every downstream query
+# (counts, VAF, plots, IGV, drill-down) automatically sees the re-aggregated values.
+_reads_active = bool(_reads_conditions)
+if _reads_active:
+    _reads_where = " AND ".join(_reads_conditions)
+    table_expr = f"""(
+        SELECT
+            ab.* EXCLUDE (alt_count),
+            ar_agg.filtered_alt_count AS alt_count,
+            ROUND(ab.alt_count * 1.0 / ab.total_depth, 4) AS original_vaf
+        FROM alt_bases ab
+        INNER JOIN (
+            SELECT sample_id, chrom, pos, alt_allele, COUNT(*) AS filtered_alt_count
+            FROM alt_reads
+            WHERE {_reads_where}
+            GROUP BY sample_id, chrom, pos, alt_allele
+        ) ar_agg ON ab.sample_id = ar_agg.sample_id
+                 AND ab.chrom = ar_agg.chrom
+                 AND ab.pos = ar_agg.pos
+                 AND ab.alt_allele = ar_agg.alt_allele
+    )"""
 
 # ── IGV integration (sidebar) ─────────────────────────────────────────────────
 st.sidebar.divider()
@@ -535,11 +688,29 @@ cap_msg = (
 )
 st.info(f"**{total_count:,}** records{cap_msg}")
 
+if _reads_active:
+    _active_parts = []
+    if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
+        _mode = "excluding" if fs_exclude_mode else "including only"
+        _active_parts.append(f"family size: {_mode} {_fs_lo}–{_fs_hi}")
+    if _dfe_lo > 0 or _dfe_hi < _dfe_max:
+        _mode = "excluding" if dfe_exclude_mode else "including only"
+        _active_parts.append(f"dist from read end: {_mode} {_dfe_lo}–{_dfe_hi}")
+    if _mq_lo > 0 or _mq_hi < _mq_max:
+        _mode = "excluding" if mq_exclude_mode else "including only"
+        _active_parts.append(f"map qual: {_mode} {_mq_lo}–{_mq_hi}")
+    st.warning(
+        f"**Per-read filters active** ({'; '.join(_active_parts)}). "
+        "alt_count and VAF are re-aggregated from reads passing the filter. "
+        "original_vaf shows the unfiltered VAF for comparison. "
+        "ref_count, total_depth, and strand/overlap columns still reflect unfiltered locus-level values."
+    )
+
 # ── Data table ────────────────────────────────────────────────────────────────
 _table_cols = [
     c for c in [
         "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
-        "variant_type", "vaf", "alt_count", "ref_count", "total_depth",
+        "variant_type", "vaf", *( ["original_vaf"] if _reads_active else []), "alt_count", "ref_count", "total_depth",
         "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
         "overlap_alt_disagree", "variant_called", "variant_filter", "on_target", "gene",
     ]
@@ -616,6 +787,50 @@ if _selected_rows:
         _drill_df,
         key=f"drill_{_chrom}_{_pos}",
     )
+
+    # ── Per-read detail (only when alt_reads table is present) ────────────────
+    if _has_alt_reads:
+        _reads_df = con.execute(f"""
+            SELECT
+                sample_id,
+                alt_allele,
+                dist_from_read_start,
+                dist_from_read_end,
+                read_length,
+                ab_count,
+                ba_count,
+                family_size,
+                base_qual,
+                map_qual
+            FROM alt_reads
+            WHERE chrom = '{_chrom}' AND pos = {_pos}
+            ORDER BY sample_id, alt_allele, family_size DESC NULLS LAST
+        """).df()
+
+        if _reads_df.empty:
+            st.caption("No per-read detail available for this locus.")
+        else:
+            st.markdown(f"**Per-read detail** — {len(_reads_df):,} alt-supporting reads across {_reads_df['sample_id'].nunique()} sample(s)")
+
+            _reads_summary = (
+                _reads_df
+                .groupby(["sample_id", "alt_allele"])
+                .agg(
+                    n_reads=("dist_from_read_end", "count"),
+                    median_dist_from_end=("dist_from_read_end", "median"),
+                    median_family_size=("family_size", "median"),
+                    min_family_size=("family_size", "min"),
+                    max_family_size=("family_size", "max"),
+                    mean_base_qual=("base_qual", "mean"),
+                )
+                .reset_index()
+                .round(1)
+            )
+            st.caption("Summary by sample / allele")
+            st.dataframe(_reads_summary, use_container_width=True, hide_index=True)
+
+            with st.expander("Individual reads"):
+                st.dataframe(_reads_df, use_container_width=True, hide_index=True)
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab_cohort = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort"])

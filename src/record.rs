@@ -122,3 +122,29 @@ pub struct AltBase {
     // Null for indels or when the locus is at a chromosome boundary.
     pub trinuc_context: Option<String>,
 }
+
+/// One record per alt-supporting read at a locus.
+/// Linked to AltBase by (sample_id, chrom, pos, alt_allele).
+/// Positions are 0-based.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AltRead {
+    pub sample_id: String,
+    pub chrom: String,
+    /// 0-based position
+    pub pos: i64,
+    pub alt_allele: String,
+    /// 0-based index of the alt base within the read
+    pub dist_from_read_start: i32,
+    /// Distance from the alt base to the end of the read (read_length - dist_from_read_start - 1)
+    pub dist_from_read_end: i32,
+    pub read_length: i32,
+    /// fgbio aD tag: AB (top-strand) raw read count; None if tag absent
+    pub ab_count: Option<i32>,
+    /// fgbio bD tag: BA (bottom-strand) raw read count; None if tag absent
+    pub ba_count: Option<i32>,
+    /// fgbio cD tag: total raw read count (aD + bD for duplex; sole count for simplex).
+    /// This is the primary family size field — present for both simplex and duplex data.
+    pub family_size: Option<i32>,
+    pub base_qual: i32,
+    pub map_qual: i32,
+}
