@@ -52,6 +52,8 @@ RUN apt-get -o Acquire::Check-Valid-Until=false update && apt-get install -y \
     zlib1g \
     libssl3 \
     libdeflate0 \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy htslib shared libraries from builder
@@ -61,4 +63,15 @@ RUN ldconfig
 # Copy the geac binary
 COPY --from=builder /build/target/release/geac /usr/local/bin/geac
 
-ENTRYPOINT ["geac"]
+# Install Python dependencies for the Explorer
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+
+# Copy the Explorer app
+COPY app/ /app/
+
+# Entrypoint script: "explorer" → streamlit, anything else → geac
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

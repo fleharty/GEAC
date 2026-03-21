@@ -833,7 +833,7 @@ if _selected_rows:
                 st.dataframe(_reads_df, use_container_width=True, hide_index=True)
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab_cohort = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort"])
+tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_sig_cmp = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort", "Reads", "Sig. Comparison (Exp.)"])
 
 with tab1:
     for vtype, color in [
@@ -926,6 +926,77 @@ def _sbs_label(trinuc_context, ref_allele, alt_allele):
     return f"{ctx[0]}[{r}>{a}]{ctx[2]}"
 
 
+_SBS_ETIOLOGY = {
+    # Age / endogenous
+    "SBS1":  "Age-related CpG deamination (5-methylcytosine → T)",
+    "SBS5":  "Age-related, unknown mechanism",
+    # APOBEC
+    "SBS2":  "APOBEC (C>T at TC context)",
+    "SBS13": "APOBEC (C>G at TC context)",
+    # Mismatch repair deficiency / MSI
+    "SBS6":  "Mismatch repair deficiency (MMRd/MSI)",
+    "SBS14": "MMRd + POLE mutation",
+    "SBS15": "Mismatch repair deficiency (MMRd/MSI)",
+    "SBS20": "Mismatch repair deficiency (MMRd/MSI)",
+    "SBS21": "Mismatch repair deficiency (MMRd/MSI)",
+    "SBS26": "Mismatch repair deficiency (MMRd/MSI)",
+    "SBS44": "Mismatch repair deficiency (MMRd/MSI)",
+    # POLE / proofreading
+    "SBS10a": "POLE proofreading exonuclease mutation",
+    "SBS10b": "POLE proofreading exonuclease mutation",
+    "SBS10c": "POLD1 proofreading mutation",
+    "SBS10d": "POLD1 proofreading mutation",
+    "SBS28": "POLE mutation (mechanism unclear)",
+    # UV light
+    "SBS7a": "UV light (C>T at dipyrimidines)",
+    "SBS7b": "UV light (C>T at dipyrimidines)",
+    "SBS7c": "UV light",
+    "SBS7d": "UV light",
+    # Tobacco / smoking
+    "SBS4":  "Tobacco smoking (BPDE adducts, C>A)",
+    "SBS29": "Tobacco chewing",
+    # Chemotherapy
+    "SBS25": "Chemotherapy (mechanism unclear)",
+    "SBS31": "Platinum chemotherapy",
+    "SBS35": "Platinum chemotherapy",
+    "SBS86": "Chemotherapy (unknown agent)",
+    "SBS87": "Thiopurine chemotherapy",
+    # Environmental carcinogens
+    "SBS22": "Aristolochic acid exposure",
+    "SBS24": "Aflatoxin exposure",
+    # HR deficiency
+    "SBS3":  "Homologous recombination deficiency (BRCA1/2)",
+    # Oxidative damage / sequencing artifacts
+    "SBS18": "Oxidative damage (8-oxoG, C>A)",
+    "SBS36": "Base excision repair deficiency (MUTYH)",
+    "SBS58": "Oxidative damage artifact (8-oxoG) — common sequencing artifact",
+    # Other / tissue-specific
+    "SBS8":  "Unknown — late replication timing",
+    "SBS9":  "Polymerase η somatic hypermutation",
+    "SBS11": "Temozolomide chemotherapy",
+    "SBS16": "Unknown — liver-specific, associated with alcohol",
+    "SBS17a": "Unknown — esophageal/gastric enrichment (T>G)",
+    "SBS17b": "Unknown — esophageal/gastric enrichment (T>G)",
+    "SBS19": "Unknown",
+    "SBS23": "Unknown",
+    "SBS30": "Base excision repair deficiency (NTHL1)",
+    "SBS33": "Unknown",
+    "SBS34": "Unknown",
+    "SBS37": "Unknown",
+    "SBS38": "Indirect UV damage",
+    "SBS39": "Unknown",
+    "SBS40": "Unknown — age-related",
+    "SBS41": "Unknown",
+    "SBS84": "AID activity (immune/lymphoid)",
+    "SBS85": "AID activity (immune/lymphoid)",
+}
+
+
+@st.cache_data
+def _load_cosmic(p: str) -> pd.DataFrame:
+    return pd.read_csv(p, sep="\t", index_col=0)
+
+
 with tab2:
     _SBS_ORDER = [
         f"{b5}[{mt}]{b3}"
@@ -1012,72 +1083,6 @@ with tab2:
                         st.dataframe(sel[_table_cols], use_container_width=True)
                         igv_buttons([extra_cond], sel, key=f"sbs_{'_'.join(clicked_labels)}")
 
-            # ── COSMIC signature known-cause annotations ──────────────────────
-            _SBS_ETIOLOGY = {
-                # Age / endogenous
-                "SBS1":  "Age-related CpG deamination (5-methylcytosine → T)",
-                "SBS5":  "Age-related, unknown mechanism",
-                # APOBEC
-                "SBS2":  "APOBEC (C>T at TC context)",
-                "SBS13": "APOBEC (C>G at TC context)",
-                # Mismatch repair deficiency / MSI
-                "SBS6":  "Mismatch repair deficiency (MMRd/MSI)",
-                "SBS14": "MMRd + POLE mutation",
-                "SBS15": "Mismatch repair deficiency (MMRd/MSI)",
-                "SBS20": "Mismatch repair deficiency (MMRd/MSI)",
-                "SBS21": "Mismatch repair deficiency (MMRd/MSI)",
-                "SBS26": "Mismatch repair deficiency (MMRd/MSI)",
-                "SBS44": "Mismatch repair deficiency (MMRd/MSI)",
-                # POLE / proofreading
-                "SBS10a": "POLE proofreading exonuclease mutation",
-                "SBS10b": "POLE proofreading exonuclease mutation",
-                "SBS10c": "POLD1 proofreading mutation",
-                "SBS10d": "POLD1 proofreading mutation",
-                "SBS28": "POLE mutation (mechanism unclear)",
-                # UV light
-                "SBS7a": "UV light (C>T at dipyrimidines)",
-                "SBS7b": "UV light (C>T at dipyrimidines)",
-                "SBS7c": "UV light",
-                "SBS7d": "UV light",
-                # Tobacco / smoking
-                "SBS4":  "Tobacco smoking (BPDE adducts, C>A)",
-                "SBS29": "Tobacco chewing",
-                # Chemotherapy
-                "SBS25": "Chemotherapy (mechanism unclear)",
-                "SBS31": "Platinum chemotherapy",
-                "SBS35": "Platinum chemotherapy",
-                "SBS86": "Chemotherapy (unknown agent)",
-                "SBS87": "Thiopurine chemotherapy",
-                # Environmental carcinogens
-                "SBS22": "Aristolochic acid exposure",
-                "SBS24": "Aflatoxin exposure",
-                # HR deficiency
-                "SBS3":  "Homologous recombination deficiency (BRCA1/2)",
-                # Oxidative damage / sequencing artifacts
-                "SBS18": "Oxidative damage (8-oxoG, C>A)",
-                "SBS36": "Base excision repair deficiency (MUTYH)",
-                "SBS58": "Oxidative damage artifact (8-oxoG) — common sequencing artifact",
-                # Other / tissue-specific
-                "SBS8":  "Unknown — late replication timing",
-                "SBS9":  "Polymerase η somatic hypermutation",
-                "SBS11": "Temozolomide chemotherapy",
-                "SBS16": "Unknown — liver-specific, associated with alcohol",
-                "SBS17a": "Unknown — esophageal/gastric enrichment (T>G)",
-                "SBS17b": "Unknown — esophageal/gastric enrichment (T>G)",
-                "SBS19": "Unknown",
-                "SBS23": "Unknown",
-                "SBS30": "Base excision repair deficiency (NTHL1)",
-                "SBS33": "Unknown",
-                "SBS34": "Unknown",
-                "SBS37": "Unknown",
-                "SBS38": "Indirect UV damage",
-                "SBS39": "Unknown",
-                "SBS40": "Unknown — age-related",
-                "SBS41": "Unknown",
-                "SBS84": "AID activity (immune/lymphoid)",
-                "SBS85": "AID activity (immune/lymphoid)",
-            }
-
             # ── COSMIC signature decomposition (NNLS) ─────────────────────────
             st.divider()
             st.subheader("COSMIC Signature Decomposition")
@@ -1093,11 +1098,6 @@ with tab2:
                 placeholder="/path/to/COSMIC_v3.4_SBS_GRCh37.txt",
                 key="cosmic_path",
             )
-
-            @st.cache_data
-            def _load_cosmic(p: str) -> pd.DataFrame:
-                df_c = pd.read_csv(p, sep="\t", index_col=0)
-                return df_c
 
             if cosmic_path and cosmic_path.strip():
                 try:
@@ -1750,3 +1750,646 @@ with tab_cohort:
                         "Color = fraction of that sample's SNVs falling in each trinucleotide context. "
                         "Contexts ordered by mutation type (C>A, C>G, C>T, T>A, T>C, T>G) then flanking bases."
                     )
+
+with tab_reads:
+    if not _has_alt_reads:
+        st.info(
+            "Per-read detail table not available. "
+            "Re-run `geac collect` with `--reads-output` and merge the resulting "
+            "`.reads.parquet` files to enable this tab."
+        )
+    else:
+        st.caption(
+            "All plots reflect alt-supporting reads linked to loci that pass the current sidebar filters."
+        )
+
+        # Build a subquery that joins alt_reads to the current filtered locus set.
+        # This ensures all reads plots respect the active locus-level filters.
+        _r_join = f"""
+            alt_reads ar
+            INNER JOIN (
+                SELECT DISTINCT sample_id, chrom, pos, alt_allele
+                FROM {table_expr}
+                WHERE {where}
+            ) _filt
+            ON  ar.sample_id  = _filt.sample_id
+            AND ar.chrom      = _filt.chrom
+            AND ar.pos        = _filt.pos
+            AND ar.alt_allele = _filt.alt_allele
+        """
+
+        # ── Row 1: Family size histogram + Read position bias ─────────────────
+        _r_col1, _r_col2 = st.columns(2)
+
+        with _r_col1:
+            st.subheader("Family size distribution")
+            _fs_ctrl_col1, _fs_ctrl_col2 = st.columns(2)
+            _fs_color_by = _fs_ctrl_col1.radio(
+                "Color by", ["All samples (aggregate)", "Sample"],
+                horizontal=True, key="fs_color_by",
+            )
+            _fs_y_mode = _fs_ctrl_col2.radio(
+                "Y axis", ["Count", "Fraction"],
+                horizontal=True, key="fs_y_mode",
+            )
+            _fs_by_sample = _fs_color_by == "Sample"
+            _fs_normalize = _fs_y_mode == "Fraction"
+            _fs_df = con.execute(f"""
+                SELECT {'ar.sample_id,' if _fs_by_sample else ''}
+                    ar.family_size, COUNT(*) AS n_reads
+                FROM {_r_join}
+                WHERE ar.family_size IS NOT NULL
+                GROUP BY {'ar.sample_id,' if _fs_by_sample else ''} ar.family_size
+                ORDER BY {'ar.sample_id,' if _fs_by_sample else ''} ar.family_size
+            """).df()
+
+            if _fs_df.empty:
+                st.info("No family size data (fgbio cD tag absent in this dataset).")
+            else:
+                if _fs_normalize:
+                    if _fs_by_sample:
+                        _fs_df["y_val"] = _fs_df.groupby("sample_id")["n_reads"].transform(
+                            lambda x: x / x.sum()
+                        )
+                    else:
+                        _fs_df["y_val"] = _fs_df["n_reads"] / _fs_df["n_reads"].sum()
+                    _y_field = "y_val:Q"
+                    _y_title = "Fraction of alt-supporting reads"
+                    _y_fmt = ".3f"
+                else:
+                    _fs_df["y_val"] = _fs_df["n_reads"]
+                    _y_field = "y_val:Q"
+                    _y_title = "Alt-supporting reads"
+                    _y_fmt = "d"
+
+                _fs_enc = dict(
+                    x=alt.X("family_size:Q", title="Family size (cD tag)", bin=False),
+                    y=alt.Y(_y_field, title=_y_title),
+                    tooltip=[
+                        *( ["sample_id:N"] if _fs_by_sample else []),
+                        "family_size:Q",
+                        alt.Tooltip(_y_field, format=_y_fmt, title=_y_title),
+                    ],
+                )
+                if _fs_by_sample:
+                    _fs_enc["color"] = alt.Color("sample_id:N", scale=alt.Scale(scheme="tableau10"))
+                    _fs_chart = (
+                        alt.Chart(_fs_df)
+                        .mark_line(point=True, opacity=0.8)
+                        .encode(**_fs_enc)
+                        .properties(height=300)
+                    )
+                else:
+                    _fs_chart = (
+                        alt.Chart(_fs_df)
+                        .mark_line(point=True, color="#4c78a8")
+                        .encode(**_fs_enc)
+                        .properties(height=300)
+                    )
+                st.altair_chart(_fs_chart, use_container_width=True)
+                st.caption(
+                    "Artefacts are enriched in singletons (family_size = 1). "
+                    "Fraction mode normalizes each sample independently, allowing shape comparison across samples with different read counts."
+                )
+
+        with _r_col2:
+            st.subheader("Read position bias")
+            _dfe_df = con.execute(f"""
+                SELECT dist_from_read_end, COUNT(*) AS n_reads
+                FROM {_r_join}
+                GROUP BY dist_from_read_end
+                ORDER BY dist_from_read_end
+            """).df()
+
+            if _dfe_df.empty:
+                st.info("No data.")
+            else:
+                _dfe_chart = (
+                    alt.Chart(_dfe_df)
+                    .mark_bar(color="#f58518")
+                    .encode(
+                        alt.X("dist_from_read_end:Q", title="Distance from read end (bp)", bin=False),
+                        alt.Y("n_reads:Q", title="Alt-supporting reads"),
+                        alt.Tooltip(["dist_from_read_end:Q", "n_reads:Q"]),
+                    )
+                    .properties(height=300)
+                )
+                st.altair_chart(_dfe_chart, use_container_width=True)
+                st.caption(
+                    "A spike near 0 is a red flag for alignment artefacts or damaged bases at read ends."
+                )
+
+        # ── Row 2: Base qual vs dist from read end scatter ────────────────────
+        st.subheader("Mean base quality by distance from read end")
+        _bq_df = con.execute(f"""
+            SELECT
+                ar.sample_id,
+                ar.dist_from_read_end,
+                ROUND(AVG(ar.base_qual), 2) AS mean_base_qual,
+                COUNT(*) AS n_reads
+            FROM {_r_join}
+            GROUP BY ar.sample_id, ar.dist_from_read_end
+            ORDER BY ar.sample_id, ar.dist_from_read_end
+        """).df()
+
+        if _bq_df.empty:
+            st.info("No data.")
+        else:
+            _bq_chart = (
+                alt.Chart(_bq_df)
+                .mark_line(point=True, opacity=0.8)
+                .encode(
+                    alt.X("dist_from_read_end:Q", title="Distance from read end (bp)"),
+                    alt.Y("mean_base_qual:Q", title="Mean base quality (Phred)",
+                          scale=alt.Scale(zero=False)),
+                    alt.Color("sample_id:N", title="Sample",
+                              scale=alt.Scale(scheme="tableau10")),
+                    tooltip=[
+                        alt.Tooltip("sample_id:N"),
+                        alt.Tooltip("dist_from_read_end:Q", title="Dist from read end"),
+                        alt.Tooltip("mean_base_qual:Q", format=".1f", title="Mean base qual"),
+                        alt.Tooltip("n_reads:Q", title="Reads"),
+                    ],
+                )
+                .properties(height=350)
+            )
+            st.altair_chart(_bq_chart, use_container_width=True)
+            st.caption(
+                "A drop in mean base quality near read ends (low dist_from_read_end) "
+                "indicates that alt-supporting reads at those positions may be artefacts."
+            )
+
+        # ── Row 3: Family size vs VAF per locus ───────────────────────────────
+        st.subheader("Family size vs VAF (per locus)")
+        _fsvaf_df = con.execute(f"""
+            SELECT
+                ab.sample_id,
+                ab.chrom,
+                ab.pos,
+                ab.alt_allele,
+                ROUND(ab.alt_count * 1.0 / ab.total_depth, 4) AS vaf,
+                AVG(ar.family_size) AS mean_family_size,
+                COUNT(*)            AS n_reads
+            FROM {table_expr} ab
+            INNER JOIN alt_reads ar
+                ON  ab.sample_id  = ar.sample_id
+                AND ab.chrom      = ar.chrom
+                AND ab.pos        = ar.pos
+                AND ab.alt_allele = ar.alt_allele
+            WHERE {where} AND ar.family_size IS NOT NULL
+            GROUP BY ab.sample_id, ab.chrom, ab.pos, ab.alt_allele, ab.alt_count, ab.total_depth
+        """).df()
+
+        if _fsvaf_df.empty:
+            st.info("No data with family size available for the current selection.")
+        else:
+            _fsvaf_plot_df = (
+                _fsvaf_df
+                .sort_values(["sample_id", "chrom", "pos", "alt_allele"])
+                .head(3000)
+                .reset_index(drop=True)
+            )
+            _fsvaf_chart = (
+                alt.Chart(_fsvaf_plot_df)
+                .mark_point(filled=True, size=60)
+                .encode(
+                    alt.X("mean_family_size:Q", title="Mean family size of alt reads"),
+                    alt.Y("vaf:Q", title="VAF", scale=alt.Scale(domain=[0, 1])),
+                    alt.Color("sample_id:N", title="Sample",
+                              scale=alt.Scale(scheme="tableau10")),
+                    tooltip=[
+                        alt.Tooltip("sample_id:N"),
+                        alt.Tooltip("chrom:N"),
+                        alt.Tooltip("pos:Q"),
+                        alt.Tooltip("alt_allele:N"),
+                        alt.Tooltip("vaf:Q", format=".4f"),
+                        alt.Tooltip("mean_family_size:Q", format=".1f", title="Mean family size"),
+                        alt.Tooltip("n_reads:Q", title="Alt reads"),
+                    ],
+                )
+                .properties(height=350)
+            )
+            st.altair_chart(_fsvaf_chart, use_container_width=True)
+            st.caption(
+                "True low-VAF variants should have reasonable mean family sizes. "
+                "Artefacts at low VAF tend to cluster at low family size."
+            )
+
+        # ── Row 4: Mapping quality distribution ───────────────────────────────
+        st.subheader("Mapping quality distribution")
+        _mq_df = con.execute(f"""
+            SELECT
+                map_qual,
+                CASE
+                    WHEN homopolymer_len >= 5 OR str_len >= 6 THEN 'Repetitive'
+                    ELSE 'Non-repetitive'
+                END AS locus_type,
+                COUNT(*) AS n_reads
+            FROM {_r_join}
+            INNER JOIN (
+                SELECT DISTINCT sample_id, chrom, pos, alt_allele,
+                    COALESCE(homopolymer_len, 0) AS homopolymer_len,
+                    COALESCE(str_len, 0) AS str_len
+                FROM {table_expr}
+                WHERE {where}
+            ) _locus ON  ar.sample_id  = _locus.sample_id
+                     AND ar.chrom      = _locus.chrom
+                     AND ar.pos        = _locus.pos
+                     AND ar.alt_allele = _locus.alt_allele
+            GROUP BY map_qual, locus_type
+            ORDER BY map_qual
+        """).df()
+
+        if _mq_df.empty:
+            st.info("No data.")
+        else:
+            _mq_chart = (
+                alt.Chart(_mq_df)
+                .mark_bar(opacity=0.7)
+                .encode(
+                    alt.X("map_qual:Q", title="Mapping quality (MAPQ)", bin=False),
+                    alt.Y("n_reads:Q", title="Alt-supporting reads", stack="zero"),
+                    alt.Color("locus_type:N", title="Locus type",
+                              scale=alt.Scale(
+                                  domain=["Repetitive", "Non-repetitive"],
+                                  range=["#e45756", "#4c78a8"],
+                              )),
+                    alt.Tooltip(["map_qual:Q", "locus_type:N", "n_reads:Q"]),
+                )
+                .properties(height=300)
+            )
+            st.altair_chart(_mq_chart, use_container_width=True)
+            st.caption(
+                "Stacked by locus type (repetitive = homopolymer ≥ 5 or STR length ≥ 6). "
+                "Low MAPQ at repetitive loci indicates multi-mapping artefacts."
+            )
+
+        # ── Row 5: Cohort artefact family size comparison (DuckDB only) ───────
+        if path.endswith(".duckdb"):
+            st.subheader("Cohort artefact vs rare variant: family size comparison")
+            _n_samples_total = con.execute(
+                f"SELECT COUNT(DISTINCT sample_id) FROM {table_expr} WHERE {where}"
+            ).fetchone()[0]
+
+            if _n_samples_total < 2:
+                st.info("Need at least 2 samples for cohort artefact comparison.")
+            else:
+                _cohort_fs_df = con.execute(f"""
+                    WITH locus_counts AS (
+                        SELECT chrom, pos, alt_allele,
+                               COUNT(DISTINCT sample_id) AS n_samples_with_alt
+                        FROM {table_expr}
+                        WHERE {where}
+                        GROUP BY chrom, pos, alt_allele
+                    )
+                    SELECT
+                        CASE
+                            WHEN lc.n_samples_with_alt = 1 THEN 'Seen in 1 sample'
+                            WHEN lc.n_samples_with_alt <= 3 THEN 'Seen in 2–3 samples'
+                            ELSE 'Seen in 4+ samples'
+                        END AS cohort_freq,
+                        ar.family_size
+                    FROM alt_reads ar
+                    INNER JOIN (
+                        SELECT DISTINCT sample_id, chrom, pos, alt_allele
+                        FROM {table_expr}
+                        WHERE {where}
+                    ) _filt ON  ar.sample_id  = _filt.sample_id
+                             AND ar.chrom      = _filt.chrom
+                             AND ar.pos        = _filt.pos
+                             AND ar.alt_allele = _filt.alt_allele
+                    INNER JOIN locus_counts lc
+                        ON  ar.chrom      = lc.chrom
+                        AND ar.pos        = lc.pos
+                        AND ar.alt_allele = lc.alt_allele
+                    WHERE ar.family_size IS NOT NULL
+                """).df()
+
+                if _cohort_fs_df.empty:
+                    st.info("No family size data for cohort comparison.")
+                else:
+                    _cf_order = ["Seen in 1 sample", "Seen in 2–3 samples", "Seen in 4+ samples"]
+                    _cf_chart = (
+                        alt.Chart(_cohort_fs_df)
+                        .mark_boxplot(extent="min-max")
+                        .encode(
+                            alt.X("cohort_freq:N", title="Cohort frequency",
+                                  sort=_cf_order),
+                            alt.Y("family_size:Q", title="Family size",
+                                  scale=alt.Scale(zero=True)),
+                            alt.Color("cohort_freq:N", legend=None,
+                                      scale=alt.Scale(scheme="tableau10")),
+                        )
+                        .properties(height=300)
+                    )
+                    st.altair_chart(_cf_chart, use_container_width=True)
+                    st.caption(
+                        "Cohort artefacts (seen in many samples) tend to have lower family sizes "
+                        "than rare variants, confirming they are sequencing noise rather than "
+                        "recurrent true variants."
+                    )
+
+# ── Sig. Comparison (Experimental) tab ───────────────────────────────────────
+with tab_sig_cmp:
+    st.subheader("Called vs Uncalled: Trinucleotide Spectrum & COSMIC Signatures")
+    st.caption(
+        "**Experimental.** Compares the SBS96 trinucleotide spectrum and COSMIC signature "
+        "exposures between loci where a variant was called (variant_called = true) and "
+        "where it was not (variant_called = false). "
+        "Requires trinuc_context and variant_called columns."
+    )
+
+    if not _has_data("trinuc_context"):
+        st.info("trinuc_context column not present — re-run geac collect with a gene annotation or reference FASTA.")
+    elif not _has_data("variant_called"):
+        st.info("variant_called column not present — provide a variants TSV or VCF when running geac collect.")
+    else:
+        def _build_spectrum(called_val):
+            """Return (96-element count array, total_count) for one variant_called group."""
+            _raw = con.execute(f"""
+                SELECT trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
+                FROM {table_expr}
+                WHERE {where}
+                  AND variant_type = 'SNV'
+                  AND trinuc_context IS NOT NULL
+                  AND length(trinuc_context) = 3
+                  AND variant_called IS {'TRUE' if called_val else 'FALSE'}
+                GROUP BY trinuc_context, ref_allele, alt_allele
+            """).df()
+
+            if _raw.empty:
+                return np.zeros(96, dtype=float), 0
+
+            _raw["sbs_label"] = _raw.apply(
+                lambda row: _sbs_label(row["trinuc_context"], row["ref_allele"], row["alt_allele"]),
+                axis=1,
+            )
+            _raw = _raw.dropna(subset=["sbs_label"])
+            _agg = _raw.groupby("sbs_label", as_index=False)["count"].sum()
+            _obs = (
+                pd.Series(0, index=_SBS_ORDER, dtype=float)
+                .add(_agg.set_index("sbs_label")["count"], fill_value=0)
+                .reindex(_SBS_ORDER)
+                .values.astype(float)
+            )
+            return _obs, int(_obs.sum())
+
+        _obs_called,   _n_called   = _build_spectrum(True)
+        _obs_uncalled, _n_uncalled = _build_spectrum(False)
+
+        if _n_called == 0 and _n_uncalled == 0:
+            st.info("No SNVs with trinucleotide context found in either group.")
+        else:
+            # ── Trinucleotide spectrum comparison ─────────────────────────────
+            st.subheader("Trinucleotide mutation spectrum")
+
+            def _make_spec96_df(obs_arr, label, n_total):
+                """Convert a 96-element count array to a plottable DataFrame with fractions."""
+                df_s = pd.DataFrame({
+                    "sbs_label": _SBS_ORDER,
+                    "mut_type":  [lbl[2:5] for lbl in _SBS_ORDER],
+                    "count":     obs_arr.astype(int),
+                    "group":     label,
+                })
+                df_s["fraction"] = df_s["count"] / n_total if n_total > 0 else 0.0
+                return df_s
+
+            _spec_called   = _make_spec96_df(_obs_called,   f"Called (n={_n_called:,})",   _n_called)
+            _spec_uncalled = _make_spec96_df(_obs_uncalled, f"Uncalled (n={_n_uncalled:,})", _n_uncalled)
+
+            def _sbs96_chart(df_s, title):
+                _sub_charts = []
+                for _mt in _SBS_MUT_TYPES:
+                    _sub = df_s[df_s["mut_type"] == _mt].copy()
+                    _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+                    _c = (
+                        alt.Chart(_sub)
+                        .mark_bar(color=_SBS_COLORS[_mt])
+                        .encode(
+                            alt.X("sbs_label:N", sort=_order, title=None,
+                                  axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
+                            alt.Y("fraction:Q", title="Fraction",
+                                  axis=alt.Axis(format=".0%")),
+                            tooltip=[
+                                alt.Tooltip("sbs_label:N", title="Context"),
+                                alt.Tooltip("count:Q", title="Count"),
+                                alt.Tooltip("fraction:Q", format=".2%", title="Fraction"),
+                            ],
+                        )
+                        .properties(
+                            title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt], fontSize=11, fontWeight="bold"),
+                            width=130, height=110,
+                        )
+                    )
+                    _sub_charts.append(_c)
+                return (
+                    alt.concat(*_sub_charts, columns=3)
+                    .resolve_scale(y="shared")
+                    .properties(title=alt.TitleParams(title, fontSize=13))
+                )
+
+            # Option 1 — stacked (original, kept for reference)
+            with st.expander("Option 1: Stacked (original)", expanded=False):
+                st.altair_chart(
+                    _sbs96_chart(_spec_called, f"Called variants (n={_n_called:,})"),
+                    use_container_width=True,
+                )
+                st.altair_chart(
+                    _sbs96_chart(_spec_uncalled, f"Uncalled loci (n={_n_uncalled:,})"),
+                    use_container_width=True,
+                )
+
+            st.divider()
+
+            # Option 2 — mirrored (butterfly) chart
+            st.markdown("**Option 2: Mirrored spectrum** — Called bars point up, Uncalled point down")
+            _m_df = pd.concat([
+                _spec_called.assign(y=_spec_called["fraction"],  group="Called"),
+                _spec_uncalled.assign(y=-_spec_uncalled["fraction"], group="Uncalled"),
+            ])
+            _mirror_sub = []
+            for _mt in _SBS_MUT_TYPES:
+                _sub = _m_df[_m_df["mut_type"] == _mt]
+                _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+                _c = (
+                    alt.Chart(_sub)
+                    .mark_bar()
+                    .encode(
+                        alt.X("sbs_label:N", sort=_order, title=None,
+                              axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
+                        alt.Y("y:Q", axis=alt.Axis(format=".0%"),
+                              title="← Uncalled | Called →"),
+                        alt.Color("group:N",
+                                  scale=alt.Scale(
+                                      domain=["Called", "Uncalled"],
+                                      range=["#4c78a8", "#e45756"],
+                                  ),
+                                  legend=alt.Legend(orient="bottom")),
+                        tooltip=[
+                            alt.Tooltip("sbs_label:N", title="Context"),
+                            alt.Tooltip("group:N"),
+                            alt.Tooltip("fraction:Q", format=".2%", title="Fraction"),
+                            alt.Tooltip("count:Q", title="Count"),
+                        ],
+                    )
+                    .properties(
+                        title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt], fontSize=11, fontWeight="bold"),
+                        width=130, height=150,
+                    )
+                )
+                _mirror_sub.append(_c)
+            st.altair_chart(
+                alt.concat(*_mirror_sub, columns=3)
+                .resolve_scale(y="shared")
+                .properties(title=alt.TitleParams(
+                    f"Called (n={_n_called:,}) vs Uncalled (n={_n_uncalled:,}) — mirrored",
+                    fontSize=13,
+                )),
+                use_container_width=True,
+            )
+
+            st.divider()
+
+            # ── COSMIC decomposition ──────────────────────────────────────────
+            st.subheader("COSMIC signature decomposition")
+            _sc_cosmic_path = st.text_input(
+                "COSMIC SBS matrix path",
+                value=_cfg.get("cosmic", ""),
+                placeholder="/path/to/COSMIC_v3.4_SBS_GRCh37.txt",
+                key="sc_cosmic_path",
+            )
+
+            if not _sc_cosmic_path or not _sc_cosmic_path.strip():
+                st.info("Enter a COSMIC SBS matrix path above to run the decomposition.")
+            else:
+                try:
+                    _sc_cosmic_df = _load_cosmic(_sc_cosmic_path.strip())
+                    _sc_cosmic_aligned = _sc_cosmic_df.reindex(_SBS_ORDER)
+                    _sc_missing = _sc_cosmic_aligned.isna().any(axis=1).sum()
+
+                    if _sc_missing > 0:
+                        st.warning(
+                            f"{_sc_missing} context(s) not found in COSMIC matrix — "
+                            "check that the file uses the standard A[C>A]A format."
+                        )
+                    else:
+                        _sc_W = _sc_cosmic_aligned.values.astype(float)  # 96 × N
+
+                        def _fit(obs):
+                            h, _ = nnls(_sc_W, obs)
+                            total = h.sum()
+                            h_norm = h / total if total > 0 else h
+                            reconstructed = _sc_W @ h
+                            cos_sim = (
+                                float(np.dot(obs, reconstructed))
+                                / (np.linalg.norm(obs) * np.linalg.norm(reconstructed) + 1e-12)
+                            )
+                            residual_pct = (
+                                float(np.linalg.norm(obs - reconstructed))
+                                / (float(obs.sum()) + 1e-12) * 100
+                            )
+                            return h_norm, cos_sim, residual_pct
+
+                        _h_called,   _cos_called,   _res_called   = _fit(_obs_called)
+                        _h_uncalled, _cos_uncalled, _res_uncalled = _fit(_obs_uncalled)
+
+                        # ── Goodness-of-fit metrics ────────────────────────
+                        _gof_c1, _gof_c2, _gof_c3, _gof_c4 = st.columns(4)
+                        _gof_c1.metric("Called SNVs", f"{_n_called:,}")
+                        _gof_c2.metric("Cosine sim (called)", f"{_cos_called:.4f}")
+                        _gof_c3.metric("Uncalled SNVs", f"{_n_uncalled:,}")
+                        _gof_c4.metric("Cosine sim (uncalled)", f"{_cos_uncalled:.4f}")
+
+                        _sc_top_n = st.slider(
+                            "Top signatures to display", 3, min(30, len(_sc_cosmic_df.columns)), 8,
+                            key="sc_top_n",
+                        )
+
+                        # Build combined DataFrame for grouped bar chart
+                        _sig_names = _sc_cosmic_aligned.columns.tolist()
+                        _cmp_df = pd.DataFrame({
+                            "signature": _sig_names * 2,
+                            "group": ["Called"] * len(_sig_names) + ["Uncalled"] * len(_sig_names),
+                            "exposure": list(_h_called) + list(_h_uncalled),
+                        })
+                        _cmp_df["etiology"] = _cmp_df["signature"].map(
+                            lambda s: _SBS_ETIOLOGY.get(s, "")
+                        )
+
+                        # Rank signatures by max exposure across both groups
+                        _max_exp = (
+                            _cmp_df.groupby("signature")["exposure"].max()
+                            .sort_values(ascending=False)
+                        )
+                        _top_sigs = _max_exp.head(_sc_top_n).index.tolist()
+                        _top_cmp_df = _cmp_df[_cmp_df["signature"].isin(_top_sigs)].copy()
+
+                        _bars = (
+                            alt.Chart(_top_cmp_df)
+                            .mark_bar()
+                            .encode(
+                                alt.X("signature:N",
+                                      sort=_top_sigs,
+                                      title="Signature"),
+                                alt.Y("exposure:Q",
+                                      title="Exposure (proportion)",
+                                      axis=alt.Axis(format=".0%")),
+                                alt.Color("group:N",
+                                          title="Variant group",
+                                          scale=alt.Scale(
+                                              domain=["Called", "Uncalled"],
+                                              range=["#4c78a8", "#e45756"],
+                                          )),
+                                alt.XOffset("group:N"),
+                                tooltip=[
+                                    alt.Tooltip("signature:N"),
+                                    alt.Tooltip("group:N"),
+                                    alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
+                                    alt.Tooltip("etiology:N", title="Etiology"),
+                                ],
+                            )
+                        )
+                        # Vertical separator lines between signature groups.
+                        # Using the *next* signature at bandPosition=0 (left edge)
+                        # places each rule exactly between the Uncalled bar of
+                        # signature i and the Called bar of signature i+1.
+                        _dividers = (
+                            alt.Chart(pd.DataFrame({"signature": _top_sigs[1:]}))
+                            .mark_rule(color="#888", strokeWidth=1, opacity=0.5)
+                            .encode(
+                                alt.X("signature:N", sort=_top_sigs, bandPosition=0),
+                            )
+                        )
+                        _cmp_chart = (
+                            alt.layer(_bars, _dividers)
+                            .properties(
+                                title=f"Top {_sc_top_n} COSMIC SBS Signatures — Called vs Uncalled",
+                                height=350,
+                            )
+                        )
+                        st.altair_chart(_cmp_chart, use_container_width=True)
+                        st.caption(
+                            "Blue = called variants; red = uncalled. "
+                            "If called variants are enriched in known cancer signatures (e.g. SBS1, SBS5) "
+                            "while uncalled are dominated by artefact signatures (e.g. SBS58), "
+                            "this supports the quality of the variant calling."
+                        )
+
+                        # ── Detailed table ─────────────────────────────────
+                        with st.expander("Full signature table"):
+                            _pivot = (
+                                _cmp_df[_cmp_df["exposure"] > 0]
+                                .pivot(index="signature", columns="group", values="exposure")
+                                .fillna(0)
+                                .reset_index()
+                            )
+                            for col in ["Called", "Uncalled"]:
+                                if col in _pivot.columns:
+                                    _pivot[col] = _pivot[col].map("{:.2%}".format)
+                            _pivot["etiology"] = _pivot["signature"].map(
+                                lambda s: _SBS_ETIOLOGY.get(s, "")
+                            )
+                            st.dataframe(_pivot, use_container_width=True, hide_index=True)
+
+                except Exception as exc:
+                    st.error(f"Failed to load COSMIC matrix: {exc}")
