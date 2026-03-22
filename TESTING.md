@@ -4,6 +4,19 @@ Work through each item top to bottom. Check off items as verified, note failures
 
 ---
 
+## Known Issues / To Investigate
+
+- [ ] **Insert size kink at ~250 bp** — both insert size plots show a kink (inflection/discontinuity)
+  around 250 bp. Hypothesis: the kink occurs at exactly 2 × read_length = 2 × 131 = 262 bp (test
+  data is 2×131 bp paired-end), which is the threshold where paired reads transition from overlapping
+  (both reads cover the alt position → `[r1, r2]` branch in `tally_pileup`) to non-overlapping
+  (only one read covers the position → `[r]` branch). This is a behavioral transition in the pileup
+  logic, not necessarily a double-count, but worth confirming. To investigate: verify the kink is at
+  exactly 262 bp, and inspect whether the per-read detail emission differs in any way between the two
+  branches that could bias the insert size histogram near that threshold.
+
+---
+
 ## Testing Sessions
 
 | Date | Version | Tester | Notes |
