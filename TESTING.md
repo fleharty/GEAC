@@ -105,6 +105,23 @@ Work through each item top to bottom. Check off items as verified, note failures
 
 ---
 
+## Explorer — Sidebar: Per-read filters
+
+- [ ] Per-read filters section only appears when `alt_reads` table is present
+- [ ] Family size filter slider works; section hidden with caption when `cD` tag absent
+- [ ] Family size include mode restricts reads to range (NULL rows excluded)
+- [ ] Family size exclude mode removes reads within range (NULL rows kept)
+- [ ] Dist from read end slider works in include and exclude modes
+- [ ] Mapping quality (per-read) slider works in include and exclude modes
+- [ ] Insert size slider appears only when `insert_size` data present
+- [ ] At full range (20–500), caption reads "no filter active" and all reads pass through
+- [ ] Narrowing the slider updates caption with active range description
+- [ ] When filter is active, reads with `NULL` insert size (unpaired/mate-unmapped) are excluded
+- [ ] Per-read filters re-compute `alt_count` and VAF; downstream plots and table reflect new values
+- [ ] **Clear all** resets per-read filters to defaults
+
+---
+
 ## Explorer — Data table
 
 - [ ] Table displays filtered records with correct columns
@@ -125,6 +142,21 @@ Work through each item top to bottom. Check off items as verified, note failures
 - [ ] Zip contains `session.xml` and `positions.bed`
 - [ ] `positions.bed` only contains positions from selected samples
 - [ ] Genome selector (hg19, hg38, mm10, mm39, other) sets correct genome in session XML
+
+---
+
+## Explorer — Reads plots
+
+- [ ] Family size distribution histogram renders
+- [ ] Read position bias plot renders
+- [ ] Dist from read end histogram renders
+- [ ] Base quality distribution renders
+- [ ] Insert size distribution renders; color-by Sample/Batch works
+- [ ] Insert size by AF class plot renders two lines (germline VAF > 30%, somatic VAF ≤ 30%)
+- [ ] Insert size by AF class x-axis reflects current insert size slider bounds
+- [ ] Family size vs VAF scatter renders
+- [ ] Mapping quality distribution stacked bar renders (repetitive vs non-repetitive)
+- [ ] Cohort artefact family size comparison renders (DuckDB only, ≥2 samples)
 
 ---
 

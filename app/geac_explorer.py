@@ -176,7 +176,8 @@ if _has_alt_reads:
         SELECT
             MAX(family_size),
             COALESCE(MAX(dist_from_read_end), 300),
-            COALESCE(MAX(map_qual), 60)
+            COALESCE(MAX(map_qual), 60),
+            COUNT(insert_size) > 0
         FROM alt_reads
     """).fetchone()
     _fs_max_raw = _reads_maxes[0]   # None if all NULL
@@ -184,6 +185,7 @@ if _has_alt_reads:
     _mq_max     = int(_reads_maxes[2])
     _fs_has_data = _fs_max_raw is not None
     _fs_max = int(_fs_max_raw) if _fs_has_data else 0
+    _is_has_data = bool(_reads_maxes[3])
 
     st.sidebar.divider()
     st.sidebar.subheader("Per-read filters")
@@ -248,9 +250,34 @@ if _has_alt_reads:
                  "On = exclude reads within this range (keep reads outside it).",
         )
 
+    _IS_MIN, _IS_MAX = 20, 500
+    if _is_has_data:
+        insert_size_range = st.sidebar.slider(
+            "Insert size range",
+            min_value=_IS_MIN, max_value=_IS_MAX,
+            value=(_IS_MIN, _IS_MAX), step=1,
+            key="insert_size_range",
+            help="Filter alt-supporting reads by template insert size (|TLEN|).",
+        )
+        _is_lo, _is_hi = insert_size_range
+        if _is_lo == _IS_MIN and _is_hi == _IS_MAX:
+            st.sidebar.caption(
+                "Insert size: no filter active — reads with any insert size "
+                "(including <20 and >500 bp) are accepted."
+            )
+        else:
+            st.sidebar.caption(
+                f"Insert size: keeping only reads with insert size "
+                f"between {_is_lo} and {_is_hi} bp. "
+                "Reads with very small or very large inserts (and unpaired reads) are excluded."
+            )
+    else:
+        insert_size_range = (_IS_MIN, _IS_MAX)
+
     _fs_lo, _fs_hi = family_size_range
     _dfe_lo, _dfe_hi = dist_from_end_range
     _mq_lo, _mq_hi = map_qual_range
+    _is_lo, _is_hi = insert_size_range
 
     if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
         if fs_exclude_mode:
@@ -275,14 +302,18 @@ if _has_alt_reads:
             )
         else:
             _reads_conditions.append(f"map_qual BETWEEN {_mq_lo} AND {_mq_hi}")
+
+    if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
+        _reads_conditions.append(f"insert_size BETWEEN {_is_lo} AND {_is_hi}")
 else:
     family_size_range = (0, 0)
     dist_from_end_range = (0, 0)
     map_qual_range = (0, 0)
+    insert_size_range = (0, 0)
     fs_exclude_mode = False
     dfe_exclude_mode = False
     mq_exclude_mode = False
-    _fs_lo = _fs_hi = _dfe_lo = _dfe_hi = _mq_lo = _mq_hi = 0
+    _fs_lo = _fs_hi = _dfe_lo = _dfe_hi = _mq_lo = _mq_hi = _is_lo = _is_hi = 0
 
 # When per-read filters are active, redefine table_expr as a JOIN subquery that
 # replaces alt_count with the filtered fragment count. Every downstream query
@@ -2191,19 +2222,37 @@ with tab_reads:
                     {_ins_select_expr}ar.insert_size,
                     COUNT(*) AS n_reads
                 FROM {_ins_source}
-                WHERE ar.insert_size IS NOT NULL
+                WHERE ar.insert_size BETWEEN {_is_lo} AND {_is_hi}
                 GROUP BY {_ins_group_expr}ar.insert_size
                 ORDER BY {_ins_group_expr}ar.insert_size
             """).df()
 
             if not _ins_df.empty:
+                _ins_y_mode = st.radio(
+                    "Y axis",
+                    ["Frequency", "Count"],
+                    horizontal=True,
+                    key="ins_y_mode",
+                )
+                _ins_use_freq = _ins_y_mode == "Frequency"
+                if _ins_use_freq:
+                    _ins_group_col = _ins_label_col or "__all__"
+                    if _ins_label_col:
+                        _ins_totals = _ins_df.groupby(_ins_label_col)["n_reads"].transform("sum")
+                    else:
+                        _ins_totals = _ins_df["n_reads"].sum()
+                    _ins_df["frequency"] = _ins_df["n_reads"] / _ins_totals
+                _ins_y_field = "frequency" if _ins_use_freq else "n_reads"
+                _ins_y_title = "Frequency" if _ins_use_freq else "Alt-supporting reads"
                 _ins_enc = dict(
                     x=alt.X("insert_size:Q", title="Insert size (bp)"),
-                    y=alt.Y("n_reads:Q", title="Alt-supporting reads"),
+                    y=alt.Y(f"{_ins_y_field}:Q", title=_ins_y_title,
+                            **({"axis": alt.Axis(format=".3f")} if _ins_use_freq else {})),
                     tooltip=[
                         *([f"{_ins_label_col}:N"] if _ins_label_col else []),
                         alt.Tooltip("insert_size:Q", title="Insert size (bp)"),
-                        alt.Tooltip("n_reads:Q", title="Reads"),
+                        alt.Tooltip(f"{_ins_y_field}:Q", title="Frequency" if _ins_use_freq else "Reads",
+                                    **({"format": ".4f"} if _ins_use_freq else {})),
                     ],
                 )
                 if _ins_label_col:
@@ -2225,6 +2274,80 @@ with tab_reads:
                 st.caption(
                     "Insert size distribution of alt-supporting reads. "
                     "A shift toward shorter inserts can indicate adapter contamination or artefacts."
+                )
+
+        # ── Row 3b: Insert size by AF class (germline vs somatic) ─────────────
+        if con.execute("SELECT COUNT(*) FROM alt_reads WHERE insert_size IS NOT NULL LIMIT 1").fetchone()[0] > 0:
+            st.subheader("Insert size by allele frequency class")
+            _af_ins_df = con.execute(f"""
+                SELECT
+                    ar.insert_size,
+                    CASE
+                        WHEN (_locus.alt_count * 1.0 / _locus.total_depth) > 0.30
+                            THEN 'Likely germline (VAF > 30%)'
+                        ELSE 'Likely somatic (VAF ≤ 30%)'
+                    END AS af_class,
+                    COUNT(*) AS n_reads
+                FROM {_r_join}
+                INNER JOIN (
+                    SELECT DISTINCT sample_id, chrom, pos, alt_allele, alt_count, total_depth
+                    FROM {table_expr}
+                    WHERE {where}
+                ) _locus ON  ar.sample_id  = _locus.sample_id
+                         AND ar.chrom      = _locus.chrom
+                         AND ar.pos        = _locus.pos
+                         AND ar.alt_allele = _locus.alt_allele
+                WHERE ar.insert_size BETWEEN {_is_lo} AND {_is_hi}
+                GROUP BY ar.insert_size, af_class
+                ORDER BY ar.insert_size
+            """).df()
+
+            if _af_ins_df.empty:
+                st.info("No data.")
+            else:
+                _af_ins_y_mode = st.radio(
+                    "Y axis",
+                    ["Frequency", "Count"],
+                    horizontal=True,
+                    key="af_ins_y_mode",
+                )
+                _af_ins_use_freq = _af_ins_y_mode == "Frequency"
+                if _af_ins_use_freq:
+                    _totals = _af_ins_df.groupby("af_class")["n_reads"].transform("sum")
+                    _af_ins_df["frequency"] = _af_ins_df["n_reads"] / _totals
+                _af_ins_y = (
+                    alt.Y("frequency:Q", title="Frequency", axis=alt.Axis(format=".3f"))
+                    if _af_ins_use_freq else
+                    alt.Y("n_reads:Q", title="Alt-supporting reads")
+                )
+                _af_ins_tooltip = [
+                    alt.Tooltip("insert_size:Q", title="Insert size (bp)"),
+                    alt.Tooltip("af_class:N", title="AF class"),
+                    alt.Tooltip("frequency:Q", title="Frequency", format=".4f")
+                    if _af_ins_use_freq else
+                    alt.Tooltip("n_reads:Q", title="Reads"),
+                ]
+                _af_ins_chart = (
+                    alt.Chart(_af_ins_df)
+                    .mark_line(opacity=0.85)
+                    .encode(
+                        alt.X("insert_size:Q", title="Insert size (bp)"),
+                        _af_ins_y,
+                        alt.Color("af_class:N", title="AF class",
+                                  scale=alt.Scale(
+                                      domain=["Likely germline (VAF > 30%)", "Likely somatic (VAF ≤ 30%)"],
+                                      range=["#e45756", "#4c78a8"],
+                                  )),
+                        tooltip=_af_ins_tooltip,
+                    )
+                    .properties(height=300)
+                )
+                st.altair_chart(_af_ins_chart, use_container_width=True)
+                st.caption(
+                    "Insert size distributions split by allele frequency. "
+                    "Frequency is normalized independently per class so the two lines are directly comparable "
+                    "regardless of how many reads fall in each group. "
+                    "A shift in one class toward very short or very long inserts suggests artefacts in that group."
                 )
 
         # ── Row 4: Family size vs VAF per locus ───────────────────────────────
