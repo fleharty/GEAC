@@ -46,6 +46,7 @@ fn alt_read_schema() -> Arc<Schema> {
         Field::new("family_size",          DataType::Int32, true),
         Field::new("base_qual",            DataType::Int32, false),
         Field::new("map_qual",             DataType::Int32, false),
+        Field::new("insert_size",          DataType::Int32, true),
     ]))
 }
 
@@ -60,8 +61,9 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
     let ab_count:    ArrayRef = Arc::new(Int32Array::from(records.iter().map(|r| r.ab_count).collect::<Vec<_>>()));
     let ba_count:    ArrayRef = Arc::new(Int32Array::from(records.iter().map(|r| r.ba_count).collect::<Vec<_>>()));
     let family_size: ArrayRef = Arc::new(Int32Array::from(records.iter().map(|r| r.family_size).collect::<Vec<_>>()));
-    let base_qual: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.base_qual)));
-    let map_qual:  ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.map_qual)));
+    let base_qual:   ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.base_qual)));
+    let map_qual:    ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.map_qual)));
+    let insert_size: ArrayRef = Arc::new(Int32Array::from(records.iter().map(|r| r.insert_size).collect::<Vec<_>>()));
 
     RecordBatch::try_new(
         schema,
@@ -69,7 +71,7 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
             sample_id, chrom, pos, alt_allele,
             dist_from_read_start, dist_from_read_end, read_length,
             ab_count, ba_count, family_size,
-            base_qual, map_qual,
+            base_qual, map_qual, insert_size,
         ],
     )
     .context("failed to create Arrow record batch")

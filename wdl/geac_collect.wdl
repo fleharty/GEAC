@@ -14,6 +14,7 @@ version 1.0
 ##   read_type            - duplex | simplex | raw
 ##   pipeline             - fgbio | dragen | raw
 ##   sample_id            - (optional) override sample ID; defaults to BAM SM tag
+##   batch                - (optional) batch/group label stored as a column in the output
 ##   vcf                  - (optional) VCF/BCF for variant call annotation
 ##   vcf_index            - (optional) Corresponding .tbi / .csi index
 ##   variants_tsv         - (optional) TSV variant list (chrom/pos_start/pos_end/ref/var, 0-based)
@@ -47,6 +48,7 @@ workflow GeacCollect {
         String pipeline
 
         String? sample_id
+        String? batch
         File?   vcf
         File?   vcf_index
         File?   variants_tsv
@@ -56,7 +58,7 @@ workflow GeacCollect {
         Int repeat_window = 10
 
         Int     min_base_qual  = 1
-        Int     min_map_qual   = 20
+        Int     min_map_qual   = 0
         Boolean reads_output   = false
         Int     threads        = 4
 
@@ -75,6 +77,7 @@ workflow GeacCollect {
             read_type             = read_type,
             pipeline              = pipeline,
             sample_id             = sample_id,
+            batch                 = batch,
             vcf                   = vcf,
             vcf_index             = vcf_index,
             variants_tsv          = variants_tsv,
@@ -109,6 +112,7 @@ task Collect {
         String pipeline
 
         String? sample_id
+        String? batch
         File?   vcf
         File?   vcf_index
         File?   variants_tsv
@@ -147,6 +151,7 @@ task Collect {
             --min-map-qual     ~{min_map_qual} \
             --threads          ~{threads} \
             ~{"--sample-id "        + sample_id} \
+            ~{"--batch "            + batch} \
             ~{"--vcf "              + vcf} \
             ~{"--variants-tsv "     + variants_tsv} \
             ~{"--targets "          + targets} \

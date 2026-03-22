@@ -36,6 +36,7 @@ Two output files per sample from `geac collect`:
   - `family_size` — ab_count + ba_count
   - `base_qual` — base quality at the alt position
   - `map_qual` — mapping quality of the read
+  - `insert_size` — SAM TLEN (insert size); null when 0 (unpaired / mate unmapped)
 
 ### Pros
 - Enables principled per-read filtering (e.g. "alt reads where family_size >= 3 AND dist_from_read_end > 10")
@@ -55,14 +56,14 @@ Two output files per sample from `geac collect`:
 - Adds implementation complexity to the Rust BAM processing loop
 
 ### Implementation steps
-- [ ] Step 1: Define `AltRead` struct in `src/record.rs` with the columns listed above
-- [ ] Step 2: Populate `AltRead` records during BAM pileup in `src/bam/mod.rs`; parse fgbio/DRAGEN family size tags (`cD`/`cE` or `RX`/`MI`) per pipeline
-- [ ] Step 3: Add `src/writer/parquet_reads.rs` — write `AltRead` records to `{stem}.reads.parquet`
-- [ ] Step 4: Update `geac collect` CLI to emit both files; add `--reads-output` flag (optional; if omitted, reads table is not written)
-- [ ] Step 5: Update `geac merge` to accept and merge reads Parquets into a second DuckDB table (`alt_reads`) alongside `alt_bases`
-- [ ] Step 6: Update WDL workflows to handle the optional reads Parquet output from `Collect` and pass it to `Merge`
-- [ ] Step 7: Explorer — in the position drill-down, JOIN `alt_reads` on `(sample_id, chrom, pos, alt_allele)` to show per-read detail (dist from end, family size, base qual) when reads table is present
-- [ ] Step 8: Explorer — add sidebar filters for `min_family_size` and `max_dist_from_end` that apply to the locus table via a subquery against `alt_reads`
+- [x] Step 1: Define `AltRead` struct in `src/record.rs` with the columns listed above
+- [x] Step 2: Populate `AltRead` records during BAM pileup in `src/bam/mod.rs`; parse fgbio/DRAGEN family size tags (`cD`/`cE` or `RX`/`MI`) per pipeline
+- [x] Step 3: Add `src/writer/parquet_reads.rs` — write `AltRead` records to `{stem}.reads.parquet`
+- [x] Step 4: Update `geac collect` CLI to emit both files; add `--reads-output` flag (optional; if omitted, reads table is not written)
+- [x] Step 5: Update `geac merge` to accept and merge reads Parquets into a second DuckDB table (`alt_reads`) alongside `alt_bases`
+- [x] Step 6: Update WDL workflows to handle the optional reads Parquet output from `Collect` and pass it to `Merge`
+- [x] Step 7: Explorer — in the position drill-down, JOIN `alt_reads` on `(sample_id, chrom, pos, alt_allele)` to show per-read detail (dist from end, family size, base qual) when reads table is present
+- [x] Step 8: Explorer — sidebar filters for `family_size`, `dist_from_read_end`, and `map_qual` with include/exclude toggles; `alt_count` and `vaf` re-aggregated from reads when filters are active
 
 ## Intra-sample comparison (read-type)
 
@@ -76,11 +77,41 @@ Two output files per sample from `geac collect`:
   record with a known number of alt-supporting reads. Use the Explorer to manipulate the
   family size and dist-from-read-end sliders and verify that alt_count changes as expected.
   Confirm include vs exclude toggle behaviour matches intuition.
-- [ ] Terra cohort test with reads output — after single-site validation, update the WDL
-  workflows to pass `--reads-output` to `geac collect` and propagate both `.locus.parquet`
-  and `.reads.parquet` outputs through to `geac merge`. Run on a moderate cohort on Terra
-  to validate end-to-end. Prerequisite: WDL step 6 (update `wdl/geac_collect.wdl` and
-  `wdl/geac_cohort.wdl` for reads output).
+- [x] Terra cohort test with reads output — validated on Terra using `geac:0.3.2` with
+  `reads_output = true`; both `.locus.parquet` and `.reads.parquet` outputs confirmed per
+  sample; cohort DuckDB contains `alt_bases` + `alt_reads` tables; per-read filters work
+  in Explorer
+
+## Reads tab (Explorer)
+
+Requires `alt_reads` table (i.e. data collected with `--reads-output`). Tab is hidden when
+the table is absent. All plots are gated on the current locus-level filters so they reflect
+only the records visible in the main table.
+
+- [x] **Family size histogram** — distribution of `family_size` across all alt-supporting reads
+  for the current filtered locus set; overlay per-sample curves or show cohort aggregate.
+  A true variant should have a family size distribution similar to background depth; artefacts
+  are enriched in singletons (family_size = 1).
+- [x] **Read position bias histogram** — distribution of `dist_from_read_end` for alt-supporting
+  reads; a spike near 0 is a red flag for alignment artefacts or damaged bases at read ends.
+- [x] **Base qual vs dist from read end scatter** — one point per alt read; low base qual +
+  near read end = likely artefact. Color by family_size or sample.
+- [x] **Family size vs VAF scatter** — one point per locus; x = mean family_size of alt reads,
+  y = VAF. True low-VAF variants should have reasonable family sizes; artefacts at low VAF
+  tend to cluster at low family size.
+- [x] **Mapping quality distribution** — histogram of `map_qual` for alt reads, split by
+  repetitiveness (homopolymer ≥ 5 or STR length ≥ 6 vs non-repetitive); characterises which
+  artefact classes are driven by mapping uncertainty.
+- [x] **Cohort artefact family size comparison** — for loci seen in many samples vs few samples,
+  compare mean family size of alt reads via boxplot; cohort artefacts (sequencing noise) should
+  show lower mean family size than recurrent true variants.
+- [ ] **Reads tab review** — work through all plots with real cohort data; assess usefulness,
+  make changes, remove plots that don't add value.
+- [ ] **Family size vs VAF click-through** — add click/shift-click selection with drill-down
+  table and IGV buttons, same as strand bias plot. Currently blocked: `selection_point` with
+  `on_select="rerun"` returns `{"fsvaf_select": {}}` regardless of what is clicked; strand bias
+  works identically so the root cause is unknown. Investigate when Altair/Streamlit version
+  context is clearer.
 
 ## Explorer (Streamlit)
 
@@ -466,17 +497,17 @@ WHERE c.frac_mapq0 > 0.3;
 | Version | Theme | Key deliverables |
 |---------|-------|-----------------|
 | **v0.3.1** | Bug fix | fgbio tag names corrected (`aD`/`bD`/`cD`); `family_size` populated for simplex reads |
-| **v0.4.0** | Per-read detail complete | `--reads-output` validated; WDL updated for reads output; Terra cohort test with reads data passing |
-| **v0.5.0** | Coverage | `geac coverage` command; coverage Explorer tab; WDL coverage workflow |
-| **v0.6.0** | Analysis | MNV detection; intra-sample read-type comparison; customer-facing Coverage Explorer |
-| **v0.7.0** | External beta | First release shared with external users for feedback; documentation polished; onboarding guide |
-| **v1.0.0** | Stable | Feedback from v0.7.0 incorporated; API/schema stable; production-ready |
+| **v0.3.2** | Per-read detail + Explorer | `--reads-output` validated on Terra; multi-platform Docker (amd64+arm64) via GitHub Actions; Explorer embedded in Docker image; Reads tab with family size, position bias, base quality, mapping quality, and cohort artefact plots; insert size added to reads schema |
+| **v0.4.0** | Coverage | `geac coverage` command; coverage Explorer tab; WDL coverage workflow |
+| **v0.5.0** | Analysis | MNV detection; intra-sample read-type comparison; customer-facing Coverage Explorer |
+| **v0.6.0** | External beta | First release shared with external users for feedback; documentation polished; onboarding guide |
+| **v1.0.0** | Stable | Feedback from v0.6.0 incorporated; API/schema stable; production-ready |
 
 ## CI / Release
 
-- [x] GitHub Actions release workflow — on push of a `v*.*.*` tag, build the Docker image
-  natively on an `ubuntu-latest` (x86_64) runner using `docker/Dockerfile`, push to
-  `ghcr.io/fleharty/geac:<version>` and `ghcr.io/fleharty/geac:latest`.
+- [x] GitHub Actions release workflow — on push of a `v*.*.*` tag, builds native amd64
+  (ubuntu-latest) and arm64 (ubuntu-22.04-arm) images, pushes by digest, then merges into
+  a multi-platform manifest at `ghcr.io/fleharty/geac:<version>` and `:latest`.
   Uses `GITHUB_TOKEN` — no external credentials needed.
 
 ## WDL / Terra

@@ -78,7 +78,8 @@ _FILTER_KEYS = [
     "min_alt", "min_fwd_alt", "min_rev_alt",
     "min_overlap_agree", "min_overlap_disagree",
     "variant_called_sel", "on_target_sel",
-    "homopolymer_range", "str_len_range", "min_depth", "max_depth", "limit_sel",
+    "homopolymer_range", "str_len_range", "min_depth", "max_depth",
+    "table_limit_sel",
 ]
 
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
@@ -101,7 +102,7 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["str_len_range"]      = (0, 50)
     st.session_state["min_depth"]          = 0
     st.session_state["max_depth"]          = 0
-    st.session_state["limit_sel"]          = 100
+    st.session_state["table_limit_sel"]    = 500
     st.session_state.pop("family_size_range", None)
     st.session_state.pop("dist_from_end_range", None)
     st.session_state.pop("map_qual_range", None)
@@ -167,9 +168,6 @@ else:
 min_depth = st.sidebar.number_input("Min depth (0 = no minimum)", min_value=0, value=0, step=1, key="min_depth")
 max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, value=0, step=1, key="max_depth")
 
-_limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
-_limit_sel = st.sidebar.selectbox("Display limit (rows)", _limit_options, index=0, key="limit_sel")
-display_limit = None if _limit_sel == "All" else int(_limit_sel)
 
 # ── Per-read filters (only when alt_reads table is present) ───────────────────
 _reads_conditions = []
@@ -355,8 +353,6 @@ if manifest_path and manifest_path.strip():
     try:
         manifest = load_manifest(manifest_path.strip())
         st.sidebar.success(f"{len(manifest):,} samples loaded from manifest")
-        with st.sidebar.expander("Manifest sample IDs"):
-            st.write(sorted(manifest.keys()))
     except Exception as e:
         st.sidebar.error(f"Could not load manifest: {e}")
 
@@ -662,9 +658,8 @@ c4.metric("Mean VAF",         str(fstats["mean_vaf"][0]))
 c5.metric("Mean depth",       str(fstats["mean_depth"][0]))
 c6.metric("% variant called", fpct_called)
 
-def query_records(extra: list[str] = [], limit: int | None = display_limit) -> pd.DataFrame:
-    """Query records with current filters plus any extra conditions.
-    limit=None fetches all rows (used for IGV); otherwise applies LIMIT."""
+def query_records(extra: list[str] = [], limit: int | None = None) -> pd.DataFrame:
+    """Query records with current filters plus any extra conditions."""
     w = " AND ".join(conditions + extra)
     limit_clause = f"LIMIT {limit}" if limit is not None else ""
     return con.execute(f"""
@@ -680,13 +675,7 @@ if total_count == 0:
     st.warning("No records match the current filters.")
     st.stop()
 
-df = query_records()
-
-cap_msg = (
-    f" (showing {len(df):,} of {total_count:,} — plots and IGV drill-downs use full dataset)"
-    if len(df) < total_count else ""
-)
-st.info(f"**{total_count:,}** records{cap_msg}")
+st.info(f"**{total_count:,}** records match the current filters.")
 
 if _reads_active:
     _active_parts = []
@@ -707,6 +696,18 @@ if _reads_active:
     )
 
 # ── Data table ────────────────────────────────────────────────────────────────
+_tbl_limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
+_tbl_limit_sel = st.selectbox(
+    "Table row limit",
+    _tbl_limit_options,
+    index=1,
+    key="table_limit_sel",
+    help="Limits rows shown in the data table below. Has no effect on plots — they always use the full filtered dataset.",
+)
+_tbl_limit = None if _tbl_limit_sel == "All" else int(_tbl_limit_sel)
+
+df = query_records(limit=_tbl_limit)
+
 _table_cols = [
     c for c in [
         "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
@@ -718,6 +719,12 @@ _table_cols = [
 ]
 
 with st.expander("Data table", expanded=True):
+    _tbl_caption = (
+        f"Showing {len(df):,} of {total_count:,} rows. Increase the table row limit above to see more."
+        if len(df) < total_count else
+        f"Showing all {total_count:,} rows."
+    )
+    st.caption(_tbl_caption)
     _tbl_event = st.dataframe(
         df[_table_cols],
         use_container_width=True,
@@ -1262,7 +1269,44 @@ with tab3:
         "Color by", _color_options, horizontal=True, key="sb_color_by",
     )
 
-    sample_df = df.sample(min(2000, len(df)), random_state=42).copy()
+    _sb_opt_cols = ", ".join(filter(None, [
+        "batch"          if _has_data("batch")          else None,
+        "on_target"      if _has_data("on_target")      else None,
+        "variant_called" if _has_data("variant_called") else None,
+        "gene"           if _genes_available             else None,
+    ]))
+    _SB_SAMPLE_THRESHOLD = 5_000
+    _sb_needs_sample = total_count > _SB_SAMPLE_THRESHOLD
+    _sb_show_all = False
+    if _sb_needs_sample:
+        st.warning(
+            f"**{total_count:,} loci** exceed the scatter plot threshold of "
+            f"{_SB_SAMPLE_THRESHOLD:,}. Showing a random sample of "
+            f"{_SB_SAMPLE_THRESHOLD:,} points.",
+            icon="⚠️",
+        )
+        _sb_show_all = st.checkbox(
+            "Show all loci (may be slow)",
+            value=False,
+            key="sb_show_all",
+        )
+
+    _sb_sql_base = f"""
+        SELECT sample_id, chrom, pos, ref_allele, alt_allele, variant_type,
+               fwd_alt_count, rev_alt_count,
+               ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+               {(', ' + _sb_opt_cols) if _sb_opt_cols else ''}
+        FROM {table_expr}
+        WHERE {where}
+    """
+    if _sb_needs_sample and not _sb_show_all:
+        sample_df = con.execute(
+            f"{_sb_sql_base} USING SAMPLE reservoir({_SB_SAMPLE_THRESHOLD}) REPEATABLE(42)"
+        ).df()
+    else:
+        if _sb_show_all:
+            st.warning("Loading all loci — this may take a moment and slow down your browser.", icon="🐢")
+        sample_df = con.execute(_sb_sql_base).df()
 
     # Round linear values used as tick labels when in log1p mode.
     _log1p_ticks_linear = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
@@ -1326,10 +1370,11 @@ with tab3:
             alt.Y("rev:Q"),
         )
     )
+    _sb_n_pts = len(sample_df)
     _sb_title = (
-        "Strand Bias (log1p scale) — solid: perfect balance; dashed: 95% CI under Binomial(n, 0.5)"
+        f"Strand Bias (log1p scale) — solid: perfect balance; dashed: 95% CI under Binomial(n, 0.5) — showing {_sb_n_pts:,} points"
         if _use_log1p else
-        "Strand Bias — solid: perfect balance; dashed: 95% CI under Binomial(n, 0.5)"
+        f"Strand Bias — solid: perfect balance; dashed: 95% CI under Binomial(n, 0.5) — showing {_sb_n_pts:,} points"
     )
 
     if _use_log1p:
@@ -1428,25 +1473,39 @@ with tab3:
         st.caption("Click a point to select it; shift-click to select multiple.")
 
 with tab4:
-    ov = df[df["overlap_depth"] > 0].copy()
-    if len(ov) > 0:
-        ov["agree_frac"] = (
-            ov["overlap_alt_agree"]
-            / (ov["overlap_alt_agree"] + ov["overlap_alt_disagree"]).clip(lower=1)
-        )
+    _ov_df = con.execute(f"""
+        SELECT
+            ROUND(
+                overlap_alt_agree * 1.0
+                / NULLIF(overlap_alt_agree + overlap_alt_disagree, 0),
+                3
+            ) AS agree_frac,
+            COUNT(*) AS n
+        FROM {table_expr}
+        WHERE {where}
+          AND overlap_depth > 0
+          AND overlap_alt_agree IS NOT NULL
+        GROUP BY agree_frac
+        ORDER BY agree_frac
+    """).df()
+
+    if _ov_df.empty:
+        st.info("No overlapping fragments in current selection.")
+    else:
         chart = (
-            alt.Chart(ov)
+            alt.Chart(_ov_df)
             .mark_bar(opacity=0.8)
             .encode(
                 alt.X("agree_frac:Q", bin=alt.Bin(maxbins=20), title="Overlap agreement fraction"),
-                alt.Y("count():Q", title="Count"),
-                tooltip=["count():Q"],
+                alt.Y("n:Q", title="Count"),
+                tooltip=[
+                    alt.Tooltip("agree_frac:Q", format=".3f", title="Agreement fraction"),
+                    alt.Tooltip("n:Q", title="Count"),
+                ],
             )
             .properties(title="Overlap Agreement Fraction", height=350)
         )
         st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("No overlapping fragments in current selection.")
 
 with tab_cohort:
     if not path.endswith(".duckdb"):
@@ -1621,7 +1680,60 @@ with tab_cohort:
                     use_container_width=True,
                 )
 
-            # ── Step 4: SNV count bar chart stacked by SBS6 substitution ──────
+            # ── Step 4: Alt loci count vs mean base quality ───────────────────
+            st.divider()
+            st.subheader("Alt loci count vs mean base quality (per sample)")
+            st.caption(
+                "Each dot is one sample. x = number of distinct alt loci, "
+                "y = mean base quality across all alt-supporting reads. "
+                "Samples with many loci but low base quality may be artefact-driven."
+            )
+            _bq_loci_df = con.execute(f"""
+                SELECT
+                    ab.sample_id,
+                    COUNT(DISTINCT CONCAT(ab.chrom, ':', ab.pos, ':', ab.alt_allele)) AS n_alt_loci,
+                    ROUND(AVG(ar.base_qual), 2) AS mean_base_qual,
+                    COUNT(ar.rowid) AS n_reads
+                FROM (
+                    SELECT sample_id, chrom, pos, alt_allele
+                    FROM {table_expr}
+                    WHERE {_cohort_where}
+                ) ab
+                INNER JOIN alt_reads ar
+                    ON  ab.sample_id  = ar.sample_id
+                    AND ab.chrom      = ar.chrom
+                    AND ab.pos        = ar.pos
+                    AND ab.alt_allele = ar.alt_allele
+                WHERE ar.base_qual IS NOT NULL
+                GROUP BY ab.sample_id
+            """).df()
+
+            if _bq_loci_df.empty:
+                st.info("No base quality data available (alt_reads table may be absent).")
+            else:
+                _bq_loci_chart = (
+                    alt.Chart(_bq_loci_df)
+                    .mark_circle(size=80, opacity=0.85)
+                    .encode(
+                        alt.X("n_alt_loci:Q", title="Number of alt loci",
+                              scale=alt.Scale(zero=True)),
+                        alt.Y("mean_base_qual:Q", title="Mean base quality (Phred)",
+                              scale=alt.Scale(zero=False)),
+                        alt.Color("sample_id:N", title="Sample"),
+                        alt.Size("n_reads:Q", title="Alt-supporting reads",
+                                 scale=alt.Scale(range=[40, 300])),
+                        tooltip=[
+                            "sample_id:N",
+                            alt.Tooltip("n_alt_loci:Q", format=",", title="Alt loci"),
+                            alt.Tooltip("mean_base_qual:Q", format=".1f", title="Mean base qual"),
+                            alt.Tooltip("n_reads:Q", format=",", title="Alt-supporting reads"),
+                        ],
+                    )
+                    .properties(height=350, title="Alt loci count vs mean base quality (per sample)")
+                )
+                st.altair_chart(_bq_loci_chart, use_container_width=True)
+
+            # ── Step 5: SNV count bar chart stacked by SBS6 substitution ──────
             st.subheader("SNV Count by Sample (SBS6 breakdown)")
             _sbs6_df = con.execute(f"""
                 SELECT
@@ -1784,8 +1896,11 @@ with tab_reads:
         with _r_col1:
             st.subheader("Family size distribution")
             _fs_ctrl_col1, _fs_ctrl_col2 = st.columns(2)
+            _fs_color_options = ["All samples (aggregate)", "Sample"]
+            if _has_data("batch"):
+                _fs_color_options.append("Batch")
             _fs_color_by = _fs_ctrl_col1.radio(
-                "Color by", ["All samples (aggregate)", "Sample"],
+                "Color by", _fs_color_options,
                 horizontal=True, key="fs_color_by",
             )
             _fs_y_mode = _fs_ctrl_col2.radio(
@@ -1793,22 +1908,42 @@ with tab_reads:
                 horizontal=True, key="fs_y_mode",
             )
             _fs_by_sample = _fs_color_by == "Sample"
+            _fs_by_batch  = _fs_color_by == "Batch"
             _fs_normalize = _fs_y_mode == "Fraction"
+
+            _fs_group_col = (
+                "ar.sample_id" if _fs_by_sample else
+                "ab.batch"     if _fs_by_batch  else
+                None
+            )
+            _fs_select = f"{_fs_group_col}, " if _fs_group_col else ""
+            _fs_group  = f"{_fs_group_col}, " if _fs_group_col else ""
+
+            # For batch grouping we need to join against alt_bases to get the batch column
+            _fs_source = (
+                f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
+                if _fs_by_batch else _r_join
+            )
+
             _fs_df = con.execute(f"""
-                SELECT {'ar.sample_id,' if _fs_by_sample else ''}
-                    ar.family_size, COUNT(*) AS n_reads
-                FROM {_r_join}
+                SELECT {_fs_select}ar.family_size, COUNT(*) AS n_reads
+                FROM {_fs_source}
                 WHERE ar.family_size IS NOT NULL
-                GROUP BY {'ar.sample_id,' if _fs_by_sample else ''} ar.family_size
-                ORDER BY {'ar.sample_id,' if _fs_by_sample else ''} ar.family_size
+                GROUP BY {_fs_group}ar.family_size
+                ORDER BY {_fs_group}ar.family_size
             """).df()
 
             if _fs_df.empty:
                 st.info("No family size data (fgbio cD tag absent in this dataset).")
             else:
+                _fs_label_col = (
+                    "sample_id" if _fs_by_sample else
+                    "batch"     if _fs_by_batch  else
+                    None
+                )
                 if _fs_normalize:
-                    if _fs_by_sample:
-                        _fs_df["y_val"] = _fs_df.groupby("sample_id")["n_reads"].transform(
+                    if _fs_label_col:
+                        _fs_df["y_val"] = _fs_df.groupby(_fs_label_col)["n_reads"].transform(
                             lambda x: x / x.sum()
                         )
                     else:
@@ -1826,13 +1961,13 @@ with tab_reads:
                     x=alt.X("family_size:Q", title="Family size (cD tag)", bin=False),
                     y=alt.Y(_y_field, title=_y_title),
                     tooltip=[
-                        *( ["sample_id:N"] if _fs_by_sample else []),
+                        *([f"{_fs_label_col}:N"] if _fs_label_col else []),
                         "family_size:Q",
                         alt.Tooltip(_y_field, format=_y_fmt, title=_y_title),
                     ],
                 )
-                if _fs_by_sample:
-                    _fs_enc["color"] = alt.Color("sample_id:N", scale=alt.Scale(scheme="tableau10"))
+                if _fs_label_col:
+                    _fs_enc["color"] = alt.Color(f"{_fs_label_col}:N", scale=alt.Scale(scheme="tableau10"))
                     _fs_chart = (
                         alt.Chart(_fs_df)
                         .mark_line(point=True, opacity=0.8)
@@ -1847,33 +1982,101 @@ with tab_reads:
                         .properties(height=300)
                     )
                 st.altair_chart(_fs_chart, use_container_width=True)
-                st.caption(
-                    "Artefacts are enriched in singletons (family_size = 1). "
+                _fs_norm_note = (
+                    "Fraction mode normalizes each batch independently."
+                    if _fs_by_batch else
                     "Fraction mode normalizes each sample independently, allowing shape comparison across samples with different read counts."
                 )
+                st.caption(f"Artefacts are enriched in singletons (family_size = 1). {_fs_norm_note}")
 
         with _r_col2:
             st.subheader("Read position bias")
+            _dfe_ctrl1, _dfe_ctrl2 = st.columns(2)
+            _dfe_color_options = ["All samples (aggregate)", "Sample"]
+            if _has_data("batch"):
+                _dfe_color_options.append("Batch")
+            _dfe_color_by = _dfe_ctrl1.radio(
+                "Color by", _dfe_color_options,
+                horizontal=True, key="dfe_color_by",
+            )
+            _dfe_y_mode = _dfe_ctrl2.radio(
+                "Y axis", ["Count", "Fraction"],
+                horizontal=True, key="dfe_y_mode",
+            )
+            _dfe_by_sample = _dfe_color_by == "Sample"
+            _dfe_by_batch  = _dfe_color_by == "Batch"
+            _dfe_normalize = _dfe_y_mode == "Fraction"
+            _dfe_label_col = (
+                "sample_id" if _dfe_by_sample else
+                "batch"     if _dfe_by_batch  else
+                None
+            )
+            _dfe_select = f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
+            _dfe_group  = f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
+            _dfe_source = (
+                f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
+                if _dfe_by_batch else _r_join
+            )
+            # For batch, group col is on the joined table
+            _dfe_group_expr = (
+                "ab.batch, " if _dfe_by_batch else
+                f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
+            )
+            _dfe_select_expr = (
+                "ab.batch AS batch, " if _dfe_by_batch else
+                f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
+            )
+
             _dfe_df = con.execute(f"""
-                SELECT dist_from_read_end, COUNT(*) AS n_reads
-                FROM {_r_join}
-                GROUP BY dist_from_read_end
-                ORDER BY dist_from_read_end
+                SELECT {_dfe_select_expr}ar.dist_from_read_end, COUNT(*) AS n_reads
+                FROM {_dfe_source}
+                GROUP BY {_dfe_group_expr}ar.dist_from_read_end
+                ORDER BY {_dfe_group_expr}ar.dist_from_read_end
             """).df()
 
             if _dfe_df.empty:
                 st.info("No data.")
             else:
-                _dfe_chart = (
-                    alt.Chart(_dfe_df)
-                    .mark_bar(color="#f58518")
-                    .encode(
-                        alt.X("dist_from_read_end:Q", title="Distance from read end (bp)", bin=False),
-                        alt.Y("n_reads:Q", title="Alt-supporting reads"),
-                        alt.Tooltip(["dist_from_read_end:Q", "n_reads:Q"]),
-                    )
-                    .properties(height=300)
+                if _dfe_normalize:
+                    if _dfe_label_col:
+                        _dfe_df["y_val"] = _dfe_df.groupby(_dfe_label_col)["n_reads"].transform(
+                            lambda x: x / x.sum()
+                        )
+                    else:
+                        _dfe_df["y_val"] = _dfe_df["n_reads"] / _dfe_df["n_reads"].sum()
+                    _dfe_y_field = "y_val:Q"
+                    _dfe_y_title = "Fraction of alt-supporting reads"
+                    _dfe_y_fmt = ".3f"
+                else:
+                    _dfe_df["y_val"] = _dfe_df["n_reads"]
+                    _dfe_y_field = "y_val:Q"
+                    _dfe_y_title = "Alt-supporting reads"
+                    _dfe_y_fmt = "d"
+
+                _dfe_enc = dict(
+                    x=alt.X("dist_from_read_end:Q", title="Distance from read end (bp)", bin=False),
+                    y=alt.Y(_dfe_y_field, title=_dfe_y_title),
+                    tooltip=[
+                        *([f"{_dfe_label_col}:N"] if _dfe_label_col else []),
+                        "dist_from_read_end:Q",
+                        alt.Tooltip(_dfe_y_field, format=_dfe_y_fmt, title=_dfe_y_title),
+                    ],
                 )
+                if _dfe_label_col:
+                    _dfe_enc["color"] = alt.Color(f"{_dfe_label_col}:N", scale=alt.Scale(scheme="tableau10"))
+                    _dfe_chart = (
+                        alt.Chart(_dfe_df)
+                        .mark_line(point=True, opacity=0.8)
+                        .encode(**_dfe_enc)
+                        .properties(height=300)
+                    )
+                else:
+                    _dfe_chart = (
+                        alt.Chart(_dfe_df)
+                        .mark_line(point=True, color="#f58518")
+                        .encode(**_dfe_enc)
+                        .properties(height=300)
+                    )
                 st.altair_chart(_dfe_chart, use_container_width=True)
                 st.caption(
                     "A spike near 0 is a red flag for alignment artefacts or damaged bases at read ends."
@@ -1881,45 +2084,150 @@ with tab_reads:
 
         # ── Row 2: Base qual vs dist from read end scatter ────────────────────
         st.subheader("Mean base quality by distance from read end")
+        _bq_color_options = ["All samples (aggregate)", "Sample"]
+        if _has_data("batch"):
+            _bq_color_options.append("Batch")
+        _bq_color_by = st.radio(
+            "Color by", _bq_color_options,
+            horizontal=True, key="bq_color_by",
+        )
+        _bq_by_sample = _bq_color_by == "Sample"
+        _bq_by_batch  = _bq_color_by == "Batch"
+        _bq_label_col = (
+            "sample_id" if _bq_by_sample else
+            "batch"     if _bq_by_batch  else
+            None
+        )
+        _bq_source = (
+            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
+            if _bq_by_batch else _r_join
+        )
+        _bq_select_expr = (
+            "ab.batch AS batch, " if _bq_by_batch else
+            f"ar.{_bq_label_col}, " if _bq_label_col else ""
+        )
+        _bq_group_expr = (
+            "ab.batch, " if _bq_by_batch else
+            f"ar.{_bq_label_col}, " if _bq_label_col else ""
+        )
+
         _bq_df = con.execute(f"""
             SELECT
-                ar.sample_id,
-                ar.dist_from_read_end,
+                {_bq_select_expr}ar.dist_from_read_end,
                 ROUND(AVG(ar.base_qual), 2) AS mean_base_qual,
                 COUNT(*) AS n_reads
-            FROM {_r_join}
-            GROUP BY ar.sample_id, ar.dist_from_read_end
-            ORDER BY ar.sample_id, ar.dist_from_read_end
+            FROM {_bq_source}
+            GROUP BY {_bq_group_expr}ar.dist_from_read_end
+            ORDER BY {_bq_group_expr}ar.dist_from_read_end
         """).df()
 
         if _bq_df.empty:
             st.info("No data.")
         else:
-            _bq_chart = (
-                alt.Chart(_bq_df)
-                .mark_line(point=True, opacity=0.8)
-                .encode(
-                    alt.X("dist_from_read_end:Q", title="Distance from read end (bp)"),
-                    alt.Y("mean_base_qual:Q", title="Mean base quality (Phred)",
-                          scale=alt.Scale(zero=False)),
-                    alt.Color("sample_id:N", title="Sample",
-                              scale=alt.Scale(scheme="tableau10")),
-                    tooltip=[
-                        alt.Tooltip("sample_id:N"),
-                        alt.Tooltip("dist_from_read_end:Q", title="Dist from read end"),
-                        alt.Tooltip("mean_base_qual:Q", format=".1f", title="Mean base qual"),
-                        alt.Tooltip("n_reads:Q", title="Reads"),
-                    ],
-                )
-                .properties(height=350)
+            _bq_enc = dict(
+                x=alt.X("dist_from_read_end:Q", title="Distance from read end (bp)"),
+                y=alt.Y("mean_base_qual:Q", title="Mean base quality (Phred)",
+                        scale=alt.Scale(zero=False)),
+                tooltip=[
+                    *([f"{_bq_label_col}:N"] if _bq_label_col else []),
+                    alt.Tooltip("dist_from_read_end:Q", title="Dist from read end"),
+                    alt.Tooltip("mean_base_qual:Q", format=".1f", title="Mean base qual"),
+                    alt.Tooltip("n_reads:Q", title="Reads"),
+                ],
             )
+            if _bq_label_col:
+                _bq_enc["color"] = alt.Color(f"{_bq_label_col}:N", scale=alt.Scale(scheme="tableau10"))
+                _bq_chart = (
+                    alt.Chart(_bq_df)
+                    .mark_line(point=True, opacity=0.8)
+                    .encode(**_bq_enc)
+                    .properties(height=350)
+                )
+            else:
+                _bq_chart = (
+                    alt.Chart(_bq_df)
+                    .mark_line(point=True, color="#f58518")
+                    .encode(**_bq_enc)
+                    .properties(height=350)
+                )
             st.altair_chart(_bq_chart, use_container_width=True)
             st.caption(
                 "A drop in mean base quality near read ends (low dist_from_read_end) "
                 "indicates that alt-supporting reads at those positions may be artefacts."
             )
 
-        # ── Row 3: Family size vs VAF per locus ───────────────────────────────
+        # ── Row 3: Insert size distribution ───────────────────────────────────
+        if con.execute("SELECT COUNT(*) FROM alt_reads WHERE insert_size IS NOT NULL LIMIT 1").fetchone()[0] > 0:
+            st.subheader("Insert size distribution")
+            _ins_color_options = ["All samples (aggregate)", "Sample"]
+            if _has_data("batch"):
+                _ins_color_options.append("Batch")
+            _ins_color_by = st.radio(
+                "Color by", _ins_color_options,
+                horizontal=True, key="ins_color_by",
+            )
+            _ins_by_sample = _ins_color_by == "Sample"
+            _ins_by_batch  = _ins_color_by == "Batch"
+            _ins_label_col = (
+                "sample_id" if _ins_by_sample else
+                "batch"     if _ins_by_batch  else
+                None
+            )
+            _ins_source = (
+                f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
+                if _ins_by_batch else _r_join
+            )
+            _ins_select_expr = (
+                "ab.batch AS batch, " if _ins_by_batch else
+                f"ar.{_ins_label_col}, " if _ins_label_col else ""
+            )
+            _ins_group_expr = (
+                "ab.batch, " if _ins_by_batch else
+                f"ar.{_ins_label_col}, " if _ins_label_col else ""
+            )
+
+            _ins_df = con.execute(f"""
+                SELECT
+                    {_ins_select_expr}ar.insert_size,
+                    COUNT(*) AS n_reads
+                FROM {_ins_source}
+                WHERE ar.insert_size IS NOT NULL
+                GROUP BY {_ins_group_expr}ar.insert_size
+                ORDER BY {_ins_group_expr}ar.insert_size
+            """).df()
+
+            if not _ins_df.empty:
+                _ins_enc = dict(
+                    x=alt.X("insert_size:Q", title="Insert size (bp)"),
+                    y=alt.Y("n_reads:Q", title="Alt-supporting reads"),
+                    tooltip=[
+                        *([f"{_ins_label_col}:N"] if _ins_label_col else []),
+                        alt.Tooltip("insert_size:Q", title="Insert size (bp)"),
+                        alt.Tooltip("n_reads:Q", title="Reads"),
+                    ],
+                )
+                if _ins_label_col:
+                    _ins_enc["color"] = alt.Color(f"{_ins_label_col}:N", scale=alt.Scale(scheme="tableau10"))
+                    _ins_chart = (
+                        alt.Chart(_ins_df)
+                        .mark_line(opacity=0.8)
+                        .encode(**_ins_enc)
+                        .properties(height=300)
+                    )
+                else:
+                    _ins_chart = (
+                        alt.Chart(_ins_df)
+                        .mark_line(color="#4c78a8")
+                        .encode(**_ins_enc)
+                        .properties(height=300)
+                    )
+                st.altair_chart(_ins_chart, use_container_width=True)
+                st.caption(
+                    "Insert size distribution of alt-supporting reads. "
+                    "A shift toward shorter inserts can indicate adapter contamination or artefacts."
+                )
+
+        # ── Row 4: Family size vs VAF per locus ───────────────────────────────
         st.subheader("Family size vs VAF (per locus)")
         _fsvaf_df = con.execute(f"""
             SELECT
@@ -2041,47 +2349,89 @@ with tab_reads:
                         FROM {table_expr}
                         WHERE {where}
                         GROUP BY chrom, pos, alt_allele
+                    ),
+                    labeled AS (
+                        SELECT
+                            CASE
+                                WHEN lc.n_samples_with_alt = 1 THEN 'Seen in 1 sample'
+                                WHEN lc.n_samples_with_alt <= 3 THEN 'Seen in 2–3 samples'
+                                ELSE 'Seen in 4+ samples'
+                            END AS cohort_freq,
+                            ar.family_size
+                        FROM alt_reads ar
+                        INNER JOIN (
+                            SELECT DISTINCT sample_id, chrom, pos, alt_allele
+                            FROM {table_expr}
+                            WHERE {where}
+                        ) _filt ON  ar.sample_id  = _filt.sample_id
+                                 AND ar.chrom      = _filt.chrom
+                                 AND ar.pos        = _filt.pos
+                                 AND ar.alt_allele = _filt.alt_allele
+                        INNER JOIN locus_counts lc
+                            ON  ar.chrom      = lc.chrom
+                            AND ar.pos        = lc.pos
+                            AND ar.alt_allele = lc.alt_allele
+                        WHERE ar.family_size IS NOT NULL
                     )
                     SELECT
-                        CASE
-                            WHEN lc.n_samples_with_alt = 1 THEN 'Seen in 1 sample'
-                            WHEN lc.n_samples_with_alt <= 3 THEN 'Seen in 2–3 samples'
-                            ELSE 'Seen in 4+ samples'
-                        END AS cohort_freq,
-                        ar.family_size
-                    FROM alt_reads ar
-                    INNER JOIN (
-                        SELECT DISTINCT sample_id, chrom, pos, alt_allele
-                        FROM {table_expr}
-                        WHERE {where}
-                    ) _filt ON  ar.sample_id  = _filt.sample_id
-                             AND ar.chrom      = _filt.chrom
-                             AND ar.pos        = _filt.pos
-                             AND ar.alt_allele = _filt.alt_allele
-                    INNER JOIN locus_counts lc
-                        ON  ar.chrom      = lc.chrom
-                        AND ar.pos        = lc.pos
-                        AND ar.alt_allele = lc.alt_allele
-                    WHERE ar.family_size IS NOT NULL
+                        cohort_freq,
+                        PERCENTILE_CONT(0.0)  WITHIN GROUP (ORDER BY family_size) AS min_val,
+                        PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY family_size) AS q1,
+                        PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY family_size) AS median,
+                        PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY family_size) AS q3,
+                        PERCENTILE_CONT(1.0)  WITHIN GROUP (ORDER BY family_size) AS max_val,
+                        COUNT(*) AS n_reads
+                    FROM labeled
+                    GROUP BY cohort_freq
                 """).df()
 
                 if _cohort_fs_df.empty:
                     st.info("No family size data for cohort comparison.")
                 else:
                     _cf_order = ["Seen in 1 sample", "Seen in 2–3 samples", "Seen in 4+ samples"]
-                    _cf_chart = (
+                    # IQR box
+                    _cf_box = (
                         alt.Chart(_cohort_fs_df)
-                        .mark_boxplot(extent="min-max")
+                        .mark_bar(size=40)
                         .encode(
-                            alt.X("cohort_freq:N", title="Cohort frequency",
-                                  sort=_cf_order),
-                            alt.Y("family_size:Q", title="Family size",
-                                  scale=alt.Scale(zero=True)),
+                            alt.X("cohort_freq:N", title="Cohort frequency", sort=_cf_order),
+                            alt.Y("q1:Q", title="Family size", scale=alt.Scale(zero=True)),
+                            alt.Y2("q3:Q"),
+                            alt.Color("cohort_freq:N", legend=None,
+                                      scale=alt.Scale(scheme="tableau10")),
+                            tooltip=[
+                                alt.Tooltip("cohort_freq:N", title="Group"),
+                                alt.Tooltip("min_val:Q", title="Min"),
+                                alt.Tooltip("q1:Q", title="Q1"),
+                                alt.Tooltip("median:Q", title="Median"),
+                                alt.Tooltip("q3:Q", title="Q3"),
+                                alt.Tooltip("max_val:Q", title="Max"),
+                                alt.Tooltip("n_reads:Q", title="Reads"),
+                            ],
+                        )
+                    )
+                    # Min–max whiskers
+                    _cf_whisker = (
+                        alt.Chart(_cohort_fs_df)
+                        .mark_rule()
+                        .encode(
+                            alt.X("cohort_freq:N", sort=_cf_order),
+                            alt.Y("min_val:Q"),
+                            alt.Y2("max_val:Q"),
                             alt.Color("cohort_freq:N", legend=None,
                                       scale=alt.Scale(scheme="tableau10")),
                         )
-                        .properties(height=300)
                     )
+                    # Median tick
+                    _cf_median = (
+                        alt.Chart(_cohort_fs_df)
+                        .mark_tick(color="white", thickness=2, size=40)
+                        .encode(
+                            alt.X("cohort_freq:N", sort=_cf_order),
+                            alt.Y("median:Q"),
+                        )
+                    )
+                    _cf_chart = (_cf_whisker + _cf_box + _cf_median).properties(height=300)
                     st.altair_chart(_cf_chart, use_container_width=True)
                     st.caption(
                         "Cohort artefacts (seen in many samples) tend to have lower family sizes "

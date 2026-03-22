@@ -147,4 +147,7 @@ pub struct AltRead {
     pub family_size: Option<i32>,
     pub base_qual: i32,
     pub map_qual: i32,
+    /// SAM TLEN field (template length / insert size). None when TLEN is 0
+    /// (unpaired reads or reads where the mate is unmapped).
+    pub insert_size: Option<i32>,
 }

@@ -193,6 +193,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                             family_size: d.family_size,
                             base_qual: d.base_qual as i32,
                             map_qual: d.map_qual as i32,
+                            insert_size: d.insert_size,
                         });
                     }
                 }
@@ -262,6 +263,7 @@ struct ReadDetail {
     ab_count: Option<i32>,
     ba_count: Option<i32>,
     family_size: Option<i32>,
+    insert_size: Option<i32>,
 }
 
 /// Position-level summary returned by `tally_pileup`.
@@ -305,6 +307,8 @@ struct LocusRead {
     ba_count: Option<i32>,
     /// fgbio cD tag: total family size (aD + bD for duplex; sole count for simplex)
     family_size: Option<i32>,
+    /// SAM TLEN (insert size); None when 0 (unpaired / mate unmapped)
+    insert_size: Option<i32>,
 }
 
 /// Tally each observed base at a pileup column with overlap detection.
@@ -369,19 +373,21 @@ fn tally_pileup(
         let map_qual = record.mapq();
         let read_len = record.seq_len();
 
-        let (ab_count, ba_count, family_size) = if collect_reads {
+        let (ab_count, ba_count, family_size, insert_size) = if collect_reads {
             let ab = aux_i32(&record, b"aD");
             let ba = aux_i32(&record, b"bD");
             let fs = aux_i32(&record, b"cD");
-            (ab, ba, fs)
+            let tlen = record.insert_size();
+            let ins = if tlen == 0 { None } else { Some(tlen.unsigned_abs() as i32) };
+            (ab, ba, fs, ins)
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
 
         by_qname
             .entry(record.qname().to_vec())
             .or_default()
-            .push(LocusRead { base, is_reverse, is_first_in_pair, qpos, read_len, base_qual, map_qual, ab_count, ba_count, family_size });
+            .push(LocusRead { base, is_reverse, is_first_in_pair, qpos, read_len, base_qual, map_qual, ab_count, ba_count, family_size, insert_size });
     }
 
     // Second pass: tally with overlap detection.
@@ -404,6 +410,7 @@ fn tally_pileup(
                     ab_count: $r.ab_count,
                     ba_count: $r.ba_count,
                     family_size: $r.family_size,
+                    insert_size: $r.insert_size,
                 });
             }
         };

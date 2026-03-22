@@ -235,10 +235,15 @@ Features:
     reference signatures; shows top N signatures with weights, etiology annotations,
     cosine similarity, and residual percentage
   - *Overlap agreement* — histogram of overlap concordance fractions
-  - *Cohort* (DuckDB only) — per-sample summary table, VAF distribution overlay, strand
-    balance scatter, SNV count bar chart stacked by SBS6 substitution type, and SBS96
-    heatmap (samples × 96 contexts, normalised by sample); click a sample row to focus
-    all other views
+  - *Cohort* (DuckDB only) — per-sample summary table; VAF distribution overlay; strand
+    balance scatter; alt loci count vs mean base quality scatter (outlier detection); SNV
+    count bar chart stacked by SBS6 substitution type; SBS96 heatmap (samples × 96
+    contexts, normalised by sample); click a sample row to focus all other views
+  - *Reads* (DuckDB only, requires `--reads-output`) — family size histogram; read position
+    bias line chart; mean base quality by distance from read end; insert size distribution;
+    family size vs VAF scatter; mapping quality distribution; cohort artefact family size
+    comparison (boxplot of family size by cohort frequency); all plots support aggregate /
+    sample / batch color-by options
 - **Per-read filters** (DuckDB only, requires `--reads-output`) — when an `alt_reads`
   table is present, a "Per-read filters" section appears in the sidebar with three
   range sliders, each with an include/exclude toggle:
@@ -348,50 +353,62 @@ fragment at a locus. Linked to the locus table by `(sample_id, chrom, pos, alt_a
 | `family_size` | int32? | fgbio `cD` tag: total raw read count (`aD + bD` for duplex; sole count for simplex); null if tag absent |
 | `base_qual` | int32 | Base quality at the alt position |
 | `map_qual` | int32 | Mapping quality of the read |
+| `insert_size` | int32? | SAM TLEN (template length / insert size); null when 0 (unpaired or mate unmapped) |
 
 ## Docker
 
-**The Docker image must be built on a native Linux x86_64 machine.** Do not attempt to
-cross-compile from Apple Silicon.
+Multi-platform images (linux/amd64 + linux/arm64) are built automatically by the GitHub
+Actions release workflow (`.github/workflows/release.yml`) when a `v*.*.*` tag is pushed.
+Images are published to the GitHub Container Registry:
 
-### Why cross-compilation does not work
-
-geac bundles DuckDB (a C++ library) via the `duckdb` Rust crate. Two cross-compilation
-approaches were attempted and both fail:
-
-| Approach | Failure |
-|---|---|
-| `podman build --platform linux/amd64` | rustc SIGSEGV under QEMU during compilation |
-| `cargo-zigbuild --target x86_64-unknown-linux-gnu` + `Dockerfile.prebuilt` | Binary compiles and starts, but DuckDB's parquet reader SIGSEGV on first `read_parquet` call on Linux x86_64 |
-
-The root cause is that cross-compiling the DuckDB C++ library produces a binary that
-is subtly broken on Linux x86_64 — it crashes silently in production rather than at
-compile time, making it especially dangerous. The only reliable approach is a native
-Linux x86_64 build.
-
-### Building on Linux x86_64
-
-Use an x86_64 Linux machine (a GCE VM, a CI runner, or WSL2 on Windows):
-
-```bash
-# Authenticate to GCR (once per session)
-gcloud auth print-access-token | podman login -u oauth2accesstoken --password-stdin gcr.io
-
-# Build and push (compiles geac natively inside Docker)
-bash scripts/build_docker.sh my-gcp-project --push
+```
+ghcr.io/fleharty/geac:<version>
+ghcr.io/fleharty/geac:latest
 ```
 
-> **Note:** `gcloud auth configure-docker gcr.io` configures the Docker credential helper
-> but Podman does not use it. Always use the `podman login` command above instead.
-
-### Updating the version
+### Pulling the image
 
 ```bash
-echo "0.3.0" > VERSION
+podman pull ghcr.io/fleharty/geac:latest
+# or a specific version:
+podman pull ghcr.io/fleharty/geac:0.3.2
+```
+
+### Running the Explorer
+
+Use the provided `run_explorer.sh` script (requires Podman):
+
+```bash
+./run_explorer.sh /path/to/data/directory
+```
+
+Then open `http://localhost:8501` in your browser. The data directory is mounted at `/data`
+inside the container — place your `cohort.duckdb` and optional `geac.toml` there.
+
+### Running geac collect / merge directly
+
+```bash
+podman run --rm \
+    -v /path/to/data:/data \
+    ghcr.io/fleharty/geac:latest \
+    collect --input /data/sample.bam --reference /data/ref.fa --output /data/sample.parquet \
+    --read-type duplex --pipeline fgbio
+```
+
+### Cutting a release
+
+Releases are gated on changes that require rebuilding `cohort.duckdb` (i.e. Rust / data
+pipeline changes). To release:
+
+```bash
+echo "0.X.Y" > VERSION
 # also update version = "..." in Cargo.toml
-git add VERSION Cargo.toml && git commit -m "Bump version to 0.3.0"
-# then build and push from a Linux x86_64 machine as above
+git add VERSION Cargo.toml && git commit -m "Bump version to 0.X.Y"
+git tag vX.Y.Z && git push origin vX.Y.Z
 ```
+
+The GitHub Actions workflow builds native amd64 and arm64 images and merges them into a
+multi-platform manifest automatically.
 
 ## WDL / Terra
 
@@ -430,7 +447,7 @@ Three WDL 1.0 workflows are provided in `wdl/`:
 | `disk_gb` | Int | Default: 100 |
 | `preemptible` | Int | Default: 2 |
 
-Output: `parquet` (File) — per-sample alt base Parquet file.
+Outputs: `locus_parquet` (File) — per-sample locus Parquet; `reads_parquets` (Array[File]) — per-read Parquet (one element when `reads_output=true`, empty otherwise).
 
 ### `geac_cohort.wdl` inputs
 
