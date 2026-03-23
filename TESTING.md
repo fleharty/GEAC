@@ -74,6 +74,13 @@ Work through each item top to bottom. Check off items as verified, note failures
 
 ## Known Issues / To Investigate
 
+- [ ] **Insertions involving N bases in blacklist-filtered events** — when inspecting blacklist-filtered
+  loci, insertions containing N bases appear in the output. Investigate whether this is expected
+  behaviour (N-containing insertions are real soft-clipped or low-quality bases that happen to pass
+  the current filters) or a bug (e.g. N bases should be excluded from alt alleles the same way N
+  ref bases are skipped). Check the indel extraction logic in `tally_pileup` and confirm whether
+  N-containing alt alleles should be suppressed at collect time.
+
 - [ ] **Insert size kink at ~250 bp** — both insert size plots show a kink (inflection/discontinuity)
   around 250 bp. Hypothesis: the kink occurs at exactly 2 × read_length = 2 × 131 = 262 bp (test
   data is 2×131 bp paired-end), which is the threshold where paired reads transition from overlapping
