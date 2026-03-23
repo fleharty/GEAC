@@ -891,7 +891,7 @@ if _selected_rows:
                 st.dataframe(_reads_df, use_container_width=True, hide_index=True)
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_sig_cmp = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort", "Reads", "Sig. Comparison (Exp.)"])
+tab1, tab2, tab3, tab4, tab_cohort, tab_reads = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort", "Reads"])
 
 with tab1:
     for vtype, color in [
@@ -1172,6 +1172,10 @@ with tab2:
                 key="cosmic_path",
             )
 
+            # shared with Called vs Uncalled section below; set when COSMIC loads successfully
+            _cosmic_W = None
+            _cosmic_aligned = None
+
             if cosmic_path and cosmic_path.strip():
                 try:
                     cosmic_df = _load_cosmic(cosmic_path.strip())
@@ -1185,6 +1189,8 @@ with tab2:
                         )
                     else:
                         W = cosmic_aligned.values.astype(float)  # 96 × N
+                        _cosmic_W = W
+                        _cosmic_aligned = cosmic_aligned
                         obs = (
                             spec96.set_index("sbs_label")["count"]
                             .reindex(_SBS_ORDER)
@@ -1335,6 +1341,221 @@ with tab2:
 
                 except Exception as exc:
                     st.error(f"Failed to load COSMIC matrix: {exc}")
+
+            # ── Called vs Uncalled Comparison ─────────────────────────────────
+            if _has_data("variant_called"):
+                st.divider()
+                st.subheader("Called vs Uncalled Comparison")
+                st.caption(
+                    "Compares the SBS96 trinucleotide spectrum and COSMIC signature exposures "
+                    "between loci where a variant was called and where it was not. "
+                    "Requires the variant_called column (provide a VCF or variants TSV at collect time)."
+                )
+
+                def _build_spectrum(called_val):
+                    _raw = con.execute(f"""
+                        SELECT trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
+                        FROM {table_expr}
+                        WHERE {where}
+                          AND variant_type = 'SNV'
+                          AND trinuc_context IS NOT NULL
+                          AND length(trinuc_context) = 3
+                          AND variant_called IS {'TRUE' if called_val else 'FALSE'}
+                        GROUP BY trinuc_context, ref_allele, alt_allele
+                    """).df()
+                    if _raw.empty:
+                        return np.zeros(96, dtype=float), 0
+                    _raw["sbs_label"] = _raw.apply(
+                        lambda row: _sbs_label(row["trinuc_context"], row["ref_allele"], row["alt_allele"]),
+                        axis=1,
+                    )
+                    _raw = _raw.dropna(subset=["sbs_label"])
+                    _agg = _raw.groupby("sbs_label", as_index=False)["count"].sum()
+                    _obs = (
+                        pd.Series(0, index=_SBS_ORDER, dtype=float)
+                        .add(_agg.set_index("sbs_label")["count"], fill_value=0)
+                        .reindex(_SBS_ORDER)
+                        .values.astype(float)
+                    )
+                    return _obs, int(_obs.sum())
+
+                _obs_called,   _n_called   = _build_spectrum(True)
+                _obs_uncalled, _n_uncalled = _build_spectrum(False)
+
+                if _n_called == 0 and _n_uncalled == 0:
+                    st.info("No SNVs with trinucleotide context found in either group.")
+                else:
+                    _called_label   = f"Called (n={_n_called:,})"
+                    _uncalled_label = f"Uncalled (n={_n_uncalled:,})"
+
+                    def _make_spec96_df(obs_arr, n_total):
+                        df_s = pd.DataFrame({
+                            "sbs_label": _SBS_ORDER,
+                            "mut_type":  [lbl[2:5] for lbl in _SBS_ORDER],
+                            "count":     obs_arr.astype(int),
+                        })
+                        df_s["fraction"] = df_s["count"] / n_total if n_total > 0 else 0.0
+                        return df_s
+
+                    _spec_called   = _make_spec96_df(_obs_called,   _n_called)
+                    _spec_uncalled = _make_spec96_df(_obs_uncalled, _n_uncalled)
+
+                    # Mirrored (butterfly) chart
+                    _m_df = pd.concat([
+                        _spec_called.assign(y=_spec_called["fraction"],     group=_called_label),
+                        _spec_uncalled.assign(y=-_spec_uncalled["fraction"], group=_uncalled_label),
+                    ])
+                    _mirror_sub = []
+                    for _mt in _SBS_MUT_TYPES:
+                        _sub = _m_df[_m_df["mut_type"] == _mt]
+                        _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+                        _c = (
+                            alt.Chart(_sub)
+                            .mark_bar()
+                            .encode(
+                                alt.X("sbs_label:N", sort=_order, title=None,
+                                      axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
+                                alt.Y("y:Q", axis=alt.Axis(format=".0%"),
+                                      title="← Uncalled | Called →"),
+                                alt.Color("group:N",
+                                          title=None,
+                                          scale=alt.Scale(
+                                              domain=[_called_label, _uncalled_label],
+                                              range=["#4c78a8", "#e45756"],
+                                          ),
+                                          legend=alt.Legend(orient="bottom")),
+                                tooltip=[
+                                    alt.Tooltip("sbs_label:N", title="Context"),
+                                    alt.Tooltip("group:N", title="Group"),
+                                    alt.Tooltip("fraction:Q", format=".2%", title="Fraction"),
+                                    alt.Tooltip("count:Q", title="Count"),
+                                ],
+                            )
+                            .properties(
+                                title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt], fontSize=11, fontWeight="bold"),
+                                width=130, height=150,
+                            )
+                        )
+                        _mirror_sub.append(_c)
+                    st.altair_chart(
+                        alt.concat(*_mirror_sub, columns=3)
+                        .resolve_scale(y="shared")
+                        .properties(title=alt.TitleParams(
+                            "Called vs Uncalled — mirrored trinucleotide spectrum",
+                            fontSize=13,
+                        )),
+                        use_container_width=True,
+                    )
+                    st.caption(
+                        "Called variants point up (blue), uncalled loci point down (red). "
+                        "Each group is normalised to its own fraction so differences in count don't dominate."
+                    )
+
+                    # COSMIC signature comparison (reuses matrix loaded in section above)
+                    if _cosmic_W is not None:
+                        st.markdown("**COSMIC signature comparison — Called vs Uncalled**")
+
+                        def _fit_cmp(obs):
+                            _h, _ = nnls(_cosmic_W, obs)
+                            _total = _h.sum()
+                            _h_norm = _h / _total if _total > 0 else _h
+                            _recon  = _cosmic_W @ _h
+                            _cos    = (
+                                float(np.dot(obs, _recon))
+                                / (np.linalg.norm(obs) * np.linalg.norm(_recon) + 1e-12)
+                            )
+                            return _h_norm, _cos
+
+                        _h_called,   _cos_called   = _fit_cmp(_obs_called)
+                        _h_uncalled, _cos_uncalled = _fit_cmp(_obs_uncalled)
+
+                        _gof_c1, _gof_c2, _gof_c3, _gof_c4 = st.columns(4)
+                        _gof_c1.metric("Called SNVs",           f"{_n_called:,}")
+                        _gof_c2.metric("Cosine sim (called)",   f"{_cos_called:.4f}")
+                        _gof_c3.metric("Uncalled SNVs",         f"{_n_uncalled:,}")
+                        _gof_c4.metric("Cosine sim (uncalled)", f"{_cos_uncalled:.4f}")
+
+                        _sig_names = _cosmic_aligned.columns.tolist()
+                        _cmp_df = pd.DataFrame({
+                            "signature": _sig_names * 2,
+                            "group":     [_called_label]   * len(_sig_names) +
+                                         [_uncalled_label] * len(_sig_names),
+                            "exposure":  list(_h_called) + list(_h_uncalled),
+                        })
+                        _cmp_df["etiology"] = _cmp_df["signature"].map(
+                            lambda s: _SBS_ETIOLOGY.get(s, "")
+                        )
+
+                        _cmp_top_n = st.slider(
+                            "Top signatures to display (comparison)",
+                            3, min(20, len(_sig_names)), 8,
+                            key="cmp_top_n",
+                        )
+                        _max_exp = (
+                            _cmp_df.groupby("signature")["exposure"].max()
+                            .sort_values(ascending=False)
+                        )
+                        _top_sigs = _max_exp.head(_cmp_top_n).index.tolist()
+                        _top_cmp_df = _cmp_df[_cmp_df["signature"].isin(_top_sigs)].copy()
+
+                        _cmp_bars = (
+                            alt.Chart(_top_cmp_df)
+                            .mark_bar()
+                            .encode(
+                                alt.X("signature:N", sort=_top_sigs, title="Signature"),
+                                alt.Y("exposure:Q", title="Exposure (proportion)",
+                                      axis=alt.Axis(format=".0%")),
+                                alt.Color("group:N",
+                                          title=None,
+                                          scale=alt.Scale(
+                                              domain=[_called_label, _uncalled_label],
+                                              range=["#4c78a8", "#e45756"],
+                                          )),
+                                alt.XOffset("group:N"),
+                                tooltip=[
+                                    alt.Tooltip("signature:N"),
+                                    alt.Tooltip("group:N"),
+                                    alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
+                                    alt.Tooltip("etiology:N", title="Etiology"),
+                                ],
+                            )
+                        )
+                        _cmp_dividers = (
+                            alt.Chart(pd.DataFrame({"signature": _top_sigs[1:]}))
+                            .mark_rule(color="#888", strokeWidth=1, opacity=0.5)
+                            .encode(
+                                alt.X("signature:N", sort=_top_sigs, bandPosition=0),
+                            )
+                        )
+                        st.altair_chart(
+                            alt.layer(_cmp_bars, _cmp_dividers)
+                            .properties(
+                                title=f"Top {_cmp_top_n} COSMIC SBS Signatures — Called vs Uncalled",
+                                height=350,
+                            ),
+                            use_container_width=True,
+                        )
+                        st.caption(
+                            "Blue = called variants; red = uncalled. "
+                            "If called variants are enriched in known cancer signatures (e.g. SBS1, SBS5) "
+                            "while uncalled are dominated by artefact signatures (e.g. SBS58), "
+                            "this supports the quality of the variant calling."
+                        )
+
+                        with st.expander("Full signature table"):
+                            _pivot = (
+                                _cmp_df[_cmp_df["exposure"] > 0]
+                                .pivot(index="signature", columns="group", values="exposure")
+                                .fillna(0)
+                                .reset_index()
+                            )
+                            for col in [_called_label, _uncalled_label]:
+                                if col in _pivot.columns:
+                                    _pivot[col] = _pivot[col].map("{:.2%}".format)
+                            _pivot["etiology"] = _pivot["signature"].map(
+                                lambda s: _SBS_ETIOLOGY.get(s, "")
+                            )
+                            st.dataframe(_pivot, use_container_width=True, hide_index=True)
 
     else:
         # Fallback: simple ref>alt spectrum for older Parquet files
@@ -2709,308 +2930,3 @@ with tab_reads:
                         "than rare variants, confirming they are sequencing noise rather than "
                         "recurrent true variants."
                     )
-
-# ── Sig. Comparison (Experimental) tab ───────────────────────────────────────
-with tab_sig_cmp:
-    st.subheader("Called vs Uncalled: Trinucleotide Spectrum & COSMIC Signatures")
-    st.caption(
-        "**Experimental.** Compares the SBS96 trinucleotide spectrum and COSMIC signature "
-        "exposures between loci where a variant was called (variant_called = true) and "
-        "where it was not (variant_called = false). "
-        "Requires trinuc_context and variant_called columns."
-    )
-
-    if not _has_data("trinuc_context"):
-        st.info("trinuc_context column not present — re-run geac collect with a gene annotation or reference FASTA.")
-    elif not _has_data("variant_called"):
-        st.info("variant_called column not present — provide a variants TSV or VCF when running geac collect.")
-    else:
-        def _build_spectrum(called_val):
-            """Return (96-element count array, total_count) for one variant_called group."""
-            _raw = con.execute(f"""
-                SELECT trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
-                FROM {table_expr}
-                WHERE {where}
-                  AND variant_type = 'SNV'
-                  AND trinuc_context IS NOT NULL
-                  AND length(trinuc_context) = 3
-                  AND variant_called IS {'TRUE' if called_val else 'FALSE'}
-                GROUP BY trinuc_context, ref_allele, alt_allele
-            """).df()
-
-            if _raw.empty:
-                return np.zeros(96, dtype=float), 0
-
-            _raw["sbs_label"] = _raw.apply(
-                lambda row: _sbs_label(row["trinuc_context"], row["ref_allele"], row["alt_allele"]),
-                axis=1,
-            )
-            _raw = _raw.dropna(subset=["sbs_label"])
-            _agg = _raw.groupby("sbs_label", as_index=False)["count"].sum()
-            _obs = (
-                pd.Series(0, index=_SBS_ORDER, dtype=float)
-                .add(_agg.set_index("sbs_label")["count"], fill_value=0)
-                .reindex(_SBS_ORDER)
-                .values.astype(float)
-            )
-            return _obs, int(_obs.sum())
-
-        _obs_called,   _n_called   = _build_spectrum(True)
-        _obs_uncalled, _n_uncalled = _build_spectrum(False)
-
-        if _n_called == 0 and _n_uncalled == 0:
-            st.info("No SNVs with trinucleotide context found in either group.")
-        else:
-            # ── Trinucleotide spectrum comparison ─────────────────────────────
-            st.subheader("Trinucleotide mutation spectrum")
-
-            def _make_spec96_df(obs_arr, label, n_total):
-                """Convert a 96-element count array to a plottable DataFrame with fractions."""
-                df_s = pd.DataFrame({
-                    "sbs_label": _SBS_ORDER,
-                    "mut_type":  [lbl[2:5] for lbl in _SBS_ORDER],
-                    "count":     obs_arr.astype(int),
-                    "group":     label,
-                })
-                df_s["fraction"] = df_s["count"] / n_total if n_total > 0 else 0.0
-                return df_s
-
-            _spec_called   = _make_spec96_df(_obs_called,   f"Called (n={_n_called:,})",   _n_called)
-            _spec_uncalled = _make_spec96_df(_obs_uncalled, f"Uncalled (n={_n_uncalled:,})", _n_uncalled)
-
-            def _sbs96_chart(df_s, title):
-                _sub_charts = []
-                for _mt in _SBS_MUT_TYPES:
-                    _sub = df_s[df_s["mut_type"] == _mt].copy()
-                    _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
-                    _c = (
-                        alt.Chart(_sub)
-                        .mark_bar(color=_SBS_COLORS[_mt])
-                        .encode(
-                            alt.X("sbs_label:N", sort=_order, title=None,
-                                  axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
-                            alt.Y("fraction:Q", title="Fraction",
-                                  axis=alt.Axis(format=".0%")),
-                            tooltip=[
-                                alt.Tooltip("sbs_label:N", title="Context"),
-                                alt.Tooltip("count:Q", title="Count"),
-                                alt.Tooltip("fraction:Q", format=".2%", title="Fraction"),
-                            ],
-                        )
-                        .properties(
-                            title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt], fontSize=11, fontWeight="bold"),
-                            width=130, height=110,
-                        )
-                    )
-                    _sub_charts.append(_c)
-                return (
-                    alt.concat(*_sub_charts, columns=3)
-                    .resolve_scale(y="shared")
-                    .properties(title=alt.TitleParams(title, fontSize=13))
-                )
-
-            # Option 1 — stacked (original, kept for reference)
-            with st.expander("Option 1: Stacked (original)", expanded=False):
-                st.altair_chart(
-                    _sbs96_chart(_spec_called, f"Called variants (n={_n_called:,})"),
-                    use_container_width=True,
-                )
-                st.altair_chart(
-                    _sbs96_chart(_spec_uncalled, f"Uncalled loci (n={_n_uncalled:,})"),
-                    use_container_width=True,
-                )
-
-            st.divider()
-
-            # Option 2 — mirrored (butterfly) chart
-            st.markdown("**Option 2: Mirrored spectrum** — Called bars point up, Uncalled point down")
-            _m_df = pd.concat([
-                _spec_called.assign(y=_spec_called["fraction"],  group="Called"),
-                _spec_uncalled.assign(y=-_spec_uncalled["fraction"], group="Uncalled"),
-            ])
-            _mirror_sub = []
-            for _mt in _SBS_MUT_TYPES:
-                _sub = _m_df[_m_df["mut_type"] == _mt]
-                _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
-                _c = (
-                    alt.Chart(_sub)
-                    .mark_bar()
-                    .encode(
-                        alt.X("sbs_label:N", sort=_order, title=None,
-                              axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
-                        alt.Y("y:Q", axis=alt.Axis(format=".0%"),
-                              title="← Uncalled | Called →"),
-                        alt.Color("group:N",
-                                  scale=alt.Scale(
-                                      domain=["Called", "Uncalled"],
-                                      range=["#4c78a8", "#e45756"],
-                                  ),
-                                  legend=alt.Legend(orient="bottom")),
-                        tooltip=[
-                            alt.Tooltip("sbs_label:N", title="Context"),
-                            alt.Tooltip("group:N"),
-                            alt.Tooltip("fraction:Q", format=".2%", title="Fraction"),
-                            alt.Tooltip("count:Q", title="Count"),
-                        ],
-                    )
-                    .properties(
-                        title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt], fontSize=11, fontWeight="bold"),
-                        width=130, height=150,
-                    )
-                )
-                _mirror_sub.append(_c)
-            st.altair_chart(
-                alt.concat(*_mirror_sub, columns=3)
-                .resolve_scale(y="shared")
-                .properties(title=alt.TitleParams(
-                    f"Called (n={_n_called:,}) vs Uncalled (n={_n_uncalled:,}) — mirrored",
-                    fontSize=13,
-                )),
-                use_container_width=True,
-            )
-
-            st.divider()
-
-            # ── COSMIC decomposition ──────────────────────────────────────────
-            st.subheader("COSMIC signature decomposition")
-            _sc_cosmic_path = st.text_input(
-                "COSMIC SBS matrix path",
-                value=_cfg.get("cosmic", ""),
-                placeholder="/path/to/COSMIC_v3.4_SBS_GRCh37.txt",
-                key="sc_cosmic_path",
-            )
-
-            if not _sc_cosmic_path or not _sc_cosmic_path.strip():
-                st.info("Enter a COSMIC SBS matrix path above to run the decomposition.")
-            else:
-                try:
-                    _sc_cosmic_df = _load_cosmic(_sc_cosmic_path.strip())
-                    _sc_cosmic_aligned = _sc_cosmic_df.reindex(_SBS_ORDER)
-                    _sc_missing = _sc_cosmic_aligned.isna().any(axis=1).sum()
-
-                    if _sc_missing > 0:
-                        st.warning(
-                            f"{_sc_missing} context(s) not found in COSMIC matrix — "
-                            "check that the file uses the standard A[C>A]A format."
-                        )
-                    else:
-                        _sc_W = _sc_cosmic_aligned.values.astype(float)  # 96 × N
-
-                        def _fit(obs):
-                            h, _ = nnls(_sc_W, obs)
-                            total = h.sum()
-                            h_norm = h / total if total > 0 else h
-                            reconstructed = _sc_W @ h
-                            cos_sim = (
-                                float(np.dot(obs, reconstructed))
-                                / (np.linalg.norm(obs) * np.linalg.norm(reconstructed) + 1e-12)
-                            )
-                            residual_pct = (
-                                float(np.linalg.norm(obs - reconstructed))
-                                / (float(obs.sum()) + 1e-12) * 100
-                            )
-                            return h_norm, cos_sim, residual_pct
-
-                        _h_called,   _cos_called,   _res_called   = _fit(_obs_called)
-                        _h_uncalled, _cos_uncalled, _res_uncalled = _fit(_obs_uncalled)
-
-                        # ── Goodness-of-fit metrics ────────────────────────
-                        _gof_c1, _gof_c2, _gof_c3, _gof_c4 = st.columns(4)
-                        _gof_c1.metric("Called SNVs", f"{_n_called:,}")
-                        _gof_c2.metric("Cosine sim (called)", f"{_cos_called:.4f}")
-                        _gof_c3.metric("Uncalled SNVs", f"{_n_uncalled:,}")
-                        _gof_c4.metric("Cosine sim (uncalled)", f"{_cos_uncalled:.4f}")
-
-                        _sc_top_n = st.slider(
-                            "Top signatures to display", 3, min(30, len(_sc_cosmic_df.columns)), 8,
-                            key="sc_top_n",
-                        )
-
-                        # Build combined DataFrame for grouped bar chart
-                        _sig_names = _sc_cosmic_aligned.columns.tolist()
-                        _cmp_df = pd.DataFrame({
-                            "signature": _sig_names * 2,
-                            "group": ["Called"] * len(_sig_names) + ["Uncalled"] * len(_sig_names),
-                            "exposure": list(_h_called) + list(_h_uncalled),
-                        })
-                        _cmp_df["etiology"] = _cmp_df["signature"].map(
-                            lambda s: _SBS_ETIOLOGY.get(s, "")
-                        )
-
-                        # Rank signatures by max exposure across both groups
-                        _max_exp = (
-                            _cmp_df.groupby("signature")["exposure"].max()
-                            .sort_values(ascending=False)
-                        )
-                        _top_sigs = _max_exp.head(_sc_top_n).index.tolist()
-                        _top_cmp_df = _cmp_df[_cmp_df["signature"].isin(_top_sigs)].copy()
-
-                        _bars = (
-                            alt.Chart(_top_cmp_df)
-                            .mark_bar()
-                            .encode(
-                                alt.X("signature:N",
-                                      sort=_top_sigs,
-                                      title="Signature"),
-                                alt.Y("exposure:Q",
-                                      title="Exposure (proportion)",
-                                      axis=alt.Axis(format=".0%")),
-                                alt.Color("group:N",
-                                          title="Variant group",
-                                          scale=alt.Scale(
-                                              domain=["Called", "Uncalled"],
-                                              range=["#4c78a8", "#e45756"],
-                                          )),
-                                alt.XOffset("group:N"),
-                                tooltip=[
-                                    alt.Tooltip("signature:N"),
-                                    alt.Tooltip("group:N"),
-                                    alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
-                                    alt.Tooltip("etiology:N", title="Etiology"),
-                                ],
-                            )
-                        )
-                        # Vertical separator lines between signature groups.
-                        # Using the *next* signature at bandPosition=0 (left edge)
-                        # places each rule exactly between the Uncalled bar of
-                        # signature i and the Called bar of signature i+1.
-                        _dividers = (
-                            alt.Chart(pd.DataFrame({"signature": _top_sigs[1:]}))
-                            .mark_rule(color="#888", strokeWidth=1, opacity=0.5)
-                            .encode(
-                                alt.X("signature:N", sort=_top_sigs, bandPosition=0),
-                            )
-                        )
-                        _cmp_chart = (
-                            alt.layer(_bars, _dividers)
-                            .properties(
-                                title=f"Top {_sc_top_n} COSMIC SBS Signatures — Called vs Uncalled",
-                                height=350,
-                            )
-                        )
-                        st.altair_chart(_cmp_chart, use_container_width=True)
-                        st.caption(
-                            "Blue = called variants; red = uncalled. "
-                            "If called variants are enriched in known cancer signatures (e.g. SBS1, SBS5) "
-                            "while uncalled are dominated by artefact signatures (e.g. SBS58), "
-                            "this supports the quality of the variant calling."
-                        )
-
-                        # ── Detailed table ─────────────────────────────────
-                        with st.expander("Full signature table"):
-                            _pivot = (
-                                _cmp_df[_cmp_df["exposure"] > 0]
-                                .pivot(index="signature", columns="group", values="exposure")
-                                .fillna(0)
-                                .reset_index()
-                            )
-                            for col in ["Called", "Uncalled"]:
-                                if col in _pivot.columns:
-                                    _pivot[col] = _pivot[col].map("{:.2%}".format)
-                            _pivot["etiology"] = _pivot["signature"].map(
-                                lambda s: _SBS_ETIOLOGY.get(s, "")
-                            )
-                            st.dataframe(_pivot, use_container_width=True, hide_index=True)
-
-                except Exception as exc:
-                    st.error(f"Failed to load COSMIC matrix: {exc}")
