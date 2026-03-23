@@ -11,7 +11,6 @@
 #   -g TARGETS    BED or Picard interval list for on-target annotation (optional)
 #   -a GENE_ANNOT GFF3 or GTF file for gene annotation (optional)
 #   -j JOBS       Number of samples to process in parallel (default: 4)
-#   -t THREADS    CPU threads per geac collect job (default: 4)
 #   -f            Force re-run even if the output Parquet already exists
 
 set -euo pipefail
@@ -26,17 +25,15 @@ REFERENCE=""
 TARGETS=""
 GENE_ANNOT=""
 JOBS=4
-THREADS=4
 FORCE=0
 
-while getopts "b:r:g:a:j:t:fh" opt; do
+while getopts "b:r:g:a:j:fh" opt; do
     case $opt in
         b) BAM_DIR="$OPTARG"     ;;
         r) REFERENCE="$OPTARG"   ;;
         g) TARGETS="$OPTARG"     ;;
         a) GENE_ANNOT="$OPTARG"  ;;
         j) JOBS="$OPTARG"        ;;
-        t) THREADS="$OPTARG"     ;;
         f) FORCE=1               ;;
         h) usage                 ;;
         *) usage                 ;;
@@ -76,7 +73,7 @@ echo "Geac binary : $GEAC"
 echo "Reference   : $REFERENCE"
 echo "Targets     : ${TARGETS:-none}"
 echo "Gene annot  : ${GENE_ANNOT:-none}"
-echo "Parallel    : $JOBS jobs x $THREADS threads"
+echo "Parallel    : $JOBS jobs"
 echo ""
 
 pids=()
@@ -100,7 +97,6 @@ run_sample() {
         --output    "$output"
         --read-type duplex
         --pipeline  fgbio
-        --threads   "$THREADS"
     )
 
     if [[ -f "$variants_tsv" ]]; then

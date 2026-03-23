@@ -73,7 +73,6 @@ Optional flags:
 | `--min-base-qual` | 1 | Minimum base quality to count a read |
 | `--min-map-qual` | 20 | Minimum mapping quality |
 | `--region` | whole genome | Restrict to a genomic region (e.g. `chr1:1-1000000`) |
-| `--threads` | 1 | Parallel processing threads |
 | `--progress-interval` | 30 | Seconds between progress reports to stderr |
 | `--reads-output` | off | Also write per-read detail Parquet (see below) |
 
@@ -219,31 +218,37 @@ Features:
 - **Summary statistics** — alt records, samples, total alt bases, mean VAF, mean depth,
   % variant called
 - **Sidebar filters** — chromosome, samples, variant type, VAF range, min alt count,
-  variant called status, min/max depth, on-target, gene name (partial match), homopolymer
-  length, STR length; **Clear all filters** button resets all filters at once
+  variant called status, variant filter value (PASS / filter reason), min/max depth,
+  on-target, gene name (partial match), homopolymer length, STR length;
+  **Clear all filters** button resets all filters at once
 - **Data table** — sortable, all schema columns, IGV session download button
 - **Tabbed plots**
   - *VAF distribution* — separate histograms for SNV, insertion, deletion; click a bar
     to see matching records and download an IGV session
-  - *SNV error spectrum* — click a substitution bar to see matching records and IGV session
+  - *Error spectrum* — SNV trinucleotide spectrum (SBS96) as a 3×2 grid of per-mutation-type
+    panels with shared y-axis and fraction/count toggle; shift-click to select multiple
+    contexts; drill-down table and IGV session. Optional COSMIC decomposition: provide a
+    COSMIC SBS matrix path to overlay a reconstruction (black dots), show top-N signature
+    exposures with etiology annotations, cosine similarity, and residual percentage. Also
+    includes: per-sample signature exposure heatmap (DuckDB only); Called vs Uncalled
+    comparison (butterfly chart + grouped signature bar, requires VCF annotation);
+    VAF-stratified spectra (germline VAF > 30% vs somatic VAF ≤ 30%); family-size
+    stratified spectra (singleton vs multi-member families, requires `--reads-output`);
+    SBS96 heatmap across samples (DuckDB only)
   - *Strand bias* — forward vs. reverse alt reads scatter with 95% CI boundary lines;
     log1p or linear axis toggle; color by variant type, sample, on-target, or called status;
     click/shift-click to select points and view a drill-down table + IGV session
-  - *SNV Trinucleotide Spectrum (SBS96)* — 3×2 grid of per-mutation-type panels with shared
-    y-axis; shift-click to select multiple contexts; drill-down table and IGV session
-  - *COSMIC Signature Decomposition* — NNLS fit of the SBS96 spectrum against COSMIC
-    reference signatures; shows top N signatures with weights, etiology annotations,
-    cosine similarity, and residual percentage
   - *Overlap agreement* — histogram of overlap concordance fractions
   - *Cohort* (DuckDB only) — per-sample summary table; VAF distribution overlay; strand
     balance scatter; alt loci count vs mean base quality scatter (outlier detection); SNV
-    count bar chart stacked by SBS6 substitution type; SBS96 heatmap (samples × 96
-    contexts, normalised by sample); click a sample row to focus all other views
+    count bar chart stacked by SBS6 substitution type; click a sample row to focus all
+    other views
   - *Reads* (DuckDB only, requires `--reads-output`) — family size histogram; read position
-    bias line chart; mean base quality by distance from read end; insert size distribution;
-    family size vs VAF scatter; mapping quality distribution; cohort artefact family size
-    comparison (boxplot of family size by cohort frequency); all plots support aggregate /
-    sample / batch color-by options
+    bias (cycle number); mean base quality by cycle; insert size distribution with
+    gap-correction toggle; insert size by allele frequency class; family size vs VAF
+    scatter; mapping quality distribution; cohort artefact family size comparison (boxplot
+    of family size by cohort frequency); all plots support aggregate / sample / batch
+    color-by options
 - **Per-read filters** (DuckDB only, requires `--reads-output`) — when an `alt_reads`
   table is present, a "Per-read filters" section appears in the sidebar with three
   range sliders, each with an include/exclude toggle:
@@ -253,7 +258,7 @@ Features:
     from the table entirely. This is the most useful filter for error-corrected data:
     a variant that disappears when singletons are excluded is almost certainly noise;
     one that holds up at family size ≥ 2 or 3 has stronger support.
-  - *Dist from read end* — filter by distance of the alt base from the end of the read.
+  - *Cycle number* — filter by distance of the alt base from the end of the read.
     Variants clustered near read ends are a common alignment artefact; raising the
     lower bound removes these reads.
   - *Mapping quality* — filter by per-read MAPQ. Excluding low-MAPQ reads removes
@@ -401,10 +406,9 @@ Releases are gated on changes that require rebuilding `cohort.duckdb` (i.e. Rust
 pipeline changes). To release:
 
 ```bash
-echo "0.X.Y" > VERSION
-# also update version = "..." in Cargo.toml
-git add VERSION Cargo.toml && git commit -m "Bump version to 0.X.Y"
-git tag vX.Y.Z && git push origin vX.Y.Z
+# update version = "..." in Cargo.toml
+git add Cargo.toml Cargo.lock && git commit -m "Bump version to 0.X.Y"
+git tag v0.X.Y && git push origin v0.X.Y
 ```
 
 The GitHub Actions workflow builds native amd64 and arm64 images and merges them into a

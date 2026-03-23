@@ -149,7 +149,6 @@ task Collect {
             --pipeline         ~{pipeline} \
             --min-base-qual    ~{min_base_qual} \
             --min-map-qual     ~{min_map_qual} \
-            --threads          ~{threads} \
             ~{"--sample-id "        + sample_id} \
             ~{"--batch "            + batch} \
             ~{"--vcf "              + vcf} \

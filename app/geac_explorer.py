@@ -9,6 +9,8 @@ from scipy.optimize import nnls
 from igv_helpers import query_distinct_samples
 import geac_config
 
+_IS_MIN, _IS_MAX = 20, 500  # insert size slider bounds
+
 st.set_page_config(page_title="GEAC Explorer", layout="wide")
 st.title("GEAC Explorer")
 st.markdown(
@@ -104,9 +106,13 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["min_depth"]          = 0
     st.session_state["max_depth"]          = 0
     st.session_state["table_limit_sel"]    = 500
-    st.session_state.pop("family_size_range", None)
-    st.session_state.pop("dist_from_end_range", None)
-    st.session_state.pop("map_qual_range", None)
+    _r_fs_max  = st.session_state.get("_cached_fs_max", 0)
+    _r_dfe_max = st.session_state.get("_cached_dfe_max", 300)
+    _r_mq_max  = st.session_state.get("_cached_mq_max", 60)
+    st.session_state["family_size_range"]    = (0, _r_fs_max)
+    st.session_state["dist_from_end_range"]  = (0, _r_dfe_max)
+    st.session_state["map_qual_range"]       = (0, _r_mq_max)
+    st.session_state["insert_size_range"] = (_IS_MIN, _IS_MAX)
     st.session_state["fs_exclude_mode"]  = False
     st.session_state["dfe_exclude_mode"] = False
     st.session_state["mq_exclude_mode"]  = False
@@ -203,6 +209,9 @@ if _has_alt_reads:
     _fs_has_data = _fs_max_raw is not None
     _fs_max = int(_fs_max_raw) if _fs_has_data else 0
     _is_has_data = bool(_reads_maxes[3])
+    st.session_state["_cached_fs_max"]  = _fs_max
+    st.session_state["_cached_dfe_max"] = _dfe_max
+    st.session_state["_cached_mq_max"]  = _mq_max
 
     st.sidebar.divider()
     st.sidebar.subheader("Per-read filters")
@@ -236,10 +245,11 @@ if _has_alt_reads:
     _dfe_slider_col, _dfe_toggle_col = st.sidebar.columns([3, 1])
     with _dfe_slider_col:
         dist_from_end_range = st.slider(
-            "Dist from read end",
+            "Cycle number",
             min_value=0, max_value=_dfe_max, value=(0, _dfe_max), step=1,
             key="dist_from_end_range",
-            help="Raise the lower bound to exclude reads clustered at read ends (a common artefact).",
+            help="Filter alt-supporting reads by cycle number (distance from read end). "
+                 "Raise the lower bound to exclude variants clustered at read ends (a common artefact).",
         )
     with _dfe_toggle_col:
         st.write("Mode")
@@ -267,7 +277,6 @@ if _has_alt_reads:
                  "On = exclude reads within this range (keep reads outside it).",
         )
 
-    _IS_MIN, _IS_MAX = 20, 500
     if _is_has_data:
         insert_size_range = st.sidebar.slider(
             "Insert size range",
@@ -735,7 +744,7 @@ if _reads_active:
         _active_parts.append(f"family size: {_mode} {_fs_lo}–{_fs_hi}")
     if _dfe_lo > 0 or _dfe_hi < _dfe_max:
         _mode = "excluding" if dfe_exclude_mode else "including only"
-        _active_parts.append(f"dist from read end: {_mode} {_dfe_lo}–{_dfe_hi}")
+        _active_parts.append(f"cycle number: {_mode} {_dfe_lo}–{_dfe_hi}")
     if _mq_lo > 0 or _mq_hi < _mq_max:
         _mode = "excluding" if mq_exclude_mode else "including only"
         _active_parts.append(f"map qual: {_mode} {_mq_lo}–{_mq_hi}")
@@ -778,7 +787,7 @@ with st.expander("Data table", expanded=True):
     st.caption(_tbl_caption)
     _tbl_event = st.dataframe(
         df[_table_cols],
-        use_container_width=True,
+        width="stretch",
         on_select="rerun",
         selection_mode="single-row",
     )
@@ -839,7 +848,7 @@ if _selected_rows:
     if "trinuc_context" in _locus_row.columns:
         _info_cols[5].metric("Trinuc context", str(_locus_row["trinuc_context"].iloc[0] or ""))
 
-    st.dataframe(_drill_df, use_container_width=True, hide_index=True)
+    st.dataframe(_drill_df, width="stretch", hide_index=True)
     igv_buttons(
         [f"chrom = '{_chrom}'", f"pos = {_pos}"],
         _drill_df,
@@ -885,10 +894,10 @@ if _selected_rows:
                 .round(1)
             )
             st.caption("Summary by sample / allele")
-            st.dataframe(_reads_summary, use_container_width=True, hide_index=True)
+            st.dataframe(_reads_summary, width="stretch", hide_index=True)
 
             with st.expander("Individual reads"):
-                st.dataframe(_reads_df, use_container_width=True, hide_index=True)
+                st.dataframe(_reads_df, width="stretch", hide_index=True)
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab_cohort, tab_reads = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort", "Reads"])
@@ -935,7 +944,7 @@ with tab1:
                 .add_params(sel_param)
                 .properties(title=f"{vtype} VAF Distribution", height=300)
             )
-            event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
+            event = st.altair_chart(chart, width="stretch", on_select="rerun")
 
             pts = (event.selection or {}).get("bar_click", [])
             if pts:
@@ -951,7 +960,7 @@ with tab1:
                         f"{len(sel):,} {vtype} records with VAF in "
                         f"[{bin_start:.3f}, {bin_end:.3f})"
                     )
-                    st.dataframe(sel[_table_cols], use_container_width=True)
+                    st.dataframe(sel[_table_cols], width="stretch")
                     igv_buttons([
                         f"variant_type = '{vtype}'",
                         f"ROUND(alt_count * 1.0 / total_depth, 4) >= {bin_start}",
@@ -1181,11 +1190,10 @@ with tab2:
                             / (float(obs.sum()) + 1e-12) * 100
                         )
 
-                        recon_total = reconstructed.sum()
                         recon_df = spec96[["sbs_label", "mut_type"]].copy()
                         recon_df["recon_count"] = reconstructed
                         recon_df["recon_frac"]  = (
-                            reconstructed / recon_total if recon_total > 0 else 0.0
+                            reconstructed / _total_snvs if _total_snvs > 0 else 0.0
                         )
 
                 except Exception as exc:
@@ -1251,7 +1259,7 @@ with tab2:
                 .resolve_scale(y="shared")
                 .properties(title=alt.TitleParams(_chart_title, fontSize=14))
             )
-            event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
+            event = st.altair_chart(chart, width="stretch", on_select="rerun")
 
             if recon_df is not None:
                 st.caption(
@@ -1282,7 +1290,7 @@ with tab2:
                         sel = query_records([extra_cond])
                         label_str = ", ".join(clicked_labels)
                         st.caption(f"{len(sel):,} records matching {len(clicked_labels)} selected context(s): {label_str}")
-                        st.dataframe(sel[_table_cols], use_container_width=True)
+                        st.dataframe(sel[_table_cols], width="stretch")
                         igv_buttons([extra_cond], sel, key=f"sbs_{'_'.join(clicked_labels)}")
 
             # ── COSMIC results (below chart) ───────────────────────────────────
@@ -1319,11 +1327,119 @@ with tab2:
                     )
                     .properties(title=f"Top {top_n_sig} COSMIC SBS Signatures (NNLS fit)", height=300)
                 )
-                st.altair_chart(sig_chart, use_container_width=True)
+                st.altair_chart(sig_chart, width="stretch")
 
                 display = top_df.copy()
                 display["exposure"] = display["exposure"].map("{:.2%}".format)
-                st.dataframe(display, use_container_width=True, hide_index=True)
+                st.dataframe(display, width="stretch", hide_index=True)
+
+                # ── Per-sample COSMIC decomposition (cohort stacked bar) ───────
+                if path.endswith(".duckdb"):
+                    st.divider()
+                    st.subheader("Per-sample Signature Exposures")
+                    st.caption(
+                        "Each sample fitted independently against the full COSMIC matrix (NNLS). "
+                        "Signatures with no exposure in any sample are hidden."
+                    )
+
+                    _ps_raw = con.execute(f"""
+                        SELECT sample_id, trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
+                        FROM (SELECT * FROM {table_expr}) _t
+                        WHERE {where} AND variant_type = 'SNV'
+                          AND trinuc_context IS NOT NULL AND length(trinuc_context) = 3
+                        GROUP BY sample_id, trinuc_context, ref_allele, alt_allele
+                    """).df()
+
+                    if _ps_raw.empty:
+                        st.info("No SNVs with trinucleotide context in current selection.")
+                    else:
+                        _ps_rows = []
+                        for _sid, _grp in _ps_raw.groupby("sample_id"):
+                            _grp = _grp.copy()
+                            _grp["sbs_label"] = _grp.apply(
+                                lambda r: _sbs_label(r["trinuc_context"], r["ref_allele"], r["alt_allele"]),
+                                axis=1,
+                            )
+                            _grp = _grp.dropna(subset=["sbs_label"])
+                            _agg = _grp.groupby("sbs_label")["count"].sum()
+                            _obs = (
+                                pd.Series(0.0, index=_SBS_ORDER)
+                                .add(_agg, fill_value=0)
+                                .reindex(_SBS_ORDER)
+                                .values.astype(float)
+                            )
+                            _n_snvs = int(_obs.sum())
+                            if _n_snvs == 0:
+                                continue
+                            _h, _ = nnls(_cosmic_W, _obs)
+                            _total = _h.sum()
+                            _h_norm = _h / _total if _total > 0 else _h
+                            for _sig, _exp in zip(_cosmic_aligned.columns, _h_norm):
+                                if _exp > 0:
+                                    _ps_rows.append({
+                                        "sample_id": _sid,
+                                        "signature": _sig,
+                                        "exposure":  float(_exp),
+                                        "n_snvs":    _n_snvs,
+                                        "etiology":  _SBS_ETIOLOGY.get(_sig, ""),
+                                    })
+
+                        if not _ps_rows:
+                            st.info("NNLS returned no exposures for any sample.")
+                        else:
+                            _ps_df = pd.DataFrame(_ps_rows)
+
+                            # Keep only signatures present in at least one sample
+                            _ps_sigs = _ps_df["signature"].unique().tolist()
+
+                            # Sort samples by total SNV count descending
+                            _ps_order = (
+                                _ps_df.groupby("sample_id")["n_snvs"].first()
+                                .sort_values(ascending=False)
+                                .index.tolist()
+                            )
+
+                            # Fill zeros for sample/signature combos with no exposure
+                            _ps_full = (
+                                pd.MultiIndex.from_product(
+                                    [_ps_order, _ps_sigs],
+                                    names=["sample_id", "signature"],
+                                )
+                                .to_frame(index=False)
+                                .merge(_ps_df[["sample_id", "signature", "exposure", "etiology"]],
+                                       on=["sample_id", "signature"], how="left")
+                            )
+                            _ps_full["exposure"] = _ps_full["exposure"].fillna(0.0)
+                            _ps_full["etiology"] = _ps_full["etiology"].fillna("")
+
+                            _ps_chart = (
+                                alt.Chart(_ps_full)
+                                .mark_rect()
+                                .encode(
+                                    alt.X("signature:N", sort=_ps_sigs, title="Signature",
+                                          axis=alt.Axis(labelAngle=-45, labelLimit=200)),
+                                    alt.Y("sample_id:N", sort=_ps_order, title="Sample"),
+                                    alt.Color("exposure:Q", title="Exposure",
+                                              scale=alt.Scale(scheme="blues"),
+                                              legend=alt.Legend(format=".0%")),
+                                    tooltip=[
+                                        "sample_id:N",
+                                        "signature:N",
+                                        alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
+                                        "etiology:N",
+                                    ],
+                                )
+                                .properties(
+                                    title="Per-sample COSMIC SBS signature exposures (NNLS)",
+                                    height=max(150, 22 * len(_ps_order)),
+                                )
+                            )
+                            st.altair_chart(_ps_chart, width="stretch")
+                            st.caption(
+                                f"{len(_ps_order)} samples · {len(_ps_sigs)} active signatures. "
+                                "Color intensity = exposure proportion. "
+                                "Signatures with no exposure in any sample are hidden."
+                            )
 
             # ── Called vs Uncalled Comparison ─────────────────────────────────
             if _has_data("variant_called"):
@@ -1427,7 +1543,7 @@ with tab2:
                             "Called vs Uncalled — mirrored trinucleotide spectrum",
                             fontSize=13,
                         )),
-                        use_container_width=True,
+                        width="stretch",
                     )
                     st.caption(
                         "Called variants point up (blue), uncalled loci point down (red). "
@@ -1516,7 +1632,7 @@ with tab2:
                                 title=f"Top {_cmp_top_n} COSMIC SBS Signatures — Called vs Uncalled",
                                 height=350,
                             ),
-                            use_container_width=True,
+                            width="stretch",
                         )
                         st.caption(
                             "Blue = called variants; red = uncalled. "
@@ -1538,7 +1654,162 @@ with tab2:
                             _pivot["etiology"] = _pivot["signature"].map(
                                 lambda s: _SBS_ETIOLOGY.get(s, "")
                             )
-                            st.dataframe(_pivot, use_container_width=True, hide_index=True)
+                            st.dataframe(_pivot, width="stretch", hide_index=True)
+
+            # ── Helpers for stratified spectra ─────────────────────────────────
+            def _to_spec96_strat(raw_df):
+                if raw_df.empty:
+                    return None, 0
+                df = raw_df.copy()
+                df["sbs_label"] = df.apply(
+                    lambda r: _sbs_label(r["trinuc_context"], r["ref_allele"], r["alt_allele"]),
+                    axis=1,
+                )
+                df = df.dropna(subset=["sbs_label"])
+                df["mut_type"] = df["sbs_label"].str.extract(r'\[([A-Z]>[A-Z])\]')[0]
+                agg = df.groupby(["sbs_label", "mut_type"], as_index=False)["count"].sum()
+                full = pd.DataFrame({
+                    "sbs_label": _SBS_ORDER,
+                    "mut_type":  [lbl[2:5] for lbl in _SBS_ORDER],
+                })
+                s96 = full.merge(agg, on=["sbs_label", "mut_type"], how="left")
+                s96["count"] = s96["count"].fillna(0).astype(int)
+                total = int(s96["count"].sum())
+                s96["fraction"] = s96["count"] / total if total > 0 else 0.0
+                return s96, total
+
+            def _strat_sbs96_chart(spec_df, title):
+                panels = []
+                for _mt in _SBS_MUT_TYPES:
+                    _s = spec_df[spec_df["mut_type"] == _mt]
+                    _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+                    panels.append(
+                        alt.Chart(_s)
+                        .mark_bar(color=_SBS_COLORS[_mt])
+                        .encode(
+                            alt.X("sbs_label:N", sort=_order, title=None,
+                                  axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
+                            alt.Y("fraction:Q", title="Fraction",
+                                  axis=alt.Axis(format=".3f")),
+                            tooltip=["sbs_label:N",
+                                     alt.Tooltip("fraction:Q", format=".3f", title="Fraction")],
+                        )
+                        .properties(
+                            title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt],
+                                                  fontSize=11, fontWeight="bold"),
+                            width=120, height=110,
+                        )
+                    )
+                return (
+                    alt.concat(*panels, columns=3)
+                    .resolve_scale(y="shared")
+                    .properties(title=alt.TitleParams(title, fontSize=13))
+                )
+
+            # ── VAF-stratified spectrum ────────────────────────────────────────
+            st.divider()
+            st.subheader("VAF-stratified Spectrum")
+            st.caption(
+                "Germline (VAF > 30%) vs somatic (VAF ≤ 30%) trinucleotide spectra. "
+                "Differences between the two profiles reveal what drives low-VAF calls."
+            )
+
+            _vaf_germ_raw = con.execute(f"""
+                SELECT trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
+                FROM (SELECT * FROM {table_expr}) _t
+                WHERE {where} AND variant_type = 'SNV'
+                  AND trinuc_context IS NOT NULL AND length(trinuc_context) = 3
+                  AND alt_count * 1.0 / total_depth > 0.3
+                GROUP BY trinuc_context, ref_allele, alt_allele
+            """).df()
+            _vaf_som_raw = con.execute(f"""
+                SELECT trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
+                FROM (SELECT * FROM {table_expr}) _t
+                WHERE {where} AND variant_type = 'SNV'
+                  AND trinuc_context IS NOT NULL AND length(trinuc_context) = 3
+                  AND alt_count * 1.0 / total_depth <= 0.3
+                GROUP BY trinuc_context, ref_allele, alt_allele
+            """).df()
+
+            _vaf_germ_s96, _n_germ = _to_spec96_strat(_vaf_germ_raw)
+            _vaf_som_s96,  _n_som  = _to_spec96_strat(_vaf_som_raw)
+
+            _vc1, _vc2 = st.columns(2)
+            with _vc1:
+                if _vaf_germ_s96 is not None:
+                    st.altair_chart(
+                        _strat_sbs96_chart(_vaf_germ_s96, f"Germline VAF > 30% (n={_n_germ:,})"),
+                        width="stretch",
+                    )
+                else:
+                    st.info("No germline SNVs in current selection.")
+            with _vc2:
+                if _vaf_som_s96 is not None:
+                    st.altair_chart(
+                        _strat_sbs96_chart(_vaf_som_s96, f"Somatic VAF ≤ 30% (n={_n_som:,})"),
+                        width="stretch",
+                    )
+                else:
+                    st.info("No somatic SNVs in current selection.")
+
+            # ── Family-size stratified spectrum ────────────────────────────────
+            if _has_alt_reads and _fs_has_data:
+                st.divider()
+                st.subheader("Family-size stratified Spectrum")
+                st.caption(
+                    "Singleton reads (family_size = 1) vs multi-member families (family_size > 1). "
+                    "Singletons are enriched for sequencing errors; differences in profile shape "
+                    "reveal the true variant signal from the error process."
+                )
+
+                _fs_strat_raw = con.execute(f"""
+                    WITH locus_fs AS (
+                        SELECT sample_id, chrom, pos, alt_allele,
+                               MEDIAN(family_size) AS median_fs
+                        FROM alt_reads
+                        WHERE family_size IS NOT NULL
+                        GROUP BY sample_id, chrom, pos, alt_allele
+                    )
+                    SELECT
+                        _t.trinuc_context, _t.ref_allele, _t.alt_allele,
+                        CASE WHEN COALESCE(lfs.median_fs, 1) <= 1
+                             THEN 'singleton' ELSE 'multi' END AS fs_group,
+                        COUNT(*) AS count
+                    FROM (SELECT * FROM {table_expr}) _t
+                    LEFT JOIN locus_fs lfs
+                        ON  lfs.sample_id  = _t.sample_id
+                        AND lfs.chrom      = _t.chrom
+                        AND lfs.pos        = _t.pos
+                        AND lfs.alt_allele = _t.alt_allele
+                    WHERE {where} AND _t.variant_type = 'SNV'
+                      AND _t.trinuc_context IS NOT NULL
+                      AND length(_t.trinuc_context) = 3
+                    GROUP BY _t.trinuc_context, _t.ref_allele, _t.alt_allele, fs_group
+                """).df()
+
+                _fs_sing_raw  = _fs_strat_raw[_fs_strat_raw["fs_group"] == "singleton"].drop(columns="fs_group")
+                _fs_multi_raw = _fs_strat_raw[_fs_strat_raw["fs_group"] == "multi"].drop(columns="fs_group")
+
+                _fs_sing_s96,  _n_sing  = _to_spec96_strat(_fs_sing_raw)
+                _fs_multi_s96, _n_multi = _to_spec96_strat(_fs_multi_raw)
+
+                _fc1, _fc2 = st.columns(2)
+                with _fc1:
+                    if _fs_sing_s96 is not None:
+                        st.altair_chart(
+                            _strat_sbs96_chart(_fs_sing_s96, f"Singleton (family_size = 1, n={_n_sing:,})"),
+                            width="stretch",
+                        )
+                    else:
+                        st.info("No singleton loci in current selection.")
+                with _fc2:
+                    if _fs_multi_s96 is not None:
+                        st.altair_chart(
+                            _strat_sbs96_chart(_fs_multi_s96, f"Multi-member (family_size > 1, n={_n_multi:,})"),
+                            width="stretch",
+                        )
+                    else:
+                        st.info("No multi-member loci in current selection.")
 
     else:
         # Fallback: simple ref>alt spectrum for older Parquet files
@@ -1567,7 +1838,7 @@ with tab2:
                 .add_params(sel_param)
                 .properties(title="SNV Error Spectrum", height=350)
             )
-            event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
+            event = st.altair_chart(chart, width="stretch", on_select="rerun")
 
             pts = (event.selection or {}).get("bar_click", [])
             if pts:
@@ -1580,12 +1851,98 @@ with tab2:
                         f"alt_allele = '{alt_allele}'",
                     ])
                     st.caption(f"{len(sel):,} records with substitution {sub}")
-                    st.dataframe(sel[_table_cols], use_container_width=True)
+                    st.dataframe(sel[_table_cols], width="stretch")
                     igv_buttons([
                         "variant_type = 'SNV'",
                         f"ref_allele = '{ref}'",
                         f"alt_allele = '{alt_allele}'",
                     ], sel, key=f"spectrum_{sub}")
+
+    # ── SBS96 heatmap (cohort / DuckDB only) ──────────────────────────────────
+    if path.endswith(".duckdb"):
+        st.divider()
+        st.subheader("SBS96 Heatmap (samples × trinucleotide contexts)")
+        if not _has_data("trinuc_context"):
+            st.info("Trinucleotide context unavailable — run geac collect with a reference FASTA.")
+        else:
+            _hm_raw = con.execute(f"""
+                SELECT sample_id, trinuc_context, ref_allele, alt_allele, COUNT(*) AS n
+                FROM {table_expr}
+                WHERE {where} AND variant_type = 'SNV'
+                  AND trinuc_context IS NOT NULL AND length(trinuc_context) = 3
+                GROUP BY sample_id, trinuc_context, ref_allele, alt_allele
+            """).df()
+
+            if _hm_raw.empty:
+                st.info("No SNVs with trinucleotide context in current selection.")
+            else:
+                _hm_raw["sbs_label"] = _hm_raw.apply(
+                    lambda row: _sbs_label(row["trinuc_context"], row["ref_allele"], row["alt_allele"]),
+                    axis=1,
+                )
+                _hm_raw = _hm_raw.dropna(subset=["sbs_label"])
+                _hm_agg = _hm_raw.groupby(["sample_id", "sbs_label"], as_index=False)["n"].sum()
+
+                _totals = _hm_agg.groupby("sample_id")["n"].transform("sum")
+                _hm_agg["fraction"] = _hm_agg["n"] / _totals
+
+                _all_combos = pd.MultiIndex.from_product(
+                    [_hm_agg["sample_id"].unique(), _SBS_ORDER],
+                    names=["sample_id", "sbs_label"],
+                )
+                _hm_full = (
+                    _hm_agg.set_index(["sample_id", "sbs_label"])
+                    .reindex(_all_combos, fill_value=0)
+                    .reset_index()
+                )
+                _hm_full["mut_type"] = _hm_full["sbs_label"].str.extract(r'\[([A-Z]>[A-Z])\]')[0]
+
+                _hm_chart = (
+                    alt.Chart(_hm_full)
+                    .mark_rect()
+                    .encode(
+                        alt.X("sbs_label:N", sort=_SBS_ORDER, title=None,
+                              axis=alt.Axis(labels=False, ticks=False)),
+                        alt.Y("sample_id:N", title="Sample"),
+                        alt.Color("fraction:Q", title="Fraction of SNVs",
+                                  scale=alt.Scale(scheme="blues")),
+                        alt.Tooltip(["sample_id:N", "sbs_label:N", "n:Q", "fraction:Q"]),
+                    )
+                    .properties(
+                        height=max(200, 20 * _hm_full["sample_id"].nunique()),
+                        title="Normalised SBS96 profile per sample (fraction of SNVs)",
+                    )
+                )
+
+                _hm_label_df = pd.DataFrame([
+                    {"sbs_label": [l for l in _SBS_ORDER if f"[{mt}]" in l][8], "mut_type": mt}
+                    for mt in _SBS_MUT_TYPES
+                ])
+                _hm_label_strip = (
+                    alt.Chart(_hm_label_df)
+                    .mark_text(align="center", fontSize=11, fontWeight="bold")
+                    .encode(
+                        alt.X("sbs_label:N", sort=_SBS_ORDER,
+                              axis=alt.Axis(labels=False, ticks=False, title=None)),
+                        alt.Y(value=15),
+                        alt.Color("mut_type:N", legend=None,
+                                  scale=alt.Scale(
+                                      domain=list(_SBS_COLORS.keys()),
+                                      range=list(_SBS_COLORS.values()),
+                                  )),
+                        alt.Text("mut_type:N"),
+                    )
+                    .properties(height=30)
+                )
+                st.altair_chart(
+                    alt.vconcat(_hm_chart, _hm_label_strip, spacing=2)
+                    .resolve_scale(x="shared"),
+                    width="stretch",
+                )
+                st.caption(
+                    "Color = fraction of that sample's SNVs falling in each trinucleotide context. "
+                    "Contexts ordered by mutation type (C>A, C>G, C>T, T>A, T>C, T>G) then flanking bases."
+                )
 
 with tab3:
     _sb_col1, _sb_col2 = st.columns(2)
@@ -1771,7 +2128,7 @@ with tab3:
     )
     sb_event = st.altair_chart(
         (ci_lower + ci_upper + diag_line + scatter).resolve_scale(color="independent"),
-        use_container_width=True,
+        width="stretch",
         on_select="rerun",
     )
 
@@ -1800,7 +2157,7 @@ with tab3:
                 f"{n_pts} selected loci across {n_smp} sample(s) — "
                 "shift-click to select multiple points"
             )
-            st.dataframe(_sb_sel_df[_table_cols], use_container_width=True, hide_index=True)
+            st.dataframe(_sb_sel_df[_table_cols], width="stretch", hide_index=True)
             igv_buttons(
                 [f"({_sb_or_clauses})"],
                 _sb_sel_df,
@@ -1842,7 +2199,7 @@ with tab4:
             )
             .properties(title="Overlap Agreement Fraction", height=350)
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
 
 with tab_cohort:
     if not path.endswith(".duckdb"):
@@ -1895,7 +2252,7 @@ with tab_cohort:
         else:
             _cohort_event = st.dataframe(
                 _cohort_stats,
-                use_container_width=True,
+                width="stretch",
                 on_select="rerun",
                 selection_mode="single-row",
                 hide_index=True,
@@ -1952,7 +2309,7 @@ with tab_cohort:
                         height=350,
                     )
                 )
-                st.altair_chart(_vaf_chart, use_container_width=True)
+                st.altair_chart(_vaf_chart, width="stretch")
 
             # ── Step 3: Strand balance scatter ────────────────────────────────
             st.divider()
@@ -2014,7 +2371,7 @@ with tab_cohort:
                 )
                 st.altair_chart(
                     (_strand_chart + _ref_line).properties(height=350),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             # ── Step 4: Alt loci count vs mean base quality ───────────────────
@@ -2068,7 +2425,7 @@ with tab_cohort:
                     )
                     .properties(height=350, title="Alt loci count vs mean base quality (per sample)")
                 )
-                st.altair_chart(_bq_loci_chart, use_container_width=True)
+                st.altair_chart(_bq_loci_chart, width="stretch")
 
             # ── Step 5: SNV count bar chart stacked by SBS6 substitution ──────
             st.subheader("SNV Count by Sample (SBS6 breakdown)")
@@ -2111,94 +2468,7 @@ with tab_cohort:
                     )
                     .properties(height=350, title="SNV count per sample colored by SBS6 substitution type")
                 )
-                st.altair_chart(_sbs6_chart, use_container_width=True)
-
-            # ── Step 5: SBS96 heatmap ──────────────────────────────────────────
-            st.subheader("SBS96 Heatmap (samples × trinucleotide contexts)")
-            if not _has_data("trinuc_context"):
-                st.info("Trinucleotide context unavailable — run geac collect with a reference FASTA.")
-            else:
-                _hm_raw = con.execute(f"""
-                    SELECT sample_id, trinuc_context, ref_allele, alt_allele, COUNT(*) AS n
-                    FROM {table_expr}
-                    WHERE {_cohort_where} AND variant_type = 'SNV'
-                      AND trinuc_context IS NOT NULL AND length(trinuc_context) = 3
-                    GROUP BY sample_id, trinuc_context, ref_allele, alt_allele
-                """).df()
-
-                if _hm_raw.empty:
-                    st.info("No SNVs with trinucleotide context in current selection.")
-                else:
-                    _hm_raw["sbs_label"] = _hm_raw.apply(
-                        lambda row: _sbs_label(row["trinuc_context"], row["ref_allele"], row["alt_allele"]),
-                        axis=1,
-                    )
-                    _hm_raw = _hm_raw.dropna(subset=["sbs_label"])
-                    _hm_agg = _hm_raw.groupby(["sample_id", "sbs_label"], as_index=False)["n"].sum()
-
-                    # Normalize per sample so colours reflect profile, not total count
-                    _totals = _hm_agg.groupby("sample_id")["n"].transform("sum")
-                    _hm_agg["fraction"] = _hm_agg["n"] / _totals
-
-                    # Fill missing context/sample combinations with zero
-                    _all_combos = pd.MultiIndex.from_product(
-                        [_hm_agg["sample_id"].unique(), _SBS_ORDER],
-                        names=["sample_id", "sbs_label"],
-                    )
-                    _hm_full = (
-                        _hm_agg.set_index(["sample_id", "sbs_label"])
-                        .reindex(_all_combos, fill_value=0)
-                        .reset_index()
-                    )
-                    _hm_full["mut_type"] = _hm_full["sbs_label"].str.extract(r'\[([A-Z]>[A-Z])\]')[0]
-
-                    _hm_chart = (
-                        alt.Chart(_hm_full)
-                        .mark_rect()
-                        .encode(
-                            alt.X("sbs_label:N", sort=_SBS_ORDER, title=None,
-                                  axis=alt.Axis(labels=False, ticks=False)),
-                            alt.Y("sample_id:N", title="Sample"),
-                            alt.Color("fraction:Q", title="Fraction of SNVs",
-                                      scale=alt.Scale(scheme="blues")),
-                            alt.Tooltip(["sample_id:N", "sbs_label:N", "n:Q", "fraction:Q"]),
-                        )
-                        .properties(
-                            height=max(200, 20 * _hm_full["sample_id"].nunique()),
-                            title="Normalised SBS96 profile per sample (fraction of SNVs)",
-                        )
-                    )
-
-                    # Label strip — one label per mutation type at the group midpoint
-                    _hm_label_df = pd.DataFrame([
-                        {"sbs_label": [l for l in _SBS_ORDER if f"[{mt}]" in l][8], "mut_type": mt}
-                        for mt in _SBS_MUT_TYPES
-                    ])
-                    _hm_label_strip = (
-                        alt.Chart(_hm_label_df)
-                        .mark_text(align="center", fontSize=11, fontWeight="bold")
-                        .encode(
-                            alt.X("sbs_label:N", sort=_SBS_ORDER,
-                                  axis=alt.Axis(labels=False, ticks=False, title=None)),
-                            alt.Y(value=15),
-                            alt.Color("mut_type:N", legend=None,
-                                      scale=alt.Scale(
-                                          domain=list(_SBS_COLORS.keys()),
-                                          range=list(_SBS_COLORS.values()),
-                                      )),
-                            alt.Text("mut_type:N"),
-                        )
-                        .properties(height=30)
-                    )
-                    st.altair_chart(
-                        alt.vconcat(_hm_chart, _hm_label_strip, spacing=2)
-                        .resolve_scale(x="shared"),
-                        use_container_width=True,
-                    )
-                    st.caption(
-                        "Color = fraction of that sample's SNVs falling in each trinucleotide context. "
-                        "Contexts ordered by mutation type (C>A, C>G, C>T, T>A, T>C, T>G) then flanking bases."
-                    )
+                st.altair_chart(_sbs6_chart, width="stretch")
 
 with tab_reads:
     if not _has_alt_reads:
@@ -2318,7 +2588,7 @@ with tab_reads:
                         .encode(**_fs_enc)
                         .properties(height=300)
                     )
-                st.altair_chart(_fs_chart, use_container_width=True)
+                st.altair_chart(_fs_chart, width="stretch")
                 _fs_norm_note = (
                     "Fraction mode normalizes each batch independently."
                     if _fs_by_batch else
@@ -2414,7 +2684,7 @@ with tab_reads:
                         .encode(**_dfe_enc)
                         .properties(height=300)
                     )
-                st.altair_chart(_dfe_chart, use_container_width=True)
+                st.altair_chart(_dfe_chart, width="stretch")
                 st.caption(
                     "A spike at high cycle numbers indicates alt-supporting reads clustered at read ends — "
                     "a red flag for alignment artefacts or damaged bases."
@@ -2488,7 +2758,7 @@ with tab_reads:
                     .encode(**_bq_enc)
                     .properties(height=350)
                 )
-            st.altair_chart(_bq_chart, use_container_width=True)
+            st.altair_chart(_bq_chart, width="stretch")
             st.caption(
                 "A drop in mean base quality at high cycle numbers (late in the read) "
                 "indicates that alt-supporting reads at those positions may be artefacts."
@@ -2610,7 +2880,7 @@ with tab_reads:
                         .encode(**_ins_enc)
                         .properties(height=300)
                     )
-                st.altair_chart(_ins_chart, use_container_width=True)
+                st.altair_chart(_ins_chart, width="stretch")
                 _ins_caption = (
                     "Insert size distribution of alt-supporting reads. "
                     "A shift toward shorter inserts can indicate adapter contamination or artefacts."
@@ -2751,7 +3021,7 @@ with tab_reads:
                     )
                     .properties(height=300)
                 )
-                st.altair_chart(_af_ins_chart, use_container_width=True)
+                st.altair_chart(_af_ins_chart, width="stretch")
                 _af_ins_caption = (
                     "Insert size distributions split by allele frequency. "
                     "Each series is normalised independently so lines are directly comparable "
@@ -2814,7 +3084,7 @@ with tab_reads:
                 )
                 .properties(height=350)
             )
-            st.altair_chart(_fsvaf_chart, use_container_width=True)
+            st.altair_chart(_fsvaf_chart, width="stretch")
             st.caption(
                 "True low-VAF variants should have reasonable mean family sizes. "
                 "Artefacts at low VAF tend to cluster at low family size."
@@ -2863,7 +3133,7 @@ with tab_reads:
                 )
                 .properties(height=300)
             )
-            st.altair_chart(_mq_chart, use_container_width=True)
+            st.altair_chart(_mq_chart, width="stretch")
             st.caption(
                 "Stacked by locus type (repetitive = homopolymer ≥ 5 or STR length ≥ 6). "
                 "Low MAPQ at repetitive loci indicates multi-mapping artefacts."
@@ -2969,7 +3239,7 @@ with tab_reads:
                         )
                     )
                     _cf_chart = (_cf_whisker + _cf_box + _cf_median).properties(height=300)
-                    st.altair_chart(_cf_chart, use_container_width=True)
+                    st.altair_chart(_cf_chart, width="stretch")
                     st.caption(
                         "Cohort artefacts (seen in many samples) tend to have lower family sizes "
                         "than rare variants, confirming they are sequencing noise rather than "

@@ -117,10 +117,6 @@ pub struct CollectArgs {
     #[arg(long, default_value_t = 10)]
     pub repeat_window: usize,
 
-    /// Number of threads for parallel processing
-    #[arg(short = 't', long, default_value_t = 1)]
-    pub threads: usize,
-
     /// Progress reporting interval in seconds (0 to disable)
     #[arg(long, default_value_t = 30)]
     pub progress_interval: u64,

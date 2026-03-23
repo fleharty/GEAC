@@ -158,7 +158,13 @@ pub fn run_cohort(args: &CohortArgs) -> Result<()> {
         .context("failed to fetch display rows")?;
 
     // ── Print stdout summary ───────────────────────────────────────────────────
-    let total_samples = rows.first().map_or(0, |r| r.total_samples);
+    let total_samples: i64 = con
+        .query_row(
+            "SELECT COUNT(DISTINCT sample_id) FROM data",
+            [],
+            |r| r.get(0),
+        )
+        .context("failed to count total samples")?;
 
     println!(
         "Cohort: {} samples  |  min_samples={}  |  min_fraction={:.2}  |  showing top {}",

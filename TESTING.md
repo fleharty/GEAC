@@ -157,7 +157,6 @@ Work through each item top to bottom. Check off items as verified, note failures
 - [x] `--sample-id` overrides SM tag correctly
 - [x] `--read-type` and `--pipeline` values stored correctly in output
 - [ ] `--region` restricts output to the specified region only
-- [ ] `--threads > 1` runs without error
 - [ ] `--progress-interval 0` suppresses progress output
 
 ### Annotations
