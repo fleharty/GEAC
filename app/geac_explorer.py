@@ -1207,8 +1207,19 @@ with tab2:
                             "exposure", ascending=False
                         ).reset_index(drop=True)
 
-                        # ── Goodness-of-fit ───────────────────────────────
-                        reconstructed = W @ h
+                        top_n_sig = st.slider(
+                            "Top signatures to display", 3, min(20, len(sig_df)), 4,
+                            key="top_n_sig",
+                        )
+                        top_df = sig_df.head(top_n_sig)
+
+                        # ── Refit: restrict NNLS to top-N signatures ──────────
+                        _top_sig_names = top_df["signature"].tolist()
+                        W_refit = cosmic_aligned[_top_sig_names].values.astype(float)
+                        h_refit, _ = nnls(W_refit, obs)
+                        reconstructed = W_refit @ h_refit
+
+                        # ── Goodness-of-fit (refit) ───────────────────────────
                         cos_sim = (
                             float(np.dot(obs, reconstructed))
                             / (np.linalg.norm(obs) * np.linalg.norm(reconstructed) + 1e-12)
@@ -1219,12 +1230,12 @@ with tab2:
                         fit_col1.metric(
                             "Cosine similarity",
                             f"{cos_sim:.4f}",
-                            help="1.0 = perfect reconstruction. Values above 0.95 indicate a good fit.",
+                            help="1.0 = perfect reconstruction using the top-N signatures. Values above 0.95 indicate a good fit.",
                         )
                         fit_col2.metric(
                             "Residual (% of counts)",
                             f"{residual_pct:.1f}%",
-                            help="L2 norm of unexplained counts as a percentage of total SNV count. Lower is better.",
+                            help="L2 norm of unexplained counts as a percentage of total SNV count (refit to top-N). Lower is better.",
                         )
 
                         # ── Observed vs reconstructed overlay ─────────────
@@ -1285,15 +1296,9 @@ with tab2:
                         )
                         st.altair_chart(overlay_chart, use_container_width=True)
                         st.caption(
-                            "Bars = observed spectrum. Black dots = COSMIC reconstruction (NNLS fit). "
-                            "Contexts where the line deviates from the bars are poorly explained by the selected signatures."
+                            f"Bars = observed spectrum. Black dots = COSMIC reconstruction refit to top {top_n_sig} signatures (NNLS). "
+                            "Contexts where dots deviate from bars are poorly explained by the selected signatures."
                         )
-
-                        top_n_sig = st.slider(
-                            "Top signatures to display", 3, min(20, len(sig_df)), 4,
-                            key="top_n_sig",
-                        )
-                        top_df = sig_df.head(top_n_sig)
 
                         # Fix color domain to full ranked list so colors
                         # don't shift when the slider changes.
