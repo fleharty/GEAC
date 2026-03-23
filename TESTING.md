@@ -4,6 +4,18 @@ Work through each item top to bottom. Check off items as verified, note failures
 
 ---
 
+## High Priority — To Explore
+
+- [ ] **IGV.js integration** — evaluate embedding [IGV.js](https://github.com/igvteam/igv.js) (the
+  JavaScript port of IGV) directly inside the Explorer rather than generating session zip files for
+  the desktop app. Could enable tighter integration: clicking a locus in any plot immediately renders
+  the BAM reads inline without leaving the browser. Key questions to investigate: Streamlit
+  compatibility (likely via `components.html` or a custom component), BAM/CRAM streaming
+  requirements (igv.js can load remote files via URL or local files via a dev server), authentication
+  for Terra-hosted BAMs, and whether the existing manifest/sample-picker workflow can feed into it.
+
+---
+
 ## Known Issues / To Investigate
 
 - [ ] **Insert size kink at ~250 bp** — both insert size plots show a kink (inflection/discontinuity)
