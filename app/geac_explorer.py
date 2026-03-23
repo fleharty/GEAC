@@ -2280,9 +2280,40 @@ with tab_reads:
         # ── Row 3b: Insert size by AF class (germline vs somatic) ─────────────
         if con.execute("SELECT COUNT(*) FROM alt_reads WHERE insert_size IS NOT NULL LIMIT 1").fetchone()[0] > 0:
             st.subheader("Insert size by allele frequency class")
+            _af_ins_color_options = ["All samples (aggregate)", "Sample"]
+            if _has_data("batch"):
+                _af_ins_color_options.append("Batch")
+            _af_ins_ctrl1, _af_ins_ctrl2 = st.columns(2)
+            _af_ins_color_by = _af_ins_ctrl1.radio(
+                "Color by", _af_ins_color_options,
+                horizontal=True, key="af_ins_color_by",
+            )
+            _af_ins_y_mode = _af_ins_ctrl2.radio(
+                "Y axis", ["Frequency", "Count"],
+                horizontal=True, key="af_ins_y_mode",
+            )
+            _af_ins_by_sample = _af_ins_color_by == "Sample"
+            _af_ins_by_batch  = _af_ins_color_by == "Batch"
+            _af_ins_group_col = (
+                "sample_id" if _af_ins_by_sample else
+                "batch"     if _af_ins_by_batch  else
+                None
+            )
+            _af_ins_extra_select = (
+                "ar.sample_id, " if _af_ins_by_sample else
+                "_locus.batch, " if _af_ins_by_batch  else
+                ""
+            )
+            _af_ins_extra_group = (
+                "ar.sample_id, " if _af_ins_by_sample else
+                "_locus.batch, " if _af_ins_by_batch  else
+                ""
+            )
+            _af_ins_locus_extra = ", batch" if _af_ins_by_batch else ""
+
             _af_ins_df = con.execute(f"""
                 SELECT
-                    ar.insert_size,
+                    {_af_ins_extra_select}ar.insert_size,
                     CASE
                         WHEN (_locus.alt_count * 1.0 / _locus.total_depth) > 0.30
                             THEN 'Likely germline (VAF > 30%)'
@@ -2291,7 +2322,7 @@ with tab_reads:
                     COUNT(*) AS n_reads
                 FROM {_r_join}
                 INNER JOIN (
-                    SELECT DISTINCT sample_id, chrom, pos, alt_allele, alt_count, total_depth
+                    SELECT DISTINCT sample_id, chrom, pos, alt_allele, alt_count, total_depth{_af_ins_locus_extra}
                     FROM {table_expr}
                     WHERE {where}
                 ) _locus ON  ar.sample_id  = _locus.sample_id
@@ -2299,34 +2330,52 @@ with tab_reads:
                          AND ar.pos        = _locus.pos
                          AND ar.alt_allele = _locus.alt_allele
                 WHERE ar.insert_size BETWEEN {_is_lo} AND {_is_hi}
-                GROUP BY ar.insert_size, af_class
-                ORDER BY ar.insert_size
+                GROUP BY {_af_ins_extra_group}ar.insert_size, af_class
+                ORDER BY {_af_ins_extra_group}ar.insert_size
             """).df()
 
             if _af_ins_df.empty:
                 st.info("No data.")
             else:
-                _af_ins_y_mode = st.radio(
-                    "Y axis",
-                    ["Frequency", "Count"],
-                    horizontal=True,
-                    key="af_ins_y_mode",
-                )
                 _af_ins_use_freq = _af_ins_y_mode == "Frequency"
+
+                # When grouping by sample/batch, combine group + af_class into one label
+                # so color encodes the group and line style implicitly encodes AF class.
+                if _af_ins_group_col:
+                    _af_ins_df["series"] = (
+                        _af_ins_df[_af_ins_group_col].astype(str)
+                        + " — "
+                        + _af_ins_df["af_class"]
+                    )
+                    _af_ins_color_field = "series"
+                    _af_ins_color_enc = alt.Color("series:N", title=_af_ins_color_by,
+                                                   scale=alt.Scale(scheme="tableau10"))
+                else:
+                    _af_ins_color_field = "af_class"
+                    _af_ins_color_enc = alt.Color("af_class:N", title="AF class",
+                                                   scale=alt.Scale(
+                                                       domain=["Likely germline (VAF > 30%)", "Likely somatic (VAF ≤ 30%)"],
+                                                       range=["#e45756", "#4c78a8"],
+                                                   ))
+
                 if _af_ins_use_freq:
-                    _totals = _af_ins_df.groupby("af_class")["n_reads"].transform("sum")
+                    _norm_key = "series" if _af_ins_group_col else "af_class"
+                    _totals = _af_ins_df.groupby(_norm_key)["n_reads"].transform("sum")
                     _af_ins_df["frequency"] = _af_ins_df["n_reads"] / _totals
+
                 _af_ins_y = (
                     alt.Y("frequency:Q", title="Frequency", axis=alt.Axis(format=".3f"))
                     if _af_ins_use_freq else
                     alt.Y("n_reads:Q", title="Alt-supporting reads")
                 )
+                _af_ins_y_field = "frequency" if _af_ins_use_freq else "n_reads"
                 _af_ins_tooltip = [
+                    *([f"{_af_ins_group_col}:N"] if _af_ins_group_col else []),
                     alt.Tooltip("insert_size:Q", title="Insert size (bp)"),
                     alt.Tooltip("af_class:N", title="AF class"),
-                    alt.Tooltip("frequency:Q", title="Frequency", format=".4f")
-                    if _af_ins_use_freq else
-                    alt.Tooltip("n_reads:Q", title="Reads"),
+                    alt.Tooltip(_af_ins_y_field + ":Q",
+                                title="Frequency" if _af_ins_use_freq else "Reads",
+                                **({"format": ".4f"} if _af_ins_use_freq else {})),
                 ]
                 _af_ins_chart = (
                     alt.Chart(_af_ins_df)
@@ -2334,11 +2383,7 @@ with tab_reads:
                     .encode(
                         alt.X("insert_size:Q", title="Insert size (bp)"),
                         _af_ins_y,
-                        alt.Color("af_class:N", title="AF class",
-                                  scale=alt.Scale(
-                                      domain=["Likely germline (VAF > 30%)", "Likely somatic (VAF ≤ 30%)"],
-                                      range=["#e45756", "#4c78a8"],
-                                  )),
+                        _af_ins_color_enc,
                         tooltip=_af_ins_tooltip,
                     )
                     .properties(height=300)
@@ -2346,7 +2391,7 @@ with tab_reads:
                 st.altair_chart(_af_ins_chart, use_container_width=True)
                 st.caption(
                     "Insert size distributions split by allele frequency. "
-                    "Frequency is normalized independently per class so the two lines are directly comparable "
+                    "Frequency is normalized independently per series so lines are directly comparable "
                     "regardless of how many reads fall in each group. "
                     "A shift in one class toward very short or very long inserts suggests artefacts in that group."
                 )
