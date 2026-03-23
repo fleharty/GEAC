@@ -1104,101 +1104,47 @@ with tab2:
             _sbs_y_title = "Fraction of SNVs" if _sbs_use_fraction else "Count"
             _sbs_y_fmt   = ".3f" if _sbs_use_fraction else "d"
 
-            sel_param = alt.selection_point(name="bar_click", fields=["sbs_label"], on="click")
-
-            _sub_charts = []
-            for _mt in _SBS_MUT_TYPES:
-                _sub = spec96[spec96["mut_type"] == _mt].copy()
-                _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
-                _c = (
-                    alt.Chart(_sub)
-                    .mark_bar(color=_SBS_COLORS[_mt])
-                    .encode(
-                        alt.X("sbs_label:N", sort=_order, title=None,
-                              axis=alt.Axis(labelAngle=-90, labelFontSize=8)),
-                        alt.Y(f"{_sbs_y_field}:Q", title=_sbs_y_title,
-                              **({"axis": alt.Axis(format=".3f")} if _sbs_use_fraction else {})),
-                        opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.4)),
-                        tooltip=[
-                            "sbs_label:N",
-                            alt.Tooltip(f"{_sbs_y_field}:Q", title=_sbs_y_title, format=_sbs_y_fmt),
-                        ],
-                    )
-                    .add_params(sel_param)
-                    .properties(
-                        title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt], fontSize=13, fontWeight="bold"),
-                        width=150, height=140,
-                    )
-                )
-                _sub_charts.append(_c)
-
-            chart = (
-                alt.concat(*_sub_charts, columns=3)
-                .resolve_scale(y="shared")
-                .properties(title=alt.TitleParams("SNV Trinucleotide Spectrum (SBS96)", fontSize=15))
-            )
-            event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
-
-            pts = (event.selection or {}).get("bar_click", [])
-            if pts:
-                clicked_labels = [p.get("sbs_label") for p in pts if p.get("sbs_label")]
-                if clicked_labels:
-                    matching = raw[raw["sbs_label"].isin(clicked_labels)][["trinuc_context", "ref_allele", "alt_allele"]]
-                    if not matching.empty:
-                        or_clauses = " OR ".join(
-                            f"(trinuc_context = '{r.trinuc_context}' AND ref_allele = '{r.ref_allele}' AND alt_allele = '{r.alt_allele}')"
-                            for r in matching.itertuples(index=False)
-                        )
-                        extra_cond = f"variant_type = 'SNV' AND ({or_clauses})"
-                        sel = query_records([extra_cond])
-                        label_str = ", ".join(clicked_labels)
-                        st.caption(f"{len(sel):,} records matching {len(clicked_labels)} selected context(s): {label_str}")
-                        st.dataframe(sel[_table_cols], use_container_width=True)
-                        igv_buttons([extra_cond], sel, key=f"sbs_{'_'.join(clicked_labels)}")
-
-            # ── COSMIC signature decomposition (NNLS) ─────────────────────────
-            st.divider()
-            st.subheader("COSMIC Signature Decomposition")
-            st.caption(
-                "Provide a COSMIC SBS matrix file (tab-separated, 96 contexts × N signatures). "
-                "Download from the COSMIC website under Mutational Signatures → Downloads "
-                "(e.g. COSMIC_v3.4_SBS_GRCh37.txt)."
-            )
-
-            cosmic_path = st.text_input(
-                "COSMIC SBS matrix path",
+            # ── COSMIC controls (above chart so reconstruction data is ready) ──
+            _cos_col, _path_col = st.columns([1, 3])
+            cosmic_path = _path_col.text_input(
+                "COSMIC SBS matrix path (optional — enables reconstruction overlay)",
                 value=_cfg.get("cosmic", ""),
                 placeholder="/path/to/COSMIC_v3.4_SBS_GRCh37.txt",
                 key="cosmic_path",
+                label_visibility="visible",
             )
 
-            # shared with Called vs Uncalled section below; set when COSMIC loads successfully
-            _cosmic_W = None
-            _cosmic_aligned = None
+            # Shared with Called vs Uncalled section; set when COSMIC loads successfully
+            _cosmic_W        = None
+            _cosmic_aligned  = None
+            reconstructed    = None
+            recon_df         = None
+            sig_df           = None
+            top_df           = None
+            top_n_sig        = None
+            cos_sim          = None
+            residual_pct     = None
 
             if cosmic_path and cosmic_path.strip():
                 try:
-                    cosmic_df = _load_cosmic(cosmic_path.strip())
-                    # Align rows to our canonical SBS96 order
+                    cosmic_df      = _load_cosmic(cosmic_path.strip())
                     cosmic_aligned = cosmic_df.reindex(_SBS_ORDER)
-                    missing = cosmic_aligned.isna().any(axis=1).sum()
+                    missing        = cosmic_aligned.isna().any(axis=1).sum()
                     if missing > 0:
                         st.warning(
                             f"{missing} context(s) not found in COSMIC matrix — "
                             "check that the file uses the standard A[C>A]A format."
                         )
                     else:
-                        W = cosmic_aligned.values.astype(float)  # 96 × N
-                        _cosmic_W = W
+                        W              = cosmic_aligned.values.astype(float)
+                        _cosmic_W      = W
                         _cosmic_aligned = cosmic_aligned
                         obs = (
                             spec96.set_index("sbs_label")["count"]
-                            .reindex(_SBS_ORDER)
-                            .fillna(0)
-                            .values.astype(float)
+                            .reindex(_SBS_ORDER).fillna(0).values.astype(float)
                         )
 
-                        h, _residual = nnls(W, obs)
+                        h, _ = nnls(W, obs)
                         total = h.sum()
                         h_norm = h / total if total > 0 else h
 
@@ -1213,134 +1159,174 @@ with tab2:
                             "exposure", ascending=False
                         ).reset_index(drop=True)
 
-                        top_n_sig = st.slider(
-                            "Top signatures to display", 3, min(20, len(sig_df)), 4,
+                        top_n_sig = _cos_col.slider(
+                            "Top signatures", 3, min(20, len(sig_df)), 4,
                             key="top_n_sig",
+                            help="Number of top signatures used for the reconstruction overlay and exposure chart.",
                         )
                         top_df = sig_df.head(top_n_sig)
 
-                        # ── Refit: restrict NNLS to top-N signatures ──────────
+                        # Refit to top-N
                         _top_sig_names = top_df["signature"].tolist()
-                        W_refit = cosmic_aligned[_top_sig_names].values.astype(float)
-                        h_refit, _ = nnls(W_refit, obs)
-                        reconstructed = W_refit @ h_refit
+                        W_refit        = cosmic_aligned[_top_sig_names].values.astype(float)
+                        h_refit, _     = nnls(W_refit, obs)
+                        reconstructed  = W_refit @ h_refit
 
-                        # ── Goodness-of-fit (refit) ───────────────────────────
                         cos_sim = (
                             float(np.dot(obs, reconstructed))
                             / (np.linalg.norm(obs) * np.linalg.norm(reconstructed) + 1e-12)
                         )
-                        residual_pct = float(np.linalg.norm(obs - reconstructed)) / (float(obs.sum()) + 1e-12) * 100
-
-                        fit_col1, fit_col2 = st.columns(2)
-                        fit_col1.metric(
-                            "Cosine similarity",
-                            f"{cos_sim:.4f}",
-                            help="1.0 = perfect reconstruction using the top-N signatures. Values above 0.95 indicate a good fit.",
-                        )
-                        fit_col2.metric(
-                            "Residual (% of counts)",
-                            f"{residual_pct:.1f}%",
-                            help="L2 norm of unexplained counts as a percentage of total SNV count (refit to top-N). Lower is better.",
+                        residual_pct = (
+                            float(np.linalg.norm(obs - reconstructed))
+                            / (float(obs.sum()) + 1e-12) * 100
                         )
 
-                        # ── Observed vs reconstructed overlay ─────────────
                         recon_total = reconstructed.sum()
                         recon_df = spec96[["sbs_label", "mut_type"]].copy()
                         recon_df["recon_count"] = reconstructed
-                        recon_df["recon_frac"] = (
+                        recon_df["recon_frac"]  = (
                             reconstructed / recon_total if recon_total > 0 else 0.0
                         )
-                        _recon_y = "recon_frac" if _sbs_use_fraction else "recon_count"
-                        _recon_fmt = ".3f" if _sbs_use_fraction else "d"
-
-                        _overlay_charts = []
-                        for _mt in _SBS_MUT_TYPES:
-                            _obs_sub   = spec96[spec96["mut_type"] == _mt].copy()
-                            _recon_sub = recon_df[recon_df["mut_type"] == _mt].copy()
-                            _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
-                            _bars = (
-                                alt.Chart(_obs_sub)
-                                .mark_bar(color=_SBS_COLORS[_mt], opacity=0.7)
-                                .encode(
-                                    alt.X("sbs_label:N", sort=_order, title=None,
-                                          axis=alt.Axis(labelAngle=-90, labelFontSize=8)),
-                                    alt.Y(f"{_sbs_y_field}:Q", title=_sbs_y_title,
-                                          **({"axis": alt.Axis(format=".3f")} if _sbs_use_fraction else {})),
-                                    tooltip=[
-                                        "sbs_label:N",
-                                        alt.Tooltip(f"{_sbs_y_field}:Q", title="Observed", format=_sbs_y_fmt),
-                                    ],
-                                )
-                            )
-                            _line = (
-                                alt.Chart(_recon_sub)
-                                .mark_point(color="black", size=15, filled=True, opacity=0.85)
-                                .encode(
-                                    alt.X("sbs_label:N", sort=_order),
-                                    alt.Y(f"{_recon_y}:Q"),
-                                    tooltip=[
-                                        "sbs_label:N",
-                                        alt.Tooltip(f"{_recon_y}:Q", title="Reconstructed", format=_recon_fmt),
-                                    ],
-                                )
-                            )
-                            _overlay_charts.append(
-                                alt.layer(_bars, _line)
-                                .properties(
-                                    title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt], fontSize=13, fontWeight="bold"),
-                                    width=150, height=140,
-                                )
-                            )
-
-                        overlay_chart = (
-                            alt.concat(*_overlay_charts, columns=3)
-                            .resolve_scale(y="shared")
-                            .properties(title=alt.TitleParams(
-                                "Observed vs Reconstructed Spectrum (bars = observed, dots = reconstructed)", fontSize=15,
-                            ))
-                        )
-                        st.altair_chart(overlay_chart, use_container_width=True)
-                        st.caption(
-                            f"Bars = observed spectrum. Black dots = COSMIC reconstruction refit to top {top_n_sig} signatures (NNLS). "
-                            "Contexts where dots deviate from bars are poorly explained by the selected signatures."
-                        )
-
-                        # Fix color domain to full ranked list so colors
-                        # don't shift when the slider changes.
-                        _all_sigs = list(sig_df["signature"])
-                        sig_chart = (
-                            alt.Chart(top_df)
-                            .mark_bar()
-                            .encode(
-                                alt.X("signature:N",
-                                      sort=list(top_df["signature"]),
-                                      title="Signature"),
-                                alt.Y("exposure:Q",
-                                      title="Exposure (proportion)",
-                                      axis=alt.Axis(format=".0%")),
-                                alt.Color("signature:N",
-                                          scale=alt.Scale(domain=_all_sigs),
-                                          legend=None),
-                                tooltip=[
-                                    "signature:N",
-                                    alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
-                                    alt.Tooltip("etiology:N", title="Etiology"),
-                                ],
-                            )
-                            .properties(
-                                title=f"Top {top_n_sig} COSMIC SBS Signatures (NNLS fit)",
-                                height=300,
-                            )
-                        )
-                        st.altair_chart(sig_chart, use_container_width=True)
-
-                        display = top_df.copy()
-                        display["exposure"] = display["exposure"].map("{:.2%}".format)
-                        st.dataframe(display, use_container_width=True, hide_index=True)
 
                 except Exception as exc:
                     st.error(f"Failed to load COSMIC matrix: {exc}")
+
+            _recon_y   = "recon_frac"  if _sbs_use_fraction else "recon_count"
+            _recon_fmt = ".3f"         if _sbs_use_fraction else "d"
+
+            # ── Unified SBS96 chart: bars (observed) + optional dots (reconstruction) ──
+            _chart_title = (
+                f"SNV Trinucleotide Spectrum — bars = observed, dots = reconstruction (top {top_n_sig} sigs)"
+                if recon_df is not None else
+                "SNV Trinucleotide Spectrum (SBS96)"
+            )
+            sel_param = alt.selection_point(name="bar_click", fields=["sbs_label"], on="click")
+
+            _sub_charts = []
+            for _mt in _SBS_MUT_TYPES:
+                _obs_sub = spec96[spec96["mut_type"] == _mt].copy()
+                _order   = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+
+                _bars = (
+                    alt.Chart(_obs_sub)
+                    .mark_bar(color=_SBS_COLORS[_mt])
+                    .encode(
+                        alt.X("sbs_label:N", sort=_order, title=None,
+                              axis=alt.Axis(labelAngle=-90, labelFontSize=8)),
+                        alt.Y(f"{_sbs_y_field}:Q", title=_sbs_y_title,
+                              **({"axis": alt.Axis(format=".3f")} if _sbs_use_fraction else {})),
+                        opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.4)),
+                        tooltip=[
+                            "sbs_label:N",
+                            alt.Tooltip(f"{_sbs_y_field}:Q", title="Observed", format=_sbs_y_fmt),
+                        ],
+                    )
+                    .add_params(sel_param)
+                )
+
+                if recon_df is not None:
+                    _recon_sub = recon_df[recon_df["mut_type"] == _mt].copy()
+                    _dots = (
+                        alt.Chart(_recon_sub)
+                        .mark_point(color="black", size=15, filled=True, opacity=0.85)
+                        .encode(
+                            alt.X("sbs_label:N", sort=_order),
+                            alt.Y(f"{_recon_y}:Q"),
+                            tooltip=[
+                                "sbs_label:N",
+                                alt.Tooltip(f"{_recon_y}:Q", title="Reconstructed", format=_recon_fmt),
+                            ],
+                        )
+                    )
+                    _panel = alt.layer(_bars, _dots)
+                else:
+                    _panel = _bars
+
+                _sub_charts.append(
+                    _panel.properties(
+                        title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt], fontSize=13, fontWeight="bold"),
+                        width=150, height=140,
+                    )
+                )
+
+            chart = (
+                alt.concat(*_sub_charts, columns=3)
+                .resolve_scale(y="shared")
+                .properties(title=alt.TitleParams(_chart_title, fontSize=14))
+            )
+            event = st.altair_chart(chart, use_container_width=True, on_select="rerun")
+
+            if recon_df is not None:
+                st.caption(
+                    f"Black dots = COSMIC reconstruction refit to top {top_n_sig} signatures. "
+                    "Click bars to drill down. "
+                    "Contexts where dots deviate from bars are poorly explained by the selected signatures."
+                )
+            else:
+                st.caption(
+                    "Click one or more bars to drill down and open in IGV. "
+                    "Enter a COSMIC matrix path above to overlay the reconstruction."
+                )
+
+            # ── Click drill-down + IGV ─────────────────────────────────────────
+            pts = (event.selection or {}).get("bar_click", [])
+            if pts:
+                clicked_labels = [p.get("sbs_label") for p in pts if p.get("sbs_label")]
+                if clicked_labels:
+                    matching = raw[raw["sbs_label"].isin(clicked_labels)][
+                        ["trinuc_context", "ref_allele", "alt_allele"]
+                    ]
+                    if not matching.empty:
+                        or_clauses = " OR ".join(
+                            f"(trinuc_context = '{r.trinuc_context}' AND ref_allele = '{r.ref_allele}' AND alt_allele = '{r.alt_allele}')"
+                            for r in matching.itertuples(index=False)
+                        )
+                        extra_cond = f"variant_type = 'SNV' AND ({or_clauses})"
+                        sel = query_records([extra_cond])
+                        label_str = ", ".join(clicked_labels)
+                        st.caption(f"{len(sel):,} records matching {len(clicked_labels)} selected context(s): {label_str}")
+                        st.dataframe(sel[_table_cols], use_container_width=True)
+                        igv_buttons([extra_cond], sel, key=f"sbs_{'_'.join(clicked_labels)}")
+
+            # ── COSMIC results (below chart) ───────────────────────────────────
+            if cos_sim is not None:
+                st.divider()
+                st.subheader("COSMIC Signature Decomposition")
+                fit_col1, fit_col2 = st.columns(2)
+                fit_col1.metric(
+                    "Cosine similarity",
+                    f"{cos_sim:.4f}",
+                    help="1.0 = perfect reconstruction using the top-N signatures. Values above 0.95 indicate a good fit.",
+                )
+                fit_col2.metric(
+                    "Residual (% of counts)",
+                    f"{residual_pct:.1f}%",
+                    help="L2 norm of unexplained counts as a percentage of total SNV count (refit to top-N). Lower is better.",
+                )
+
+                _all_sigs = list(sig_df["signature"])
+                sig_chart = (
+                    alt.Chart(top_df)
+                    .mark_bar()
+                    .encode(
+                        alt.X("signature:N", sort=list(top_df["signature"]), title="Signature"),
+                        alt.Y("exposure:Q", title="Exposure (proportion)",
+                              axis=alt.Axis(format=".0%")),
+                        alt.Color("signature:N",
+                                  scale=alt.Scale(domain=_all_sigs), legend=None),
+                        tooltip=[
+                            "signature:N",
+                            alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
+                            alt.Tooltip("etiology:N", title="Etiology"),
+                        ],
+                    )
+                    .properties(title=f"Top {top_n_sig} COSMIC SBS Signatures (NNLS fit)", height=300)
+                )
+                st.altair_chart(sig_chart, use_container_width=True)
+
+                display = top_df.copy()
+                display["exposure"] = display["exposure"].map("{:.2%}".format)
+                st.dataframe(display, use_container_width=True, hide_index=True)
 
             # ── Called vs Uncalled Comparison ─────────────────────────────────
             if _has_data("variant_called"):
