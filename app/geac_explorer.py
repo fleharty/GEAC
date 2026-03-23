@@ -2059,10 +2059,10 @@ with tab_reads:
             )
 
             _dfe_df = con.execute(f"""
-                SELECT {_dfe_select_expr}ar.dist_from_read_end, COUNT(*) AS n_reads
+                SELECT {_dfe_select_expr}ar.dist_from_read_start, COUNT(*) AS n_reads
                 FROM {_dfe_source}
-                GROUP BY {_dfe_group_expr}ar.dist_from_read_end
-                ORDER BY {_dfe_group_expr}ar.dist_from_read_end
+                GROUP BY {_dfe_group_expr}ar.dist_from_read_start
+                ORDER BY {_dfe_group_expr}ar.dist_from_read_start
             """).df()
 
             if _dfe_df.empty:
@@ -2085,11 +2085,11 @@ with tab_reads:
                     _dfe_y_fmt = "d"
 
                 _dfe_enc = dict(
-                    x=alt.X("dist_from_read_end:Q", title="Distance from read end (bp)", bin=False),
+                    x=alt.X("dist_from_read_start:Q", title="Cycle (distance from read start)", bin=False),
                     y=alt.Y(_dfe_y_field, title=_dfe_y_title),
                     tooltip=[
                         *([f"{_dfe_label_col}:N"] if _dfe_label_col else []),
-                        "dist_from_read_end:Q",
+                        alt.Tooltip("dist_from_read_start:Q", title="Cycle"),
                         alt.Tooltip(_dfe_y_field, format=_dfe_y_fmt, title=_dfe_y_title),
                     ],
                 )
@@ -2110,11 +2110,12 @@ with tab_reads:
                     )
                 st.altair_chart(_dfe_chart, use_container_width=True)
                 st.caption(
-                    "A spike near 0 is a red flag for alignment artefacts or damaged bases at read ends."
+                    "A spike at high cycle numbers indicates alt-supporting reads clustered at read ends — "
+                    "a red flag for alignment artefacts or damaged bases."
                 )
 
         # ── Row 2: Base qual vs dist from read end scatter ────────────────────
-        st.subheader("Mean base quality by distance from read end")
+        st.subheader("Mean base quality by cycle")
         _bq_color_options = ["All samples (aggregate)", "Sample"]
         if _has_data("batch"):
             _bq_color_options.append("Batch")
@@ -2144,24 +2145,24 @@ with tab_reads:
 
         _bq_df = con.execute(f"""
             SELECT
-                {_bq_select_expr}ar.dist_from_read_end,
+                {_bq_select_expr}ar.dist_from_read_start,
                 ROUND(AVG(ar.base_qual), 2) AS mean_base_qual,
                 COUNT(*) AS n_reads
             FROM {_bq_source}
-            GROUP BY {_bq_group_expr}ar.dist_from_read_end
-            ORDER BY {_bq_group_expr}ar.dist_from_read_end
+            GROUP BY {_bq_group_expr}ar.dist_from_read_start
+            ORDER BY {_bq_group_expr}ar.dist_from_read_start
         """).df()
 
         if _bq_df.empty:
             st.info("No data.")
         else:
             _bq_enc = dict(
-                x=alt.X("dist_from_read_end:Q", title="Distance from read end (bp)"),
+                x=alt.X("dist_from_read_start:Q", title="Cycle (distance from read start)"),
                 y=alt.Y("mean_base_qual:Q", title="Mean base quality (Phred)",
                         scale=alt.Scale(zero=False)),
                 tooltip=[
                     *([f"{_bq_label_col}:N"] if _bq_label_col else []),
-                    alt.Tooltip("dist_from_read_end:Q", title="Dist from read end"),
+                    alt.Tooltip("dist_from_read_start:Q", title="Cycle"),
                     alt.Tooltip("mean_base_qual:Q", format=".1f", title="Mean base qual"),
                     alt.Tooltip("n_reads:Q", title="Reads"),
                 ],
@@ -2183,7 +2184,7 @@ with tab_reads:
                 )
             st.altair_chart(_bq_chart, use_container_width=True)
             st.caption(
-                "A drop in mean base quality near read ends (low dist_from_read_end) "
+                "A drop in mean base quality at high cycle numbers (late in the read) "
                 "indicates that alt-supporting reads at those positions may be artefacts."
             )
 
