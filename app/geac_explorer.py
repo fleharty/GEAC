@@ -2521,6 +2521,16 @@ with tab_reads:
             ).fetchone()[0] or 0
             _gap_threshold = 2 * _read_len_median  # bp where gap effect begins
 
+            if _gap_threshold > 0:
+                st.info(
+                    f"**Gap correction** (default): for paired-end reads of length {int(_read_len_median)} bp, "
+                    f"fragments longer than {int(_gap_threshold)} bp have a gap between R1 and R2 where neither "
+                    "read covers the position. Longer fragments are therefore underrepresented in the raw "
+                    "distribution, producing a kink at that threshold. Gap-corrected divides each bin by its "
+                    "capture probability \u2014 min(1, 2R\u2009/\u2009L) \u2014 to recover the unbiased fragment size distribution. "
+                    "Switch to **Frequency** to see the raw (uncorrected) distribution."
+                )
+
             st.subheader("Insert size distribution")
             _ins_color_options = ["All samples (aggregate)", "Sample"]
             if _has_data("batch"):
@@ -2562,7 +2572,7 @@ with tab_reads:
             if not _ins_df.empty:
                 _ins_y_mode = st.radio(
                     "Y axis",
-                    ["Frequency", "Gap-corrected", "Count"],
+                    ["Gap-corrected", "Frequency", "Count"],
                     horizontal=True,
                     key="ins_y_mode",
                 )
@@ -2644,7 +2654,7 @@ with tab_reads:
                 horizontal=True, key="af_ins_color_by",
             )
             _af_ins_y_mode = _af_ins_ctrl2.radio(
-                "Y axis", ["Frequency", "Gap-corrected", "Count"],
+                "Y axis", ["Gap-corrected", "Frequency", "Count"],
                 horizontal=True, key="af_ins_y_mode",
             )
             _af_ins_by_sample = _af_ins_color_by == "Sample"
