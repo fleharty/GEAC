@@ -311,14 +311,20 @@ Work through each item top to bottom. Check off items as verified, note failures
 
 ## Explorer — Signatures: Future Ideas
 
-- [ ] **Count / fraction toggle on SBS96** — add a count/fraction y-axis toggle to the SBS96 spectrum,
+- [x] **Count / fraction toggle on SBS96** — add a count/fraction y-axis toggle to the SBS96 spectrum,
   consistent with the insert size and other plots. Essential for comparing samples with different
   read depths without being misled by raw count differences.
 
-- [ ] **Reconstructed spectrum overlay** — after COSMIC NNLS fitting, overlay the reconstructed
-  spectrum as a line on top of the observed SBS96 bars. Currently fit quality is a single scalar
-  (cosine similarity); the overlay would show at the context level where the fit is good and where
-  it fails, which is far more informative for diagnosing missing or misattributed signatures.
+- [x] **Reconstructed spectrum overlay** — after COSMIC NNLS fitting, overlay the reconstructed
+  spectrum as dots on top of the observed SBS96 bars. Refit uses only the top-N signatures selected
+  by the slider; cosine similarity and residual % reflect the refit quality.
+
+- [ ] **Consolidate Error Spectrum and Sig. Comparison tabs** — the two tabs currently contain
+  overlapping and duplicated plots (e.g. SBS96 spectrum appears in both). Merge them into a single
+  tab with a clear internal layout: observed spectrum first, then COSMIC decomposition (signature
+  exposures + reconstructed overlay), then the per-sample comparison plots currently living in Sig.
+  Comparison. Eliminates duplication and makes the signature analysis workflow linear and
+  self-contained.
 
 - [ ] **Family-size stratified spectrum** — split the SBS96 into singleton reads (family_size = 1)
   vs multi-member families. Singletons are enriched for sequencing errors; the difference between
