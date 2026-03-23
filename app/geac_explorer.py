@@ -899,8 +899,24 @@ if _selected_rows:
             with st.expander("Individual reads"):
                 st.dataframe(_reads_df, width="stretch", hide_index=True)
 
+# ── Shared alt_reads join subquery (used by Duplex/Simplex and Reads tabs) ────
+# Joins alt_reads to the current filtered locus set so all reads plots respect
+# the active sidebar filters.  Defined here so both tabs can share it.
+_r_join = f"""
+    alt_reads ar
+    INNER JOIN (
+        SELECT DISTINCT sample_id, chrom, pos, alt_allele
+        FROM {table_expr}
+        WHERE {where}
+    ) _filt
+    ON  ar.sample_id  = _filt.sample_id
+    AND ar.chrom      = _filt.chrom
+    AND ar.pos        = _filt.pos
+    AND ar.alt_allele = _filt.alt_allele
+"""
+
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab_cohort, tab_reads = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort", "Reads"])
+tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort", "Reads", "Duplex/Simplex"])
 
 with tab1:
     for vtype, color in [
@@ -1752,65 +1768,6 @@ with tab2:
                 else:
                     st.info("No somatic SNVs in current selection.")
 
-            # ── Family-size stratified spectrum ────────────────────────────────
-            if _has_alt_reads and _fs_has_data:
-                st.divider()
-                st.subheader("Family-size stratified Spectrum")
-                st.caption(
-                    "Singleton reads (family_size = 1) vs multi-member families (family_size > 1). "
-                    "Singletons are enriched for sequencing errors; differences in profile shape "
-                    "reveal the true variant signal from the error process."
-                )
-
-                _fs_strat_raw = con.execute(f"""
-                    WITH locus_fs AS (
-                        SELECT sample_id, chrom, pos, alt_allele,
-                               MEDIAN(family_size) AS median_fs
-                        FROM alt_reads
-                        WHERE family_size IS NOT NULL
-                        GROUP BY sample_id, chrom, pos, alt_allele
-                    )
-                    SELECT
-                        _t.trinuc_context, _t.ref_allele, _t.alt_allele,
-                        CASE WHEN COALESCE(lfs.median_fs, 1) <= 1
-                             THEN 'singleton' ELSE 'multi' END AS fs_group,
-                        COUNT(*) AS count
-                    FROM (SELECT * FROM {table_expr}) _t
-                    LEFT JOIN locus_fs lfs
-                        ON  lfs.sample_id  = _t.sample_id
-                        AND lfs.chrom      = _t.chrom
-                        AND lfs.pos        = _t.pos
-                        AND lfs.alt_allele = _t.alt_allele
-                    WHERE {where} AND _t.variant_type = 'SNV'
-                      AND _t.trinuc_context IS NOT NULL
-                      AND length(_t.trinuc_context) = 3
-                    GROUP BY _t.trinuc_context, _t.ref_allele, _t.alt_allele, fs_group
-                """).df()
-
-                _fs_sing_raw  = _fs_strat_raw[_fs_strat_raw["fs_group"] == "singleton"].drop(columns="fs_group")
-                _fs_multi_raw = _fs_strat_raw[_fs_strat_raw["fs_group"] == "multi"].drop(columns="fs_group")
-
-                _fs_sing_s96,  _n_sing  = _to_spec96_strat(_fs_sing_raw)
-                _fs_multi_s96, _n_multi = _to_spec96_strat(_fs_multi_raw)
-
-                _fc1, _fc2 = st.columns(2)
-                with _fc1:
-                    if _fs_sing_s96 is not None:
-                        st.altair_chart(
-                            _strat_sbs96_chart(_fs_sing_s96, f"Singleton (family_size = 1, n={_n_sing:,})"),
-                            width="stretch",
-                        )
-                    else:
-                        st.info("No singleton loci in current selection.")
-                with _fc2:
-                    if _fs_multi_s96 is not None:
-                        st.altair_chart(
-                            _strat_sbs96_chart(_fs_multi_s96, f"Multi-member (family_size > 1, n={_n_multi:,})"),
-                            width="stretch",
-                        )
-                    else:
-                        st.info("No multi-member loci in current selection.")
-
     else:
         # Fallback: simple ref>alt spectrum for older Parquet files
         spec = con.execute(f"""
@@ -2482,213 +2439,99 @@ with tab_reads:
             "All plots reflect alt-supporting reads linked to loci that pass the current sidebar filters."
         )
 
-        # Build a subquery that joins alt_reads to the current filtered locus set.
-        # This ensures all reads plots respect the active locus-level filters.
-        _r_join = f"""
-            alt_reads ar
-            INNER JOIN (
-                SELECT DISTINCT sample_id, chrom, pos, alt_allele
-                FROM {table_expr}
-                WHERE {where}
-            ) _filt
-            ON  ar.sample_id  = _filt.sample_id
-            AND ar.chrom      = _filt.chrom
-            AND ar.pos        = _filt.pos
-            AND ar.alt_allele = _filt.alt_allele
-        """
+        # ── Row 1: Read position bias ──────────────────────────────────────────
+        st.subheader("Read position bias")
+        _dfe_ctrl1, _dfe_ctrl2 = st.columns(2)
+        _dfe_color_options = ["All samples (aggregate)", "Sample"]
+        if _has_data("batch"):
+            _dfe_color_options.append("Batch")
+        _dfe_color_by = _dfe_ctrl1.radio(
+            "Color by", _dfe_color_options,
+            horizontal=True, key="dfe_color_by",
+        )
+        _dfe_y_mode = _dfe_ctrl2.radio(
+            "Y axis", ["Fraction", "Count"],
+            horizontal=True, key="dfe_y_mode",
+        )
+        _dfe_by_sample = _dfe_color_by == "Sample"
+        _dfe_by_batch  = _dfe_color_by == "Batch"
+        _dfe_normalize = _dfe_y_mode == "Fraction"
+        _dfe_label_col = (
+            "sample_id" if _dfe_by_sample else
+            "batch"     if _dfe_by_batch  else
+            None
+        )
+        _dfe_select = f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
+        _dfe_group  = f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
+        _dfe_source = (
+            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
+            if _dfe_by_batch else _r_join
+        )
+        # For batch, group col is on the joined table
+        _dfe_group_expr = (
+            "ab.batch, " if _dfe_by_batch else
+            f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
+        )
+        _dfe_select_expr = (
+            "ab.batch AS batch, " if _dfe_by_batch else
+            f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
+        )
 
-        # ── Row 1: Family size histogram + Read position bias ─────────────────
-        _r_col1, _r_col2 = st.columns(2)
+        _dfe_df = con.execute(f"""
+            SELECT {_dfe_select_expr}ar.dist_from_read_start, COUNT(*) AS n_reads
+            FROM {_dfe_source}
+            GROUP BY {_dfe_group_expr}ar.dist_from_read_start
+            ORDER BY {_dfe_group_expr}ar.dist_from_read_start
+        """).df()
 
-        with _r_col1:
-            st.subheader("Family size distribution")
-            _fs_ctrl_col1, _fs_ctrl_col2 = st.columns(2)
-            _fs_color_options = ["All samples (aggregate)", "Sample"]
-            if _has_data("batch"):
-                _fs_color_options.append("Batch")
-            _fs_color_by = _fs_ctrl_col1.radio(
-                "Color by", _fs_color_options,
-                horizontal=True, key="fs_color_by",
-            )
-            _fs_y_mode = _fs_ctrl_col2.radio(
-                "Y axis", ["Fraction", "Count"],
-                horizontal=True, key="fs_y_mode",
-            )
-            _fs_by_sample = _fs_color_by == "Sample"
-            _fs_by_batch  = _fs_color_by == "Batch"
-            _fs_normalize = _fs_y_mode == "Fraction"
-
-            _fs_group_col = (
-                "ar.sample_id" if _fs_by_sample else
-                "ab.batch"     if _fs_by_batch  else
-                None
-            )
-            _fs_select = f"{_fs_group_col}, " if _fs_group_col else ""
-            _fs_group  = f"{_fs_group_col}, " if _fs_group_col else ""
-
-            # For batch grouping we need to join against alt_bases to get the batch column
-            _fs_source = (
-                f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
-                if _fs_by_batch else _r_join
-            )
-
-            _fs_df = con.execute(f"""
-                SELECT {_fs_select}ar.family_size, COUNT(*) AS n_reads
-                FROM {_fs_source}
-                WHERE ar.family_size IS NOT NULL
-                GROUP BY {_fs_group}ar.family_size
-                ORDER BY {_fs_group}ar.family_size
-            """).df()
-
-            if _fs_df.empty:
-                st.info("No family size data (fgbio cD tag absent in this dataset).")
-            else:
-                _fs_label_col = (
-                    "sample_id" if _fs_by_sample else
-                    "batch"     if _fs_by_batch  else
-                    None
-                )
-                if _fs_normalize:
-                    if _fs_label_col:
-                        _fs_df["y_val"] = _fs_df.groupby(_fs_label_col)["n_reads"].transform(
-                            lambda x: x / x.sum()
-                        )
-                    else:
-                        _fs_df["y_val"] = _fs_df["n_reads"] / _fs_df["n_reads"].sum()
-                    _y_field = "y_val:Q"
-                    _y_title = "Fraction of alt-supporting reads"
-                    _y_fmt = ".3f"
-                else:
-                    _fs_df["y_val"] = _fs_df["n_reads"]
-                    _y_field = "y_val:Q"
-                    _y_title = "Alt-supporting reads"
-                    _y_fmt = "d"
-
-                _fs_enc = dict(
-                    x=alt.X("family_size:Q", title="Family size (cD tag)", bin=False),
-                    y=alt.Y(_y_field, title=_y_title),
-                    tooltip=[
-                        *([f"{_fs_label_col}:N"] if _fs_label_col else []),
-                        "family_size:Q",
-                        alt.Tooltip(_y_field, format=_y_fmt, title=_y_title),
-                    ],
-                )
-                if _fs_label_col:
-                    _fs_enc["color"] = alt.Color(f"{_fs_label_col}:N", scale=alt.Scale(scheme="tableau10"))
-                    _fs_chart = (
-                        alt.Chart(_fs_df)
-                        .mark_line(point=True, opacity=0.8)
-                        .encode(**_fs_enc)
-                        .properties(height=300)
-                    )
-                else:
-                    _fs_chart = (
-                        alt.Chart(_fs_df)
-                        .mark_line(point=True, color="#4c78a8")
-                        .encode(**_fs_enc)
-                        .properties(height=300)
-                    )
-                st.altair_chart(_fs_chart, width="stretch")
-                _fs_norm_note = (
-                    "Fraction mode normalizes each batch independently."
-                    if _fs_by_batch else
-                    "Fraction mode normalizes each sample independently, allowing shape comparison across samples with different read counts."
-                )
-                st.caption(f"Artefacts are enriched in singletons (family_size = 1). {_fs_norm_note}")
-
-        with _r_col2:
-            st.subheader("Read position bias")
-            _dfe_ctrl1, _dfe_ctrl2 = st.columns(2)
-            _dfe_color_options = ["All samples (aggregate)", "Sample"]
-            if _has_data("batch"):
-                _dfe_color_options.append("Batch")
-            _dfe_color_by = _dfe_ctrl1.radio(
-                "Color by", _dfe_color_options,
-                horizontal=True, key="dfe_color_by",
-            )
-            _dfe_y_mode = _dfe_ctrl2.radio(
-                "Y axis", ["Fraction", "Count"],
-                horizontal=True, key="dfe_y_mode",
-            )
-            _dfe_by_sample = _dfe_color_by == "Sample"
-            _dfe_by_batch  = _dfe_color_by == "Batch"
-            _dfe_normalize = _dfe_y_mode == "Fraction"
-            _dfe_label_col = (
-                "sample_id" if _dfe_by_sample else
-                "batch"     if _dfe_by_batch  else
-                None
-            )
-            _dfe_select = f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
-            _dfe_group  = f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
-            _dfe_source = (
-                f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
-                if _dfe_by_batch else _r_join
-            )
-            # For batch, group col is on the joined table
-            _dfe_group_expr = (
-                "ab.batch, " if _dfe_by_batch else
-                f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
-            )
-            _dfe_select_expr = (
-                "ab.batch AS batch, " if _dfe_by_batch else
-                f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
-            )
-
-            _dfe_df = con.execute(f"""
-                SELECT {_dfe_select_expr}ar.dist_from_read_start, COUNT(*) AS n_reads
-                FROM {_dfe_source}
-                GROUP BY {_dfe_group_expr}ar.dist_from_read_start
-                ORDER BY {_dfe_group_expr}ar.dist_from_read_start
-            """).df()
-
-            if _dfe_df.empty:
-                st.info("No data.")
-            else:
-                if _dfe_normalize:
-                    if _dfe_label_col:
-                        _dfe_df["y_val"] = _dfe_df.groupby(_dfe_label_col)["n_reads"].transform(
-                            lambda x: x / x.sum()
-                        )
-                    else:
-                        _dfe_df["y_val"] = _dfe_df["n_reads"] / _dfe_df["n_reads"].sum()
-                    _dfe_y_field = "y_val:Q"
-                    _dfe_y_title = "Fraction of alt-supporting reads"
-                    _dfe_y_fmt = ".3f"
-                else:
-                    _dfe_df["y_val"] = _dfe_df["n_reads"]
-                    _dfe_y_field = "y_val:Q"
-                    _dfe_y_title = "Alt-supporting reads"
-                    _dfe_y_fmt = "d"
-
-                _dfe_enc = dict(
-                    x=alt.X("dist_from_read_start:Q", title="Cycle (distance from read start)", bin=False),
-                    y=alt.Y(_dfe_y_field, title=_dfe_y_title),
-                    tooltip=[
-                        *([f"{_dfe_label_col}:N"] if _dfe_label_col else []),
-                        alt.Tooltip("dist_from_read_start:Q", title="Cycle"),
-                        alt.Tooltip(_dfe_y_field, format=_dfe_y_fmt, title=_dfe_y_title),
-                    ],
-                )
+        if _dfe_df.empty:
+            st.info("No data.")
+        else:
+            if _dfe_normalize:
                 if _dfe_label_col:
-                    _dfe_enc["color"] = alt.Color(f"{_dfe_label_col}:N", scale=alt.Scale(scheme="tableau10"))
-                    _dfe_chart = (
-                        alt.Chart(_dfe_df)
-                        .mark_line(point=True, opacity=0.8)
-                        .encode(**_dfe_enc)
-                        .properties(height=300)
+                    _dfe_df["y_val"] = _dfe_df.groupby(_dfe_label_col)["n_reads"].transform(
+                        lambda x: x / x.sum()
                     )
                 else:
-                    _dfe_chart = (
-                        alt.Chart(_dfe_df)
-                        .mark_line(point=True, color="#f58518")
-                        .encode(**_dfe_enc)
-                        .properties(height=300)
-                    )
-                st.altair_chart(_dfe_chart, width="stretch")
-                st.caption(
-                    "A spike at high cycle numbers indicates alt-supporting reads clustered at read ends — "
-                    "a red flag for alignment artefacts or damaged bases."
+                    _dfe_df["y_val"] = _dfe_df["n_reads"] / _dfe_df["n_reads"].sum()
+                _dfe_y_field = "y_val:Q"
+                _dfe_y_title = "Fraction of alt-supporting reads"
+                _dfe_y_fmt = ".3f"
+            else:
+                _dfe_df["y_val"] = _dfe_df["n_reads"]
+                _dfe_y_field = "y_val:Q"
+                _dfe_y_title = "Alt-supporting reads"
+                _dfe_y_fmt = "d"
+
+            _dfe_enc = dict(
+                x=alt.X("dist_from_read_start:Q", title="Cycle (distance from read start)", bin=False),
+                y=alt.Y(_dfe_y_field, title=_dfe_y_title),
+                tooltip=[
+                    *([f"{_dfe_label_col}:N"] if _dfe_label_col else []),
+                    alt.Tooltip("dist_from_read_start:Q", title="Cycle"),
+                    alt.Tooltip(_dfe_y_field, format=_dfe_y_fmt, title=_dfe_y_title),
+                ],
+            )
+            if _dfe_label_col:
+                _dfe_enc["color"] = alt.Color(f"{_dfe_label_col}:N", scale=alt.Scale(scheme="tableau10"))
+                _dfe_chart = (
+                    alt.Chart(_dfe_df)
+                    .mark_line(point=True, opacity=0.8)
+                    .encode(**_dfe_enc)
+                    .properties(height=300)
                 )
+            else:
+                _dfe_chart = (
+                    alt.Chart(_dfe_df)
+                    .mark_line(point=True, color="#f58518")
+                    .encode(**_dfe_enc)
+                    .properties(height=300)
+                )
+            st.altair_chart(_dfe_chart, width="stretch")
+            st.caption(
+                "A spike at high cycle numbers indicates alt-supporting reads clustered at read ends — "
+                "a red flag for alignment artefacts or damaged bases."
+            )
 
         # ── Row 2: Base qual vs dist from read end scatter ────────────────────
         st.subheader("Mean base quality by cycle")
@@ -3034,7 +2877,163 @@ with tab_reads:
                     )
                 st.caption(_af_ins_caption)
 
-        # ── Row 4: Family size vs VAF per locus ───────────────────────────────
+        # ── Row 4: Mapping quality distribution ───────────────────────────────
+        st.subheader("Mapping quality distribution")
+        _mq_df = con.execute(f"""
+            SELECT
+                map_qual,
+                CASE
+                    WHEN homopolymer_len >= 5 OR str_len >= 6 THEN 'Repetitive'
+                    ELSE 'Non-repetitive'
+                END AS locus_type,
+                COUNT(*) AS n_reads
+            FROM {_r_join}
+            INNER JOIN (
+                SELECT DISTINCT sample_id, chrom, pos, alt_allele,
+                    COALESCE(homopolymer_len, 0) AS homopolymer_len,
+                    COALESCE(str_len, 0) AS str_len
+                FROM {table_expr}
+                WHERE {where}
+            ) _locus ON  ar.sample_id  = _locus.sample_id
+                     AND ar.chrom      = _locus.chrom
+                     AND ar.pos        = _locus.pos
+                     AND ar.alt_allele = _locus.alt_allele
+            GROUP BY map_qual, locus_type
+            ORDER BY map_qual
+        """).df()
+
+        if _mq_df.empty:
+            st.info("No data.")
+        else:
+            _mq_chart = (
+                alt.Chart(_mq_df)
+                .mark_bar(opacity=0.7)
+                .encode(
+                    alt.X("map_qual:Q", title="Mapping quality (MAPQ)", bin=False),
+                    alt.Y("n_reads:Q", title="Alt-supporting reads", stack="zero"),
+                    alt.Color("locus_type:N", title="Locus type",
+                              scale=alt.Scale(
+                                  domain=["Repetitive", "Non-repetitive"],
+                                  range=["#e45756", "#4c78a8"],
+                              )),
+                    alt.Tooltip(["map_qual:Q", "locus_type:N", "n_reads:Q"]),
+                )
+                .properties(height=300)
+            )
+            st.altair_chart(_mq_chart, width="stretch")
+            st.caption(
+                "Stacked by locus type (repetitive = homopolymer ≥ 5 or STR length ≥ 6). "
+                "Low MAPQ at repetitive loci indicates multi-mapping artefacts."
+            )
+
+with tab_duplex:
+    if not _has_alt_reads:
+        st.info(
+            "Per-read detail table not available. "
+            "Re-run `geac collect` with `--reads-output` and merge the resulting "
+            "`.reads.parquet` files to enable this tab."
+        )
+    else:
+        st.caption(
+            "All plots reflect alt-supporting reads linked to loci that pass the current sidebar filters."
+        )
+
+        # ── Family size distribution ───────────────────────────────────────────
+        st.subheader("Family size distribution")
+        _fs_ctrl_col1, _fs_ctrl_col2 = st.columns(2)
+        _fs_color_options = ["All samples (aggregate)", "Sample"]
+        if _has_data("batch"):
+            _fs_color_options.append("Batch")
+        _fs_color_by = _fs_ctrl_col1.radio(
+            "Color by", _fs_color_options,
+            horizontal=True, key="fs_color_by",
+        )
+        _fs_y_mode = _fs_ctrl_col2.radio(
+            "Y axis", ["Fraction", "Count"],
+            horizontal=True, key="fs_y_mode",
+        )
+        _fs_by_sample = _fs_color_by == "Sample"
+        _fs_by_batch  = _fs_color_by == "Batch"
+        _fs_normalize = _fs_y_mode == "Fraction"
+
+        _fs_group_col = (
+            "ar.sample_id" if _fs_by_sample else
+            "ab.batch"     if _fs_by_batch  else
+            None
+        )
+        _fs_select = f"{_fs_group_col}, " if _fs_group_col else ""
+        _fs_group  = f"{_fs_group_col}, " if _fs_group_col else ""
+
+        _fs_source = (
+            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
+            if _fs_by_batch else _r_join
+        )
+
+        _fs_df = con.execute(f"""
+            SELECT {_fs_select}ar.family_size, COUNT(*) AS n_reads
+            FROM {_fs_source}
+            WHERE ar.family_size IS NOT NULL
+            GROUP BY {_fs_group}ar.family_size
+            ORDER BY {_fs_group}ar.family_size
+        """).df()
+
+        if _fs_df.empty:
+            st.info("No family size data (fgbio cD tag absent in this dataset).")
+        else:
+            _fs_label_col = (
+                "sample_id" if _fs_by_sample else
+                "batch"     if _fs_by_batch  else
+                None
+            )
+            if _fs_normalize:
+                if _fs_label_col:
+                    _fs_df["y_val"] = _fs_df.groupby(_fs_label_col)["n_reads"].transform(
+                        lambda x: x / x.sum()
+                    )
+                else:
+                    _fs_df["y_val"] = _fs_df["n_reads"] / _fs_df["n_reads"].sum()
+                _y_field = "y_val:Q"
+                _y_title = "Fraction of alt-supporting reads"
+                _y_fmt = ".3f"
+            else:
+                _fs_df["y_val"] = _fs_df["n_reads"]
+                _y_field = "y_val:Q"
+                _y_title = "Alt-supporting reads"
+                _y_fmt = "d"
+
+            _fs_enc = dict(
+                x=alt.X("family_size:Q", title="Family size (cD tag)", bin=False),
+                y=alt.Y(_y_field, title=_y_title),
+                tooltip=[
+                    *([f"{_fs_label_col}:N"] if _fs_label_col else []),
+                    "family_size:Q",
+                    alt.Tooltip(_y_field, format=_y_fmt, title=_y_title),
+                ],
+            )
+            if _fs_label_col:
+                _fs_enc["color"] = alt.Color(f"{_fs_label_col}:N", scale=alt.Scale(scheme="tableau10"))
+                _fs_chart = (
+                    alt.Chart(_fs_df)
+                    .mark_line(point=True, opacity=0.8)
+                    .encode(**_fs_enc)
+                    .properties(height=300)
+                )
+            else:
+                _fs_chart = (
+                    alt.Chart(_fs_df)
+                    .mark_line(point=True, color="#4c78a8")
+                    .encode(**_fs_enc)
+                    .properties(height=300)
+                )
+            st.altair_chart(_fs_chart, width="stretch")
+            _fs_norm_note = (
+                "Fraction mode normalizes each batch independently."
+                if _fs_by_batch else
+                "Fraction mode normalizes each sample independently, allowing shape comparison across samples with different read counts."
+            )
+            st.caption(f"Artefacts are enriched in singletons (family_size = 1). {_fs_norm_note}")
+
+        # ── Family size vs VAF (per locus) ────────────────────────────────────
         st.subheader("Family size vs VAF (per locus)")
         _fsvaf_df = con.execute(f"""
             SELECT
@@ -3090,57 +3089,68 @@ with tab_reads:
                 "Artefacts at low VAF tend to cluster at low family size."
             )
 
-        # ── Row 4: Mapping quality distribution ───────────────────────────────
-        st.subheader("Mapping quality distribution")
-        _mq_df = con.execute(f"""
-            SELECT
-                map_qual,
-                CASE
-                    WHEN homopolymer_len >= 5 OR str_len >= 6 THEN 'Repetitive'
-                    ELSE 'Non-repetitive'
-                END AS locus_type,
-                COUNT(*) AS n_reads
-            FROM {_r_join}
-            INNER JOIN (
-                SELECT DISTINCT sample_id, chrom, pos, alt_allele,
-                    COALESCE(homopolymer_len, 0) AS homopolymer_len,
-                    COALESCE(str_len, 0) AS str_len
-                FROM {table_expr}
-                WHERE {where}
-            ) _locus ON  ar.sample_id  = _locus.sample_id
-                     AND ar.chrom      = _locus.chrom
-                     AND ar.pos        = _locus.pos
-                     AND ar.alt_allele = _locus.alt_allele
-            GROUP BY map_qual, locus_type
-            ORDER BY map_qual
-        """).df()
-
-        if _mq_df.empty:
-            st.info("No data.")
-        else:
-            _mq_chart = (
-                alt.Chart(_mq_df)
-                .mark_bar(opacity=0.7)
-                .encode(
-                    alt.X("map_qual:Q", title="Mapping quality (MAPQ)", bin=False),
-                    alt.Y("n_reads:Q", title="Alt-supporting reads", stack="zero"),
-                    alt.Color("locus_type:N", title="Locus type",
-                              scale=alt.Scale(
-                                  domain=["Repetitive", "Non-repetitive"],
-                                  range=["#e45756", "#4c78a8"],
-                              )),
-                    alt.Tooltip(["map_qual:Q", "locus_type:N", "n_reads:Q"]),
-                )
-                .properties(height=300)
-            )
-            st.altair_chart(_mq_chart, width="stretch")
+        # ── Family-size stratified spectrum ───────────────────────────────────
+        if _has_alt_reads and _fs_has_data:
+            st.divider()
+            st.subheader("Family-size stratified Spectrum")
             st.caption(
-                "Stacked by locus type (repetitive = homopolymer ≥ 5 or STR length ≥ 6). "
-                "Low MAPQ at repetitive loci indicates multi-mapping artefacts."
+                "Singleton reads (family_size = 1) vs multi-member families (family_size > 1). "
+                "Singletons are enriched for sequencing errors; differences in profile shape "
+                "reveal the true variant signal from the error process."
             )
 
-        # ── Row 5: Cohort artefact family size comparison (DuckDB only) ───────
+            _fs_strat_raw = con.execute(f"""
+                WITH locus_fs AS (
+                    SELECT sample_id, chrom, pos, alt_allele,
+                           MEDIAN(family_size) AS median_fs
+                    FROM alt_reads
+                    WHERE family_size IS NOT NULL
+                    GROUP BY sample_id, chrom, pos, alt_allele
+                )
+                SELECT
+                    _t.trinuc_context, _t.ref_allele, _t.alt_allele,
+                    CASE WHEN COALESCE(lfs.median_fs, 1) <= 1
+                         THEN 'singleton' ELSE 'multi' END AS fs_group,
+                    COUNT(*) AS count
+                FROM (SELECT * FROM {table_expr}) _t
+                LEFT JOIN locus_fs lfs
+                    ON  lfs.sample_id  = _t.sample_id
+                    AND lfs.chrom      = _t.chrom
+                    AND lfs.pos        = _t.pos
+                    AND lfs.alt_allele = _t.alt_allele
+                WHERE {where} AND _t.variant_type = 'SNV'
+                  AND _t.trinuc_context IS NOT NULL
+                  AND length(_t.trinuc_context) = 3
+                GROUP BY _t.trinuc_context, _t.ref_allele, _t.alt_allele, fs_group
+            """).df()
+
+            _fs_sing_raw  = _fs_strat_raw[_fs_strat_raw["fs_group"] == "singleton"].drop(columns="fs_group")
+            _fs_multi_raw = _fs_strat_raw[_fs_strat_raw["fs_group"] == "multi"].drop(columns="fs_group")
+
+            _fs_sing_s96,  _n_sing  = _to_spec96_strat(_fs_sing_raw)
+            _fs_multi_s96, _n_multi = _to_spec96_strat(_fs_multi_raw)
+
+            _fc1, _fc2 = st.columns(2)
+            with _fc1:
+                if _fs_sing_s96 is not None:
+                    st.altair_chart(
+                        _strat_sbs96_chart(_fs_sing_s96, f"Singleton (family_size = 1, n={_n_sing:,})"),
+                        width="stretch",
+                    )
+                else:
+                    st.info("No singleton loci in current selection.")
+            with _fc2:
+                if _fs_multi_s96 is not None:
+                    st.altair_chart(
+                        _strat_sbs96_chart(_fs_multi_s96, f"Multi-member (family_size > 1, n={_n_multi:,})"),
+                        width="stretch",
+                    )
+                else:
+                    st.info("No multi-member loci in current selection.")
+
+        # ── Cohort artefact vs rare variant: family size comparison ───────────
         if path.endswith(".duckdb"):
+            st.divider()
             st.subheader("Cohort artefact vs rare variant: family size comparison")
             _n_samples_total = con.execute(
                 f"SELECT COUNT(DISTINCT sample_id) FROM {table_expr} WHERE {where}"
@@ -3196,7 +3206,6 @@ with tab_reads:
                     st.info("No family size data for cohort comparison.")
                 else:
                     _cf_order = ["Seen in 1 sample", "Seen in 2–3 samples", "Seen in 4+ samples"]
-                    # IQR box
                     _cf_box = (
                         alt.Chart(_cohort_fs_df)
                         .mark_bar(size=40)
@@ -3217,7 +3226,6 @@ with tab_reads:
                             ],
                         )
                     )
-                    # Min–max whiskers
                     _cf_whisker = (
                         alt.Chart(_cohort_fs_df)
                         .mark_rule()
@@ -3229,7 +3237,6 @@ with tab_reads:
                                       scale=alt.Scale(scheme="tableau10")),
                         )
                     )
-                    # Median tick
                     _cf_median = (
                         alt.Chart(_cohort_fs_df)
                         .mark_tick(color="white", thickness=2, size=40)

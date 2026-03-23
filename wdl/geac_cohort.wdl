@@ -25,6 +25,9 @@ version 1.0
 ##   gene_annotations      - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
 ##   region                - (optional) restrict all samples to a genomic region
 ##   repeat_window         - bases each side of locus for homopolymer/STR scan (default 10)
+##   include_duplicates    - include PCR/optical duplicate reads (FLAG 0x400); default false
+##   include_secondary     - include secondary alignments (FLAG 0x100); default false
+##   include_supplementary - include supplementary alignments (FLAG 0x800); default false
 ##   reads_output          - also write per-read detail Parquets and merge into alt_reads table (default false)
 ##   cohort_name           - Base name for the output DuckDB file (default: cohort)
 ##   docker_image          - geac Docker image, e.g. gcr.io/my-project/geac:latest
@@ -59,6 +62,9 @@ workflow GeacCohort {
 
         Int     min_base_qual = 1
         Int     min_map_qual  = 0
+        Boolean include_duplicates    = false
+        Boolean include_secondary     = false
+        Boolean include_supplementary = false
         Boolean reads_output  = false
         Int     threads       = 1
 
@@ -115,6 +121,9 @@ workflow GeacCohort {
                 repeat_window         = repeat_window,
                 min_base_qual         = min_base_qual,
                 min_map_qual          = min_map_qual,
+                include_duplicates    = include_duplicates,
+                include_secondary     = include_secondary,
+                include_supplementary = include_supplementary,
                 reads_output          = reads_output,
                 threads               = threads,
                 docker_image          = docker_image,
@@ -169,6 +178,9 @@ task Collect {
 
         Int     min_base_qual
         Int     min_map_qual
+        Boolean include_duplicates
+        Boolean include_secondary
+        Boolean include_supplementary
         Boolean reads_output
         Int     threads
 
@@ -201,6 +213,9 @@ task Collect {
             ~{"--gene-annotations " + gene_annotations} \
             ~{"--region "           + region} \
             --repeat-window ~{repeat_window} \
+            ~{if include_duplicates    then "--include-duplicates"    else ""} \
+            ~{if include_secondary     then "--include-secondary"     else ""} \
+            ~{if include_supplementary then "--include-supplementary" else ""} \
             ~{if reads_output then "--reads-output" else ""}
     >>>
 

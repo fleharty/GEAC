@@ -25,6 +25,9 @@ version 1.0
 ##   repeat_window        - bases each side of locus to scan for homopolymers/STRs (default 10)
 ##   min_base_qual        - minimum base quality (default 1)
 ##   min_map_qual         - minimum mapping quality (default 20)
+##   include_duplicates   - include PCR/optical duplicate reads (FLAG 0x400); default false
+##   include_secondary    - include secondary alignments (FLAG 0x100); default false
+##   include_supplementary - include supplementary alignments (FLAG 0x800); default false
 ##   reads_output         - also write per-read detail Parquet (default false)
 ##   threads              - CPU threads for geac (default 4)
 ##   docker_image         - geac Docker image, e.g. gcr.io/my-project/geac:0.1.0
@@ -59,6 +62,9 @@ workflow GeacCollect {
 
         Int     min_base_qual  = 1
         Int     min_map_qual   = 0
+        Boolean include_duplicates    = false
+        Boolean include_secondary     = false
+        Boolean include_supplementary = false
         Boolean reads_output   = false
         Int     threads        = 1
 
@@ -87,6 +93,9 @@ workflow GeacCollect {
             repeat_window         = repeat_window,
             min_base_qual         = min_base_qual,
             min_map_qual          = min_map_qual,
+            include_duplicates    = include_duplicates,
+            include_secondary     = include_secondary,
+            include_supplementary = include_supplementary,
             reads_output          = reads_output,
             threads               = threads,
             docker_image          = docker_image,
@@ -123,6 +132,9 @@ task Collect {
 
         Int     min_base_qual
         Int     min_map_qual
+        Boolean include_duplicates
+        Boolean include_secondary
+        Boolean include_supplementary
         Boolean reads_output
         Int     threads
 
@@ -157,6 +169,9 @@ task Collect {
             ~{"--gene-annotations " + gene_annotations} \
             ~{"--region "           + region} \
             --repeat-window ~{repeat_window} \
+            ~{if include_duplicates    then "--include-duplicates"    else ""} \
+            ~{if include_secondary     then "--include-secondary"     else ""} \
+            ~{if include_supplementary then "--include-supplementary" else ""} \
             ~{if reads_output then "--reads-output" else ""}
     >>>
 
