@@ -6,6 +6,15 @@ Work through each item top to bottom. Check off items as verified, note failures
 
 ## High Priority — To Explore
 
+- [ ] **VCF/TSV filter value sidebar filter** — add an Explorer sidebar control to filter loci by
+  the `variant_filter` column (populated from VCF FILTER field or equivalent TSV column). The
+  current `variant_called` selector only distinguishes called vs not-called; users also need to
+  filter by specific filter values (e.g. show only `PASS`, or exclude `PASS` to focus on variants
+  that failed a filter). Implementation: query the distinct `variant_filter` values present in the
+  data and offer a multiselect (with an "All" default). Should be unavailable when `variant_filter`
+  is entirely NULL (no VCF/TSV was provided at collect time), consistent with how other optional
+  columns are handled.
+
 - [ ] **IGV.js integration** — evaluate embedding [IGV.js](https://github.com/igvteam/igv.js) (the
   JavaScript port of IGV) directly inside the Explorer rather than generating session zip files for
   the desktop app. Could enable tighter integration: clicking a locus in any plot immediately renders
