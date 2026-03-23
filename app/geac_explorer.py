@@ -1280,7 +1280,7 @@ with tab2:
                             alt.concat(*_overlay_charts, columns=3)
                             .resolve_scale(y="shared")
                             .properties(title=alt.TitleParams(
-                                "Observed vs Reconstructed Spectrum", fontSize=15,
+                                "Observed vs Reconstructed Spectrum (bars = observed, dots = reconstructed)", fontSize=15,
                             ))
                         )
                         st.altair_chart(overlay_chart, use_container_width=True)
