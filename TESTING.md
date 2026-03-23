@@ -15,6 +15,45 @@ Work through each item top to bottom. Check off items as verified, note failures
   is entirely NULL (no VCF/TSV was provided at collect time), consistent with how other optional
   columns are handled.
 
+- [ ] **Replicate and longitudinal comparison mode** — add a framework for comparing multiple
+  Parquets derived from the same biological specimen, covering two related use cases:
+
+  - *Technical replicates*: given N Parquets from the same sample (e.g. repeated library prep or
+    sequencing runs), identify variants that appear consistently across replicates (high
+    reproducibility, likely real signal) vs variably (likely artefact or stochastic noise). Key
+    metrics: per-locus concordance rate, CV of VAF across replicates, fraction of replicates
+    supporting the call.
+
+  - *Longitudinal time points*: given Parquets from the same patient/specimen at multiple time
+    points, track VAF trends over time. Key use cases: monitoring clonal evolution, treatment
+    response, minimal residual disease (MRD), or clonal haematopoiesis dynamics. Would need a
+    time-point ordering concept (e.g. `--timepoint` flag at collect time, stored as a column) and
+    Explorer visualisations for VAF-over-time trajectories per locus.
+
+  Possible implementation: a `geac compare` subcommand that takes a manifest of
+  `(sample_id, replicate_id, timepoint)` groupings and produces a comparison Parquet/DuckDB with
+  per-locus concordance and trend statistics. Explorer would add a "Comparison" tab.
+
+- [ ] **Sensitivity / specificity evaluation mode** — add a benchmarking framework for evaluating
+  pipeline performance when a truth set is available. Covers several truth scenarios:
+
+  - *Well-characterised reference samples*: e.g. Genome in a Bottle (GIAB) or cell line standards
+    where the true variant set is known. Compute TP/FP/FN/TN at each locus, stratified by VAF,
+    depth, variant type, repeat context, etc.
+
+  - *Spike-in experiments*: healthy donor samples with known germline variants spiked in at defined
+    dilutions to simulate somatic variants at controlled VAFs. Truth = the spike-in variant list at
+    the expected VAF tier.
+
+  - *In silico dilutions*: mix two Parquets at defined ratios to simulate a somatic sample with
+    ground truth.
+
+  Key outputs: precision-recall curve, ROC curve, sensitivity/specificity at user-defined VAF
+  thresholds, stratified by variant type / repeat context / family size / insert size. Possible
+  implementation: a `geac benchmark` subcommand that takes a Parquet and a truth VCF/TSV and
+  produces a benchmarking report. Explorer would add precision-recall and ROC plots to the
+  comparison tab.
+
 - [ ] **Tumor-normal mode** — add a paired tumor-normal workflow where a tumor Parquet is annotated
   with the matched normal's VAF and depth at the same loci. This is a core somatic variant validation
   use case: low-VAF sites in tumor that are also present in the normal at any VAF are likely germline
