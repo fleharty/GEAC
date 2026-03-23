@@ -446,7 +446,7 @@ Three WDL 1.0 workflows are provided in `wdl/`:
 | `min_base_qual` | Int | Default: 1 |
 | `min_map_qual` | Int | Default: 20 |
 | `reads_output` | Boolean | Also write per-read detail Parquet (default: false) |
-| `threads` | Int | Default: 4 |
+| `threads` | Int | Default: 1 |
 | `memory_gb` | Int | Default: 8 |
 | `disk_gb` | Int | Default: 100 |
 | `preemptible` | Int | Default: 2 |

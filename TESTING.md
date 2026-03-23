@@ -92,18 +92,34 @@ Work through each item top to bottom. Check off items as verified, note failures
   whether to normalise both to the same total (e.g. always use `total_snvs`) or accept the small
   discrepancy.
 
-- [ ] **Insert size kink at ~250 bp** — both insert size plots show a kink (inflection/discontinuity)
-  around 250 bp. Hypothesis: the kink occurs at exactly 2 × read_length = 2 × 131 = 262 bp (test
-  data is 2×131 bp paired-end), which is the threshold where paired reads transition from overlapping
-  (both reads cover the alt position → `[r1, r2]` branch in `tally_pileup`) to non-overlapping
-  (only one read covers the position → `[r]` branch). This is a behavioral transition in the pileup
-  logic, not necessarily a double-count, but worth confirming. To investigate: verify the kink is at
-  exactly 262 bp, and inspect whether the per-read detail emission differs in any way between the two
-  branches that could bias the insert size histogram near that threshold.
+- [x] **Insert size kink at ~250 bp** — resolved by gap correction. The kink at 2 × read_length
+  reflects the capture probability transition where fragments longer than 2R are only captured
+  with probability 2R/L. The gap-corrected y-axis (default on) divides counts by this capture
+  probability, removing the visual discontinuity.
 
 ---
 
 ## Rust CLI — To Explore / Future Features
+
+- [ ] **Variant consequence annotation** — when `--gene-annotations` (ncbiRefSeq genePred) and
+  `--reference` are both provided, classify each SNV by its coding consequence: synonymous,
+  missense, nonsense (stop-gain), or start-loss. Implementation: extend `gene_annotations.rs`
+  to store CDS exon intervals per transcript; for each SNV in a CDS, compute the cumulative
+  CDS offset to find the codon position (offset % 3), fetch the codon from the reference FASTA,
+  substitute the alt allele (reverse-complementing for minus-strand genes), translate both
+  codons and compare. For multi-isoform genes, report the most severe consequence across
+  transcripts. Store as a new `consequence` column in the Parquet (null for indels, UTR, and
+  intergenic loci). The Explorer sidebar could then filter by consequence type, enabling direct
+  comparison of missense vs synonymous error spectra.
+
+- [ ] **Exon / intron feature type annotation** — when `--gene-annotations` is provided, also
+  record the genomic feature type at each locus (exon, intron, UTR, CDS) as a new `feature_type`
+  column in the Parquet. Would require storing per-feature-type intervals from the GTF/GFF3 at
+  collect time rather than just gene name. A position exonic in any transcript of a gene should
+  be classified as exonic (any-transcript priority rule). The Explorer sidebar could then offer a
+  feature type filter alongside the existing gene filter, enabling direct comparison of exonic vs
+  intronic error spectra — useful for separating true sequencing errors from mapping artefacts at
+  intron/capture boundaries.
 
 - [ ] **Duplicate / secondary / supplementary read filtering** — the pileup currently does not filter
   reads with BAM flags 0x400 (PCR/optical duplicate), 0x100 (secondary alignment), or 0x800

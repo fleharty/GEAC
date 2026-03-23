@@ -60,7 +60,7 @@ workflow GeacCollect {
         Int     min_base_qual  = 1
         Int     min_map_qual   = 0
         Boolean reads_output   = false
-        Int     threads        = 4
+        Int     threads        = 1
 
         String docker_image
         Int    memory_gb    = 8
