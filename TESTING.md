@@ -81,6 +81,17 @@ Work through each item top to bottom. Check off items as verified, note failures
   ref bases are skipped). Check the indel extraction logic in `tally_pileup` and confirm whether
   N-containing alt alleles should be suppressed at collect time.
 
+- [ ] **SBS96 reconstruction overlay shifts between Fraction and Count** — the unified
+  trinucleotide spectrum chart ("SNV Trinucleotide Spectrum — bars = observed, dots = reconstruction")
+  changes subtly when toggling the Y-axis between Fraction and Count. The observed bars should be
+  identical in shape (just rescaled), and the dots should track them exactly. Likely cause: the
+  observed spectrum is normalised to `total_snvs` (sum of all observed counts) while the NNLS
+  reconstruction is normalised to `recon_total` (sum of reconstructed counts), and these two
+  denominators differ slightly — meaning the fraction-mode dot positions differ from the
+  count-mode dot positions in relative terms. To investigate: confirm the denominators, then decide
+  whether to normalise both to the same total (e.g. always use `total_snvs`) or accept the small
+  discrepancy.
+
 - [ ] **Insert size kink at ~250 bp** — both insert size plots show a kink (inflection/discontinuity)
   around 250 bp. Hypothesis: the kink occurs at exactly 2 × read_length = 2 × 131 = 262 bp (test
   data is 2×131 bp paired-end), which is the threshold where paired reads transition from overlapping
