@@ -1232,10 +1232,7 @@ with tab2:
                         .encode(
                             alt.X("sbs_label:N", sort=_order),
                             alt.Y(f"{_recon_y}:Q"),
-                            tooltip=[
-                                "sbs_label:N",
-                                alt.Tooltip(f"{_recon_y}:Q", title="Reconstructed", format=_recon_fmt),
-                            ],
+                            tooltip=alt.value(None),
                         )
                     )
                     _panel = alt.layer(_bars, _dots)
