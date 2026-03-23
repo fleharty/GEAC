@@ -302,6 +302,51 @@ Work through each item top to bottom. Check off items as verified, note failures
 
 ---
 
+## Explorer — Signatures: Future Ideas
+
+- [ ] **Count / fraction toggle on SBS96** — add a count/fraction y-axis toggle to the SBS96 spectrum,
+  consistent with the insert size and other plots. Essential for comparing samples with different
+  read depths without being misled by raw count differences.
+
+- [ ] **Reconstructed spectrum overlay** — after COSMIC NNLS fitting, overlay the reconstructed
+  spectrum as a line on top of the observed SBS96 bars. Currently fit quality is a single scalar
+  (cosine similarity); the overlay would show at the context level where the fit is good and where
+  it fails, which is far more informative for diagnosing missing or misattributed signatures.
+
+- [ ] **Family-size stratified spectrum** — split the SBS96 into singleton reads (family_size = 1)
+  vs multi-member families. Singletons are enriched for sequencing errors; the difference between
+  the two spectra isolates the true variant signal from the error process. Particularly useful for
+  error characterisation in error-corrected sequencing workflows.
+
+- [ ] **VAF-stratified spectrum** — show germline (VAF > 30%) vs somatic (VAF ≤ 30%) SBS96 side by
+  side, analogous to the insert size by AF class plot. If the error spectrum differs between the
+  two, that reveals what is driving low-VAF calls.
+
+- [ ] **Per-sample COSMIC decomposition (cohort stacked bar)** — run NNLS on each sample
+  independently and display a stacked bar chart of signature exposures across samples (samples on
+  x-axis, signatures stacked). This is the standard SigProfiler-style cohort plot and is especially
+  valuable in DuckDB/cohort mode.
+
+- [ ] **Reference trinucleotide frequency normalisation** — divide each context count by its
+  expected frequency in the genome or target region to remove background trinucleotide composition
+  bias. Without this, a C>T spike could simply reflect CpG abundance in the target rather than a
+  real mutagenic process. Important for small-panel error spectrum work.
+
+- [ ] **Indel spectrum (COSMIC ID signatures)** — extend the tab to show an indel context spectrum
+  (repeat unit type, repeat length, indel length) and fit it against COSMIC ID signatures via NNLS.
+  Would make the tab a full mutational signature suite covering SBS, and ID.
+
+- [ ] **Strand asymmetry overlay** — add a per-context indicator on the SBS96 bars showing
+  forward/reverse strand imbalance. Transcription-coupled repair and replication strand effects
+  leave characteristic asymmetries that are invisible in the standard pyrimidine-collapsed SBS96.
+
+- [ ] **Per-variant signature attribution** — after NNLS, compute each variant's most likely
+  signature based on its SBS96 context weight vector and the fitted exposures. Add a
+  `top_signature` column to the drill-down table so individual variants can be traced back to a
+  mutagenic process.
+
+---
+
 ## Explorer — Tab 3: Strand Bias
 
 - [ ] Scatter plot renders with diagonal and 95% CI boundary lines
