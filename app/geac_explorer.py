@@ -1258,7 +1258,7 @@ with tab2:
                             )
                             _line = (
                                 alt.Chart(_recon_sub)
-                                .mark_line(color="black", strokeWidth=1.5, opacity=0.85)
+                                .mark_point(color="black", size=15, filled=True, opacity=0.85)
                                 .encode(
                                     alt.X("sbs_label:N", sort=_order),
                                     alt.Y(f"{_recon_y}:Q"),
@@ -1285,7 +1285,7 @@ with tab2:
                         )
                         st.altair_chart(overlay_chart, use_container_width=True)
                         st.caption(
-                            "Bars = observed spectrum. Black line = COSMIC reconstruction (NNLS fit). "
+                            "Bars = observed spectrum. Black dots = COSMIC reconstruction (NNLS fit). "
                             "Contexts where the line deviates from the bars are poorly explained by the selected signatures."
                         )
 
