@@ -2517,7 +2517,7 @@ with tab_reads:
             # Fragments longer than 2×read_len have a coverage gap; the correction
             # weights each count by 1 / min(1, 2R/L) to recover the unbiased distribution.
             _read_len_median = con.execute(
-                "SELECT MEDIAN(read_len) FROM alt_reads WHERE read_len IS NOT NULL"
+                "SELECT MEDIAN(read_length) FROM alt_reads WHERE read_length IS NOT NULL"
             ).fetchone()[0] or 0
             _gap_threshold = 2 * _read_len_median  # bp where gap effect begins
 
