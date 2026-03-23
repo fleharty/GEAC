@@ -1092,6 +1092,17 @@ with tab2:
             })
             spec96 = full.merge(agg, on=["sbs_label", "mut_type"], how="left")
             spec96["count"] = spec96["count"].fillna(0).astype(int)
+            _total_snvs = spec96["count"].sum()
+            spec96["fraction"] = spec96["count"] / _total_snvs if _total_snvs > 0 else 0.0
+
+            _sbs_y_mode = st.radio(
+                "Y axis", ["Fraction", "Count"],
+                horizontal=True, key="sbs_y_mode",
+            )
+            _sbs_use_fraction = _sbs_y_mode == "Fraction"
+            _sbs_y_field = "fraction" if _sbs_use_fraction else "count"
+            _sbs_y_title = "Fraction of SNVs" if _sbs_use_fraction else "Count"
+            _sbs_y_fmt   = ".3f" if _sbs_use_fraction else "d"
 
             sel_param = alt.selection_point(name="bar_click", fields=["sbs_label"], on="click")
 
@@ -1105,9 +1116,13 @@ with tab2:
                     .encode(
                         alt.X("sbs_label:N", sort=_order, title=None,
                               axis=alt.Axis(labelAngle=-90, labelFontSize=8)),
-                        alt.Y("count:Q", title="Count"),
+                        alt.Y(f"{_sbs_y_field}:Q", title=_sbs_y_title,
+                              **({"axis": alt.Axis(format=".3f")} if _sbs_use_fraction else {})),
                         opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.4)),
-                        tooltip=["sbs_label:N", "count:Q"],
+                        tooltip=[
+                            "sbs_label:N",
+                            alt.Tooltip(f"{_sbs_y_field}:Q", title=_sbs_y_title, format=_sbs_y_fmt),
+                        ],
                     )
                     .add_params(sel_param)
                     .properties(
