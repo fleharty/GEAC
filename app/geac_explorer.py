@@ -2513,6 +2513,14 @@ with tab_reads:
 
         # ── Row 3: Insert size distribution ───────────────────────────────────
         if con.execute("SELECT COUNT(*) FROM alt_reads WHERE insert_size IS NOT NULL LIMIT 1").fetchone()[0] > 0:
+            # Median read length — used for gap correction in both insert size plots.
+            # Fragments longer than 2×read_len have a coverage gap; the correction
+            # weights each count by 1 / min(1, 2R/L) to recover the unbiased distribution.
+            _read_len_median = con.execute(
+                "SELECT MEDIAN(read_len) FROM alt_reads WHERE read_len IS NOT NULL"
+            ).fetchone()[0] or 0
+            _gap_threshold = 2 * _read_len_median  # bp where gap effect begins
+
             st.subheader("Insert size distribution")
             _ins_color_options = ["All samples (aggregate)", "Sample"]
             if _has_data("batch"):
@@ -2554,29 +2562,44 @@ with tab_reads:
             if not _ins_df.empty:
                 _ins_y_mode = st.radio(
                     "Y axis",
-                    ["Frequency", "Count"],
+                    ["Frequency", "Gap-corrected", "Count"],
                     horizontal=True,
                     key="ins_y_mode",
                 )
-                _ins_use_freq = _ins_y_mode == "Frequency"
-                if _ins_use_freq:
-                    _ins_group_col = _ins_label_col or "__all__"
+                _ins_use_freq    = _ins_y_mode == "Frequency"
+                _ins_use_corrected = _ins_y_mode == "Gap-corrected"
+
+                # Apply gap correction: weight = min(1, 2R/L); corrected = raw / weight
+                if _ins_use_corrected and _read_len_median > 0:
+                    _ins_df["n_eff"] = _ins_df["n_reads"] / _ins_df["insert_size"].apply(
+                        lambda x: min(1.0, 2.0 * _read_len_median / x) if x > 0 else 1.0
+                    )
+                else:
+                    _ins_df["n_eff"] = _ins_df["n_reads"].astype(float)
+
+                if _ins_use_freq or _ins_use_corrected:
                     if _ins_label_col:
-                        _ins_totals = _ins_df.groupby(_ins_label_col)["n_reads"].transform("sum")
+                        _ins_totals = _ins_df.groupby(_ins_label_col)["n_eff"].transform("sum")
                     else:
-                        _ins_totals = _ins_df["n_reads"].sum()
-                    _ins_df["frequency"] = _ins_df["n_reads"] / _ins_totals
-                _ins_y_field = "frequency" if _ins_use_freq else "n_reads"
-                _ins_y_title = "Frequency" if _ins_use_freq else "Alt-supporting reads"
+                        _ins_totals = _ins_df["n_eff"].sum()
+                    _ins_df["frequency"] = _ins_df["n_eff"] / _ins_totals
+
+                _ins_y_field = "frequency" if (_ins_use_freq or _ins_use_corrected) else "n_reads"
+                _ins_y_title = (
+                    "Gap-corrected frequency" if _ins_use_corrected else
+                    "Frequency"               if _ins_use_freq      else
+                    "Alt-supporting reads"
+                )
                 _ins_enc = dict(
                     x=alt.X("insert_size:Q", title="Insert size (bp)"),
                     y=alt.Y(f"{_ins_y_field}:Q", title=_ins_y_title,
-                            **({"axis": alt.Axis(format=".3f")} if _ins_use_freq else {})),
+                            **({"axis": alt.Axis(format=".3f")} if (_ins_use_freq or _ins_use_corrected) else {})),
                     tooltip=[
                         *([f"{_ins_label_col}:N"] if _ins_label_col else []),
                         alt.Tooltip("insert_size:Q", title="Insert size (bp)"),
-                        alt.Tooltip(f"{_ins_y_field}:Q", title="Frequency" if _ins_use_freq else "Reads",
-                                    **({"format": ".4f"} if _ins_use_freq else {})),
+                        alt.Tooltip(f"{_ins_y_field}:Q",
+                                    title=_ins_y_title,
+                                    **({"format": ".4f"} if (_ins_use_freq or _ins_use_corrected) else {})),
                     ],
                 )
                 if _ins_label_col:
@@ -2595,10 +2618,19 @@ with tab_reads:
                         .properties(height=300)
                     )
                 st.altair_chart(_ins_chart, use_container_width=True)
-                st.caption(
+                _ins_caption = (
                     "Insert size distribution of alt-supporting reads. "
                     "A shift toward shorter inserts can indicate adapter contamination or artefacts."
                 )
+                if _gap_threshold > 0:
+                    _ins_caption += (
+                        f" A kink near {int(_gap_threshold)} bp (2× read length) is expected: "
+                        "fragments longer than this have a coverage gap between R1 and R2, "
+                        "so not every fragment is captured at every locus. "
+                        "Select 'Gap-corrected' to divide each count by the capture probability "
+                        "min(1, 2R/L), recovering the unbiased fragment size distribution."
+                    )
+                st.caption(_ins_caption)
 
         # ── Row 3b: Insert size by AF class (germline vs somatic) ─────────────
         if con.execute("SELECT COUNT(*) FROM alt_reads WHERE insert_size IS NOT NULL LIMIT 1").fetchone()[0] > 0:
@@ -2612,7 +2644,7 @@ with tab_reads:
                 horizontal=True, key="af_ins_color_by",
             )
             _af_ins_y_mode = _af_ins_ctrl2.radio(
-                "Y axis", ["Frequency", "Count"],
+                "Y axis", ["Frequency", "Gap-corrected", "Count"],
                 horizontal=True, key="af_ins_y_mode",
             )
             _af_ins_by_sample = _af_ins_color_by == "Sample"
@@ -2660,7 +2692,8 @@ with tab_reads:
             if _af_ins_df.empty:
                 st.info("No data.")
             else:
-                _af_ins_use_freq = _af_ins_y_mode == "Frequency"
+                _af_ins_use_freq      = _af_ins_y_mode == "Frequency"
+                _af_ins_use_corrected = _af_ins_y_mode == "Gap-corrected"
 
                 # When grouping by sample/batch, combine group + af_class into one label
                 # so color encodes the group and line style implicitly encodes AF class.
@@ -2681,24 +2714,38 @@ with tab_reads:
                                                        range=["#e45756", "#4c78a8"],
                                                    ))
 
-                if _af_ins_use_freq:
-                    _norm_key = "series" if _af_ins_group_col else "af_class"
-                    _totals = _af_ins_df.groupby(_norm_key)["n_reads"].transform("sum")
-                    _af_ins_df["frequency"] = _af_ins_df["n_reads"] / _totals
+                # Apply gap correction
+                if _af_ins_use_corrected and _read_len_median > 0:
+                    _af_ins_df["n_eff"] = _af_ins_df["n_reads"] / _af_ins_df["insert_size"].apply(
+                        lambda x: min(1.0, 2.0 * _read_len_median / x) if x > 0 else 1.0
+                    )
+                else:
+                    _af_ins_df["n_eff"] = _af_ins_df["n_reads"].astype(float)
 
+                if _af_ins_use_freq or _af_ins_use_corrected:
+                    _norm_key = "series" if _af_ins_group_col else "af_class"
+                    _af_totals = _af_ins_df.groupby(_norm_key)["n_eff"].transform("sum")
+                    _af_ins_df["frequency"] = _af_ins_df["n_eff"] / _af_totals
+
+                _af_ins_y_title = (
+                    "Gap-corrected frequency" if _af_ins_use_corrected else
+                    "Frequency"               if _af_ins_use_freq      else
+                    "Alt-supporting reads"
+                )
+                _af_ins_y_field = "frequency" if (_af_ins_use_freq or _af_ins_use_corrected) else "n_reads"
                 _af_ins_y = (
-                    alt.Y("frequency:Q", title="Frequency", axis=alt.Axis(format=".3f"))
-                    if _af_ins_use_freq else
+                    alt.Y(f"{_af_ins_y_field}:Q", title=_af_ins_y_title,
+                          axis=alt.Axis(format=".3f"))
+                    if (_af_ins_use_freq or _af_ins_use_corrected) else
                     alt.Y("n_reads:Q", title="Alt-supporting reads")
                 )
-                _af_ins_y_field = "frequency" if _af_ins_use_freq else "n_reads"
                 _af_ins_tooltip = [
                     *([f"{_af_ins_group_col}:N"] if _af_ins_group_col else []),
                     alt.Tooltip("insert_size:Q", title="Insert size (bp)"),
                     alt.Tooltip("af_class:N", title="AF class"),
                     alt.Tooltip(_af_ins_y_field + ":Q",
-                                title="Frequency" if _af_ins_use_freq else "Reads",
-                                **({"format": ".4f"} if _af_ins_use_freq else {})),
+                                title=_af_ins_y_title,
+                                **({"format": ".4f"} if (_af_ins_use_freq or _af_ins_use_corrected) else {})),
                 ]
                 _af_ins_chart = (
                     alt.Chart(_af_ins_df)
@@ -2712,12 +2759,17 @@ with tab_reads:
                     .properties(height=300)
                 )
                 st.altair_chart(_af_ins_chart, use_container_width=True)
-                st.caption(
+                _af_ins_caption = (
                     "Insert size distributions split by allele frequency. "
-                    "Frequency is normalized independently per series so lines are directly comparable "
+                    "Each series is normalised independently so lines are directly comparable "
                     "regardless of how many reads fall in each group. "
                     "A shift in one class toward very short or very long inserts suggests artefacts in that group."
                 )
+                if _gap_threshold > 0:
+                    _af_ins_caption += (
+                        f" Select 'Gap-corrected' to remove the coverage-gap bias near {int(_gap_threshold)} bp."
+                    )
+                st.caption(_af_ins_caption)
 
         # ── Row 4: Family size vs VAF per locus ───────────────────────────────
         st.subheader("Family size vs VAF (per locus)")
