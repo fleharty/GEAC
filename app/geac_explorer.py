@@ -1227,6 +1227,68 @@ with tab2:
                             help="L2 norm of unexplained counts as a percentage of total SNV count. Lower is better.",
                         )
 
+                        # ── Observed vs reconstructed overlay ─────────────
+                        recon_total = reconstructed.sum()
+                        recon_df = spec96[["sbs_label", "mut_type"]].copy()
+                        recon_df["recon_count"] = reconstructed
+                        recon_df["recon_frac"] = (
+                            reconstructed / recon_total if recon_total > 0 else 0.0
+                        )
+                        _recon_y = "recon_frac" if _sbs_use_fraction else "recon_count"
+                        _recon_fmt = ".3f" if _sbs_use_fraction else "d"
+
+                        _overlay_charts = []
+                        for _mt in _SBS_MUT_TYPES:
+                            _obs_sub   = spec96[spec96["mut_type"] == _mt].copy()
+                            _recon_sub = recon_df[recon_df["mut_type"] == _mt].copy()
+                            _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+                            _bars = (
+                                alt.Chart(_obs_sub)
+                                .mark_bar(color=_SBS_COLORS[_mt], opacity=0.7)
+                                .encode(
+                                    alt.X("sbs_label:N", sort=_order, title=None,
+                                          axis=alt.Axis(labelAngle=-90, labelFontSize=8)),
+                                    alt.Y(f"{_sbs_y_field}:Q", title=_sbs_y_title,
+                                          **({"axis": alt.Axis(format=".3f")} if _sbs_use_fraction else {})),
+                                    tooltip=[
+                                        "sbs_label:N",
+                                        alt.Tooltip(f"{_sbs_y_field}:Q", title="Observed", format=_sbs_y_fmt),
+                                    ],
+                                )
+                            )
+                            _line = (
+                                alt.Chart(_recon_sub)
+                                .mark_line(color="black", strokeWidth=1.5, opacity=0.85)
+                                .encode(
+                                    alt.X("sbs_label:N", sort=_order),
+                                    alt.Y(f"{_recon_y}:Q"),
+                                    tooltip=[
+                                        "sbs_label:N",
+                                        alt.Tooltip(f"{_recon_y}:Q", title="Reconstructed", format=_recon_fmt),
+                                    ],
+                                )
+                            )
+                            _overlay_charts.append(
+                                alt.layer(_bars, _line)
+                                .properties(
+                                    title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt], fontSize=13, fontWeight="bold"),
+                                    width=150, height=140,
+                                )
+                            )
+
+                        overlay_chart = (
+                            alt.concat(*_overlay_charts, columns=3)
+                            .resolve_scale(y="shared")
+                            .properties(title=alt.TitleParams(
+                                "Observed vs Reconstructed Spectrum", fontSize=15,
+                            ))
+                        )
+                        st.altair_chart(overlay_chart, use_container_width=True)
+                        st.caption(
+                            "Bars = observed spectrum. Black line = COSMIC reconstruction (NNLS fit). "
+                            "Contexts where the line deviates from the bars are poorly explained by the selected signatures."
+                        )
+
                         top_n_sig = st.slider(
                             "Top signatures to display", 3, min(20, len(sig_df)), 4,
                             key="top_n_sig",
