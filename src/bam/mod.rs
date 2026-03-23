@@ -92,7 +92,16 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
             rev_depth,
             overlap_depth,
             read_details,
-        } = tally_pileup(&pileup, args.min_base_qual, args.min_map_qual, ref_base, collect_reads);
+        } = tally_pileup(
+            &pileup,
+            args.min_base_qual,
+            args.min_map_qual,
+            args.include_duplicates,
+            args.include_secondary,
+            args.include_supplementary,
+            ref_base,
+            collect_reads,
+        );
 
         progress.positions_processed.fetch_add(1, Ordering::Relaxed);
         progress.reads_processed.fetch_add(total_depth as u64, Ordering::Relaxed);
@@ -201,7 +210,15 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
         }
 
         // ── Indel records ─────────────────────────────────────────────────────
-        let indels = tally_indels(&pileup, pos, ref_cache.current_seq(), args.min_map_qual);
+        let indels = tally_indels(
+            &pileup,
+            pos,
+            ref_cache.current_seq(),
+            args.min_map_qual,
+            args.include_duplicates,
+            args.include_secondary,
+            args.include_supplementary,
+        );
 
         for (_, indel) in &indels {
             if indel.total == 0 {
@@ -340,6 +357,9 @@ fn tally_pileup(
     pileup: &rust_htslib::bam::pileup::Pileup,
     min_base_qual: u8,
     min_map_qual: u8,
+    include_duplicates: bool,
+    include_secondary: bool,
+    include_supplementary: bool,
     ref_base: char,
     collect_reads: bool,
 ) -> PileupResult {
@@ -352,6 +372,13 @@ fn tally_pileup(
         }
 
         let record = alignment.record();
+
+        if (!include_duplicates && record.is_duplicate())
+            || (!include_secondary && record.is_secondary())
+            || (!include_supplementary && record.is_supplementary())
+        {
+            continue;
+        }
 
         if record.mapq() < min_map_qual {
             continue;
@@ -567,6 +594,9 @@ fn tally_indels(
     pos: i64,
     chrom_seq: &[u8],
     min_map_qual: u8,
+    include_duplicates: bool,
+    include_secondary: bool,
+    include_supplementary: bool,
 ) -> HashMap<String, IndelCount> {
     // First pass: collect (indel_allele_or_none, is_reverse, is_first_in_pair) per query name.
     let mut by_qname: HashMap<Vec<u8>, Vec<(IndelAllele, bool, bool)>> = HashMap::new();
@@ -576,6 +606,14 @@ fn tally_indels(
             continue;
         }
         let record = alignment.record();
+
+        if (!include_duplicates && record.is_duplicate())
+            || (!include_secondary && record.is_secondary())
+            || (!include_supplementary && record.is_supplementary())
+        {
+            continue;
+        }
+
         if record.mapq() < min_map_qual {
             continue;
         }

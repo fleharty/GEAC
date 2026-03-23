@@ -62,6 +62,47 @@ Work through each item top to bottom. Check off items as verified, note failures
   and adds columns like `normal_vaf`, `normal_alt_count`, `normal_depth` to the tumor output. The
   Explorer would then expose these as additional filter dimensions (e.g. "exclude if normal VAF > 1%").
 
+- [ ] **Replicate concordance mode** — given N Parquets from the same specimen (technical replicates
+  or repeated library preps), measure per-locus reproducibility across replicates. Key metrics:
+  fraction of replicates supporting each locus, CV of VAF across replicates, concordance rate.
+  Variants that hold up across all replicates have much stronger support than those appearing in
+  only one. Particularly powerful for error-corrected duplex data. Possible design: a `geac compare`
+  subcommand that takes a manifest of `(sample_id, replicate_id)` groupings and produces a
+  comparison Parquet with per-locus concordance statistics. Explorer would add a Replicates tab
+  showing per-locus reproducibility plots and a concordance filter dimension.
+
+- [ ] **Truth-set evaluation mode** — extends replicate mode when ground truth is known (spike-ins,
+  cell line standards such as GIAB, or in silico dilutions). Given a truth VCF/TSV alongside one
+  or more Parquets, compute TP/FP/FN/TN at each locus and generate precision-recall and ROC curves.
+  Stratify sensitivity/specificity by VAF, family size, repeat context, trinucleotide context, and
+  consequence type. Possible design: a `geac benchmark` subcommand that takes a Parquet and a truth
+  VCF/TSV and produces a benchmarking report. Explorer would add precision-recall and ROC plots.
+  Shares infrastructure with replicate mode — both involve multi-sample per-locus aggregation with
+  a manifest-driven join. Truth evaluation is the natural extension once replicates are working.
+
+- [ ] **Duplex/Simplex consensus analysis tab** — a dedicated Explorer tab for evaluating
+  error-corrected sequencing quality, only shown when `alt_reads` is present and `read_type`
+  is `duplex` or `simplex`. Proposed analyses:
+
+  - *Error rate vs family size* — VAF as a function of family size; the slope reveals how
+    much error correction is occurring. A flat curve suggests consensus calling is not
+    suppressing errors as expected.
+  - *AB/BA strand balance* — distribution of `ab_count` vs `ba_count` (fgbio `aD`/`bD`
+    tags) per locus. Imbalanced AB/BA at alt loci suggests strand-specific errors surviving
+    consensus, a key quality signal for duplex data.
+  - *Duplex efficiency* — fraction of families that are true duplex (both `ab_count > 0`
+    and `ba_count > 0`) vs simplex (one strand only). Low duplex efficiency means paying
+    the cost of duplex prep without the full error-correction benefit.
+  - *Family size distribution stratified by duplex/simplex* — separate histograms for
+    duplex and simplex families; duplex families should skew larger if library prep is
+    working well.
+  - *Consensus error spectrum by family type* — SBS96 profile for singleton, simplex,
+    and duplex families separately. Residual errors in duplex reads should have a
+    distinctly different spectrum from simplex errors if consensus is working.
+  - *Family size vs insert size* — scatter or heatmap revealing whether large families
+    are concentrated at certain insert sizes, which could indicate PCR duplication
+    patterns or probe capture biases.
+
 - [ ] **IGV.js integration** — evaluate embedding [IGV.js](https://github.com/igvteam/igv.js) (the
   JavaScript port of IGV) directly inside the Explorer rather than generating session zip files for
   the desktop app. Could enable tighter integration: clicking a locus in any plot immediately renders
@@ -185,6 +226,14 @@ Work through each item top to bottom. Check off items as verified, note failures
 - [ ] `--repeat-window` changes homopolymer/STR detection window
 - [ ] `homopolymer_len`, `str_period`, `str_len` columns are populated
 - [ ] `trinuc_context` populated for SNVs; null for indels/MNVs
+
+### Read filtering flags
+- [ ] Default behaviour excludes duplicate, secondary, and supplementary reads
+- [ ] `--include-duplicates` causes duplicate reads (FLAG 0x400) to be included
+- [ ] `--include-secondary` causes secondary alignments (FLAG 0x100) to be included
+- [ ] `--include-supplementary` causes supplementary alignments (FLAG 0x800) to be included
+- [ ] Combining `--include-duplicates --include-secondary --include-supplementary` includes all three classes
+- [ ] Depth counts differ when flags are included vs excluded for a BAM known to contain such reads
 
 ### CRAM support
 - [ ] Runs on a CRAM file with `--reference`

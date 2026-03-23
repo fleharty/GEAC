@@ -107,6 +107,18 @@ pub struct CollectArgs {
     #[arg(long, default_value_t = 0)]
     pub min_map_qual: u8,
 
+    /// Include PCR/optical duplicate reads (FLAG 0x400); excluded by default
+    #[arg(long)]
+    pub include_duplicates: bool,
+
+    /// Include secondary alignments (FLAG 0x100); excluded by default
+    #[arg(long)]
+    pub include_secondary: bool,
+
+    /// Include supplementary alignments (FLAG 0x800); excluded by default
+    #[arg(long)]
+    pub include_supplementary: bool,
+
     /// Restrict processing to this region (e.g. "chr1:1000-2000")
     #[arg(long)]
     pub region: Option<String>,
