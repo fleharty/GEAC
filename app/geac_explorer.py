@@ -77,7 +77,7 @@ _FILTER_KEYS = [
     "chrom_sel", "sample_sel", "batch_sel", "gene_text", "variant_sel", "vaf_range",
     "min_alt", "min_fwd_alt", "min_rev_alt",
     "min_overlap_agree", "min_overlap_disagree",
-    "variant_called_sel", "on_target_sel",
+    "variant_called_sel", "variant_filter_sel", "on_target_sel",
     "homopolymer_range", "str_len_range", "min_depth", "max_depth",
     "table_limit_sel",
 ]
@@ -96,7 +96,8 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["min_rev_alt"]        = 0
     st.session_state["min_overlap_agree"]   = 0
     st.session_state["min_overlap_disagree"] = 0
-    st.session_state["variant_called_sel"] = "All"
+    st.session_state["variant_called_sel"]  = "All"
+    st.session_state["variant_filter_sel"] = []
     st.session_state["on_target_sel"]      = "All"
     st.session_state["homopolymer_range"]  = (0, 20)
     st.session_state["str_len_range"]      = (0, 50)
@@ -155,6 +156,22 @@ min_rev_alt = st.sidebar.number_input("Min rev alt count (0 = no minimum)", min_
 min_overlap_agree    = st.sidebar.number_input("Min overlap alt agree (0 = no minimum)",    min_value=0, max_value=10000, value=0, step=1, key="min_overlap_agree")
 min_overlap_disagree = st.sidebar.number_input("Min overlap alt disagree (0 = no minimum)", min_value=0, max_value=10000, value=0, step=1, key="min_overlap_disagree")
 variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No", "Unknown (no VCF/TSV)"], key="variant_called_sel")
+_vf_has_data = _has_data("variant_filter")
+if _vf_has_data:
+    _vf_options = con.execute(
+        f"SELECT DISTINCT variant_filter FROM {table_expr} WHERE variant_filter IS NOT NULL ORDER BY variant_filter"
+    ).df()["variant_filter"].tolist()
+    if "variant_filter_sel" not in st.session_state:
+        st.session_state["variant_filter_sel"] = []
+    variant_filter_sel = st.sidebar.multiselect(
+        "Variant filter (blank = all)",
+        _vf_options,
+        key="variant_filter_sel",
+        help="Filter values from the VCF FILTER field or variants TSV. Select one or more values to restrict to those loci.",
+    )
+else:
+    variant_filter_sel = []
+    st.sidebar.caption("Variant filter unavailable — run geac collect with --vcf or --variants-tsv to enable.")
 on_target_sel = st.sidebar.selectbox("Target bases", ["All", "On target", "Off target"], key="on_target_sel")
 
 _repeat_cols_present = _has_data("homopolymer_len")
@@ -638,6 +655,9 @@ elif variant_called_sel == "No":
     conditions.append("variant_called = false")
 elif variant_called_sel == "Unknown (no VCF/TSV)":
     conditions.append("variant_called IS NULL")
+if variant_filter_sel:
+    vf_list = ", ".join(f"'{v.replace(chr(39), chr(39)*2)}'" for v in variant_filter_sel)
+    conditions.append(f"variant_filter IN ({vf_list})")
 if "on_target" in _schema_cols:
     if on_target_sel == "On target":
         conditions.append("on_target = true")
