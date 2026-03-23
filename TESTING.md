@@ -15,6 +15,14 @@ Work through each item top to bottom. Check off items as verified, note failures
   is entirely NULL (no VCF/TSV was provided at collect time), consistent with how other optional
   columns are handled.
 
+- [ ] **Tumor-normal mode** — add a paired tumor-normal workflow where a tumor Parquet is annotated
+  with the matched normal's VAF and depth at the same loci. This is a core somatic variant validation
+  use case: low-VAF sites in tumor that are also present in the normal at any VAF are likely germline
+  or artefact; sites absent in the normal are candidate somatic events. Possible design: a new
+  `geac annotate-normal` subcommand (or `--normal` flag on `collect`) that takes a normal Parquet/BAM
+  and adds columns like `normal_vaf`, `normal_alt_count`, `normal_depth` to the tumor output. The
+  Explorer would then expose these as additional filter dimensions (e.g. "exclude if normal VAF > 1%").
+
 - [ ] **IGV.js integration** — evaluate embedding [IGV.js](https://github.com/igvteam/igv.js) (the
   JavaScript port of IGV) directly inside the Explorer rather than generating session zip files for
   the desktop app. Could enable tighter integration: clicking a locus in any plot immediately renders
@@ -35,6 +43,43 @@ Work through each item top to bottom. Check off items as verified, note failures
   logic, not necessarily a double-count, but worth confirming. To investigate: verify the kink is at
   exactly 262 bp, and inspect whether the per-read detail emission differs in any way between the two
   branches that could bias the insert size histogram near that threshold.
+
+---
+
+## Rust CLI — To Explore / Future Features
+
+- [ ] **Duplicate / secondary / supplementary read filtering** — the pileup currently does not filter
+  reads with BAM flags 0x400 (PCR/optical duplicate), 0x100 (secondary alignment), or 0x800
+  (supplementary alignment). For `--pipeline raw` (non-consensus reads) this could lead to inflated
+  depth and spurious alt counts. Consider adding `--filter-duplicates` (default on for raw mode) and
+  always filtering secondary/supplementary, consistent with what most pileup tools do.
+
+- [ ] **`--min-alt-count` filter at collect time** — currently every position with even one alt read
+  is written to the Parquet. For WGS data this produces very large outputs. A minimum alt count
+  threshold at collect time would dramatically reduce output size with minimal loss of signal.
+  Consider defaulting to 2 or 3 to suppress single-read noise.
+
+- [ ] **Depth cap / downsampling** — at extremely deep positions (e.g. hotspots in amplicon data)
+  pileup processing is slow and depth statistics become noisy. Consider a `--max-depth` flag that
+  randomly downsamples reads at a position to the cap before tallying, consistent with how samtools
+  and other tools handle this.
+
+- [ ] **`--pipeline dragen` is currently cosmetic** — the pipeline flag is stored as metadata but
+  processing always looks for fgbio tags (`aD`, `bD`, `cD`). DRAGEN consensus reads use different
+  tags. If DRAGEN consensus support is needed, the tag lookup logic should branch on `pipeline`.
+
+- [ ] **Read strand in alt_reads** — `is_reverse` and `is_first_in_pair` are not stored in the
+  alt_reads Parquet. Locus-level strand counts exist (fwd/rev alt count), but per-read strand
+  information would enable finer-grained strand bias analysis in the Explorer's reads tab.
+
+- [ ] **NM tag (edit distance) in alt_reads** — storing the SAM `NM` tag (number of mismatches)
+  per alt-supporting read would help distinguish reads with many mismatches (likely mapping
+  artefacts) from clean alt-supporting reads. Useful as an additional per-read filter in the
+  Explorer.
+
+- [ ] **`qc` command enhancements** — current QC output covers SBS6 substitution breakdown but
+  lacks: indel composition, on-target fraction, duplicate/secondary rate, and per-chromosome stats.
+  These would make `geac qc` a more complete QC report for pipeline validation.
 
 ---
 
