@@ -1955,7 +1955,7 @@ with tab_reads:
                 horizontal=True, key="fs_color_by",
             )
             _fs_y_mode = _fs_ctrl_col2.radio(
-                "Y axis", ["Count", "Fraction"],
+                "Y axis", ["Fraction", "Count"],
                 horizontal=True, key="fs_y_mode",
             )
             _fs_by_sample = _fs_color_by == "Sample"
@@ -2051,7 +2051,7 @@ with tab_reads:
                 horizontal=True, key="dfe_color_by",
             )
             _dfe_y_mode = _dfe_ctrl2.radio(
-                "Y axis", ["Count", "Fraction"],
+                "Y axis", ["Fraction", "Count"],
                 horizontal=True, key="dfe_y_mode",
             )
             _dfe_by_sample = _dfe_color_by == "Sample"
