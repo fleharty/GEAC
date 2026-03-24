@@ -21,6 +21,7 @@ version 1.0
 ##   reference_fasta_index - Corresponding .fai index
 ##   read_types            - (optional) per-sample array of duplex|simplex|raw; defaults to "duplex" for all
 ##   pipelines             - (optional) per-sample array of fgbio|dragen|raw; defaults to "fgbio" for all
+##   batches               - (optional) per-sample batch/group label stored as a column in each Parquet
 ##   targets               - (optional) BED or Picard interval list
 ##   gene_annotations      - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
 ##   region                - (optional) restrict all samples to a genomic region

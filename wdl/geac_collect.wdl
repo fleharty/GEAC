@@ -24,7 +24,7 @@ version 1.0
 ##   region               - (optional) restrict to a region, e.g. chr1:1-1000000
 ##   repeat_window        - bases each side of locus to scan for homopolymers/STRs (default 10)
 ##   min_base_qual        - minimum base quality (default 1)
-##   min_map_qual         - minimum mapping quality (default 20)
+##   min_map_qual         - minimum mapping quality (default 0)
 ##   include_duplicates   - include PCR/optical duplicate reads (FLAG 0x400); default false
 ##   include_secondary    - include secondary alignments (FLAG 0x100); default false
 ##   include_supplementary - include supplementary alignments (FLAG 0x800); default false

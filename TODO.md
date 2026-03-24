@@ -1,5 +1,16 @@
 # GEAC — TODO
 
+## Current plan (as of 2026-03-24)
+
+- **`main` branch** — v0.4.0 work is complete (annotate-normal, annotate-pon, batch/multi-BAM
+  support, merge routing, Explorer Tumor/Normal + PoN + batch tabs). Waiting on real data
+  for manual smoke testing before cutting the v0.4.0 release (~2 days).
+- **`feature/coverage` branch** — start `geac coverage` implementation now while waiting.
+  Branch from current `main` so it includes all v0.4.0 features. Work in parallel;
+  do not merge until after v0.4.0 is released and tested.
+- **Release sequence:** test v0.4.0 on real data → release v0.4.0 → merge coverage branch
+  → release v0.5.0.
+
 ## Rust / CLI
 
 - [x] `geac qc` subcommand — per-sample summary of error rates by substitution type, strand bias metrics, and overlap concordance
@@ -69,6 +80,54 @@ Two output files per sample from `geac collect`:
 
 - [ ] Multi-BAM collect — allow `geac collect` to accept multiple input BAMs for the same sample (raw, simplex, duplex) and tag each record with its `read_type`; output a single merged Parquet with a `read_type` column
 - [ ] Read-type comparison view in Explorer — given a Parquet or DuckDB with mixed read types, show side-by-side or overlaid metrics (VAF distribution, strand balance, SBS96 spectrum) broken down by `read_type` (raw / simplex / duplex / mixed); goal is to quantify what duplex consensus processing removes vs retains
+
+## ⚠️ HIGH PRIORITY: Per-read filter VAF semantics bug
+
+**Symptom:** When a per-read filter (family size, cycle, MAPQ) is active and the user
+tightens the range, the count of records at a particular allele fraction can *increase*
+rather than decrease. Counterintuitive and was confirmed in practice.
+
+**Root cause:** When per-read filters are active, `table_expr` is replaced with a JOIN
+subquery (`app/geac_explorer.py` lines ~360–375) that recomputes `alt_count` as
+`COUNT(*) FROM alt_reads WHERE <filter>`. However, `total_depth` — the denominator of
+VAF — is carried over unchanged from `alt_bases` (which counts *all* reads, including
+those outside the filter). Result:
+
+- `alt_count` decreases as the filter is tightened (correct)
+- `total_depth` is unchanged (wrong — it still includes filtered-out reads)
+- Computed VAF = filtered_alt_count / original_total_depth is artificially deflated
+- Loci shift to lower VAF bins; if many loci pile into the same lower bin, the count
+  at that bin *increases* — even though the filter is more restrictive
+
+**Secondary issue:** `NULL` family_size handling is asymmetric. In include mode,
+`BETWEEN lo AND hi` silently excludes reads where `family_size IS NULL` (e.g. DRAGEN
+BAMs, or any BAM processed without `--reads-output`). In exclude mode, NULLs are
+explicitly kept. Transitioning from "no filter" (slider at full range, where
+`_reads_active = False` and `table_expr = "alt_bases"`) to any filter in include mode
+suddenly drops all NULL-family-size reads.
+
+**Design question (unresolved):** There are two plausible intended behaviours:
+
+1. **Locus inclusion filter (preferred?):** Per-read filters control *which loci appear*
+   (INNER JOIN keeps only loci with ≥1 passing read), but the displayed VAF and
+   `alt_count` remain the original unfiltered values from `alt_bases`. Caption would say:
+   *"Loci with no alt reads passing these filters are hidden; VAF reflects all reads."*
+
+2. **Re-aggregated alt count:** `alt_count` is replaced with `filtered_alt_count`, VAF
+   is displayed as `filtered_alt_count / total_depth`. This answers "what fraction of
+   *all* molecules at this position are high-quality alt reads?" — a valid metric, but
+   the denominator is not filtered, so VAF is a lower bound, not the true variant VAF.
+   The current sidebar caption (*"alt_count and VAF are re-computed from the reads
+   table"*) implies this interpretation but is misleading about the denominator.
+
+Option 1 is simpler, more correct for the VAF question, and avoids the redistribution
+artefact entirely. Option 2 requires clear labelling of what the displayed metric means.
+A third option is to show both: original VAF alongside `filtered_alt_count` as a
+separate column without pretending it is a VAF.
+
+**Files affected:**
+- `app/geac_explorer.py` lines ~318–375 (filter condition building + table_expr JOIN)
+- sidebar caption at ~line 228
 
 ## Per-read filter validation
 
@@ -449,29 +508,28 @@ WHERE c.frac_mapq0 > 0.3;
   the annotation lookup result; update GTF/GFF3 parser to extract the `exon_number` attribute
 - [ ] Step 2: Add `src/track.rs` — `AnnotationTrack` struct; BEDGraph loader; binary-search
   lookup; streaming loader for WGS; `TrackSet` holding multiple named tracks
-- [ ] Step 3: Add `CoverageArgs` to `src/cli.rs` with `--track`, `--gc-window`,
-  `--min-base-qual`, `--summarize-intervals` flags; add `Command::Coverage` variant
-- [ ] Step 4: Add `src/coverage/mod.rs` — pileup loop that records every position in
-  `--targets` / `--region` (including zero-depth); three-layer read counting
-  (raw → de-dup → de-overlap → total_depth); compute all BAM-derived signals including
-  soft-clipping fraction, insert size stats (reservoir sampling for median), base quality
-  stats, and GC content from the reference cache (already used in collect)
+- [x] Step 3: Add `CoverageArgs` to `src/cli.rs`; add `Command::Coverage` variant
+  (Note: `--track` and `--summarize-intervals` deferred to Steps 2 and 5)
+- [x] Step 4: Add `src/coverage/mod.rs` — pileup loop with three-layer read counting
+  (raw → de-dup → de-overlap → total_depth); all BAM-derived signals (mapq, base qual,
+  insert size, GC content, overlap, dup fraction); zero-depth fill-in for target positions;
+  `compute_gc_content` from reference cache
 - [ ] Step 5: Add per-interval aggregation pass in `src/coverage/mod.rs` — after the
   per-position pass, group positions by target interval and compute the interval summary
   schema; emit as a separate `Vec<IntervalRecord>`
-- [ ] Step 6: Add `src/writer/parquet_coverage.rs` — dynamic Arrow schema for per-position
-  output (fixed columns + named track columns); static schema for per-interval output
-- [ ] Step 7: Update `src/main.rs` to handle `Command::Coverage`; write both output files
-  when `--summarize-intervals` is given
-- [ ] Step 8: Update `src/merge.rs` — detect coverage Parquets and interval Parquets by
-  schema; insert into `coverage` and `coverage_intervals` DuckDB tables respectively;
-  handle `union_by_name` for variable track columns
-- [ ] Step 9: Add `wdl/geac_coverage.wdl` task and scatter/gather workflow; propagate
-  both per-position and interval Parquet outputs through to merge
-- [ ] Step 10: Integration tests — synthetic BAM with known duplicates (BAM_FDUP),
-  MAPQ=0 reads, soft-clipped reads, paired reads with known TLEN, and a reference with
-  known GC content; assert all signals compute correctly; assert interval summary
-  `frac_at_30x` against expected value
+- [x] Step 6: Add `src/writer/parquet_coverage.rs` — fixed Arrow schema matching
+  `CoverageRecord`; Float32 columns for fractional signals
+- [x] Step 7: Update `src/main.rs` to handle `Command::Coverage`
+- [x] Step 8: Update `src/merge.rs` — detect `.coverage.parquet` by suffix; insert into
+  `coverage` DuckDB table; index on `(sample_id, chrom, pos)`
+- [x] Step 9: Add `wdl/geac_coverage.wdl` — scatter `geac coverage` over a cohort,
+  merge all `.coverage.parquet` files into a `coverage` table in the cohort DuckDB
+- [x] Step 10: Integration tests — 9 new tests covering all core coverage signals:
+  `coverage_basic_depth`, `coverage_frac_dup_excludes_duplicates`,
+  `coverage_mapq0_tracked_and_excluded`, `coverage_gc_content_computed_from_reference`,
+  `coverage_gc_content_zero_for_all_a_reference`, `coverage_targets_emits_zero_depth_positions`,
+  `coverage_no_targets_skips_zero_depth`, `coverage_insert_size_from_paired_reads`,
+  `merge_routes_coverage_parquet_to_coverage_table` (all passing)
 - [ ] Step 11: Explorer — "Coverage" tab (DuckDB mode only):
   - Systematically undercovered intervals table (from `coverage_intervals`): configurable
     depth threshold and fraction-of-samples; columns include gene, exon_number, mean_gc,

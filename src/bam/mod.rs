@@ -763,7 +763,7 @@ fn tally_indels(
 
 /// Caches one chromosome sequence at a time to avoid per-base faidx seeks.
 /// When the chromosome changes, the new sequence is fetched and the old one dropped.
-struct RefCache {
+pub(crate) struct RefCache {
     fai: faidx::Reader,
     current_tid: Option<usize>,
     current_chrom: String,
@@ -772,7 +772,7 @@ struct RefCache {
 }
 
 impl RefCache {
-    fn new(reference: &Path) -> Result<Self> {
+    pub(crate) fn new(reference: &Path) -> Result<Self> {
         let fai = faidx::Reader::from_path(reference)
             .with_context(|| format!("failed to open reference FASTA: {}", reference.display()))?;
         Ok(Self {
@@ -786,7 +786,7 @@ impl RefCache {
     /// Returns (chrom_name, ref_base) for the given tid and 0-based position.
     /// Loads the chromosome sequence on first access or when the chromosome changes.
     /// `targets` is a pre-built slice of (chrom_name, chrom_len) indexed by tid.
-    fn get(&mut self, targets: &[(String, usize)], tid: usize, pos: usize) -> Result<(String, char)> {
+    pub(crate) fn get(&mut self, targets: &[(String, usize)], tid: usize, pos: usize) -> Result<(String, char)> {
         if self.current_tid != Some(tid) {
             let (chrom, chrom_len) = targets
                 .get(tid)
@@ -816,7 +816,7 @@ impl RefCache {
 
     /// Returns the cached sequence for the current chromosome.
     /// Must be called after `get()` has loaded the chromosome.
-    fn current_seq(&self) -> &[u8] {
+    pub(crate) fn current_seq(&self) -> &[u8] {
         &self.current_seq
     }
 }

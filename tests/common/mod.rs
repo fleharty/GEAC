@@ -1,6 +1,135 @@
 use rust_htslib::bam::{self, Read, record::{Cigar, CigarString, Record}};
 use std::path::{Path, PathBuf};
 
+// ── Reference helpers ─────────────────────────────────────────────────────────
+
+/// Write a FASTA reference for chr1 filled with the given ASCII base, plus its .fai.
+/// The filename is derived from the base character (e.g. 'C' → "ref_C.fa").
+pub fn write_reference_with_base(dir: &Path, len: usize, base: u8) -> PathBuf {
+    let name = format!("ref_{}.fa", base as char);
+    let fa  = dir.join(&name);
+    let seq = std::iter::repeat(base as char).take(len).collect::<String>();
+    std::fs::write(&fa, format!(">chr1\n{seq}\n")).unwrap();
+    let fai = dir.join(format!("{name}.fai"));
+    std::fs::write(&fai, format!("chr1\t{len}\t6\t{len}\t{}\n", len + 1)).unwrap();
+    fa
+}
+
+/// Write a BED file on chr1 with the given 0-based half-open intervals.
+pub fn write_bed(dir: &Path, filename: &str, intervals: &[(u32, u32)]) -> PathBuf {
+    let path = dir.join(filename);
+    let content: String = intervals
+        .iter()
+        .map(|(s, e)| format!("chr1\t{s}\t{e}\n"))
+        .collect();
+    std::fs::write(&path, content).unwrap();
+    path
+}
+
+// ── Coverage BAM helper ───────────────────────────────────────────────────────
+
+/// Per-read specification for `write_coverage_bam`.
+pub struct CovRead {
+    /// 0-based start position of the read on chr1
+    pub pos:         i64,
+    /// SAM flags (e.g. 0 = normal, 0x400 = duplicate, 0x1|0x2|0x40 = proper-pair R1)
+    pub flags:       u16,
+    /// Mapping quality
+    pub mapq:        u8,
+    /// SAM TLEN (0 = not set; positive on R1, negative on R2)
+    pub insert_size: i32,
+    /// Mate position (only used when insert_size != 0)
+    pub mate_pos:    i64,
+}
+
+impl CovRead {
+    pub fn regular(pos: i64) -> Self {
+        Self { pos, flags: 0, mapq: 60, insert_size: 0, mate_pos: 0 }
+    }
+    pub fn duplicate(pos: i64) -> Self {
+        Self { pos, flags: 0x400, mapq: 60, insert_size: 0, mate_pos: 0 }
+    }
+    pub fn mapq0(pos: i64) -> Self {
+        Self { pos, flags: 0, mapq: 0, insert_size: 0, mate_pos: 0 }
+    }
+    /// Proper-pair R1 read with the given insert size (TLEN = +insert_size).
+    pub fn r1_paired(pos: i64, insert_size: i32) -> Self {
+        let mate_pos = pos + insert_size as i64 - 1; // approximate mate start
+        Self { pos, flags: 0x1 | 0x2 | 0x40, mapq: 60, insert_size, mate_pos }
+    }
+}
+
+/// Write a coordinate-sorted, indexed BAM from explicit per-read specifications.
+/// All reads have all-A sequence of `read_len` bases; CIGAR = `{read_len}M`.
+pub fn write_coverage_bam(
+    dir: &Path,
+    filename: &str,
+    sample_id: &str,
+    ref_len: usize,
+    reads: Vec<CovRead>,
+    read_len: usize,
+) -> PathBuf {
+    let bam_path = dir.join(filename);
+
+    let mut header = bam::header::Header::new();
+    let mut hd = bam::header::HeaderRecord::new(b"HD");
+    hd.push_tag(b"VN", "1.6");
+    hd.push_tag(b"SO", "coordinate");
+    header.push_record(&hd);
+
+    let mut sq = bam::header::HeaderRecord::new(b"SQ");
+    sq.push_tag(b"SN", "chr1");
+    sq.push_tag(b"LN", ref_len as i32);
+    header.push_record(&sq);
+
+    let mut rg = bam::header::HeaderRecord::new(b"RG");
+    rg.push_tag(b"ID", "rg1");
+    rg.push_tag(b"SM", sample_id);
+    header.push_record(&rg);
+
+    let mut writer =
+        bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
+
+    let seq   = vec![b'A'; read_len];
+    let quals = vec![40u8; read_len];
+    let cigar = CigarString(vec![Cigar::Match(read_len as u32)]);
+
+    for (i, r) in reads.iter().enumerate() {
+        let mut rec = Record::new();
+        rec.set(format!("read_{i}").as_bytes(), Some(&cigar), &seq, &quals);
+        rec.set_flags(r.flags);
+        rec.set_tid(0);
+        rec.set_pos(r.pos);
+        rec.set_mapq(r.mapq);
+        if r.insert_size != 0 {
+            rec.set_mtid(0);
+            rec.set_mpos(r.mate_pos);
+            rec.set_insert_size(r.insert_size as i64);
+        }
+        rec.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+        writer.write(&rec).unwrap();
+    }
+
+    drop(writer);
+
+    let sorted = dir.join(format!("{filename}.sorted.bam"));
+    let status = std::process::Command::new("samtools")
+        .args(["sort", "-o", sorted.to_str().unwrap(), bam_path.to_str().unwrap()])
+        .status()
+        .expect("samtools sort failed");
+    assert!(status.success(), "samtools sort failed");
+
+    let status = std::process::Command::new("samtools")
+        .args(["index", sorted.to_str().unwrap()])
+        .status()
+        .expect("samtools index failed");
+    assert!(status.success(), "samtools index failed");
+
+    sorted
+}
+
+// ── Query helpers ─────────────────────────────────────────────────────────────
+
 /// Write a minimal FASTA reference for chr1 (all A's, `len` bp) plus its .fai index.
 pub fn write_reference(dir: &Path, len: usize) -> PathBuf {
     let fa = dir.join("ref.fa");
@@ -161,6 +290,51 @@ pub fn parquet_query_i32(path: &Path, column: &str, where_clause: &str) -> i32 {
 pub fn count_bam_reads(bam_path: &Path) -> usize {
     let mut reader = bam::Reader::from_path(bam_path).unwrap();
     reader.records().count()
+}
+
+/// Check whether a table exists in a DuckDB file.
+pub fn duckdb_table_exists(db: &Path, table: &str) -> bool {
+    let conn = duckdb::Connection::open(db).unwrap();
+    conn.execute_batch(&format!("SELECT 1 FROM {} LIMIT 0", table)).is_ok()
+}
+
+/// Count rows in a DuckDB table.
+pub fn duckdb_count(db: &Path, table: &str) -> i64 {
+    let conn = duckdb::Connection::open(db).unwrap();
+    conn.query_row(
+        &format!("SELECT COUNT(*) FROM {}", table),
+        [],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// Fetch a single i64 column from a Parquet file with the given WHERE clause.
+pub fn parquet_query_i64(path: &Path, column: &str, where_clause: &str) -> i64 {
+    let conn = duckdb::Connection::open_in_memory().unwrap();
+    conn.query_row(
+        &format!(
+            "SELECT {column} FROM read_parquet('{}') WHERE {where_clause} LIMIT 1",
+            path.display()
+        ),
+        [],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+/// Fetch a single f32 column from a Parquet file with the given WHERE clause.
+pub fn parquet_query_f32(path: &Path, column: &str, where_clause: &str) -> f32 {
+    let conn = duckdb::Connection::open_in_memory().unwrap();
+    conn.query_row(
+        &format!(
+            "SELECT {column} FROM read_parquet('{}') WHERE {where_clause} LIMIT 1",
+            path.display()
+        ),
+        [],
+        |row| row.get::<_, f64>(0).map(|v| v as f32),
+    )
+    .unwrap()
 }
 
 /// Fetch a single string column from a Parquet file with the given WHERE clause.

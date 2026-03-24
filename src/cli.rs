@@ -34,6 +34,9 @@ pub enum Command {
 
     /// Cross-annotate tumor alt-base loci against a Panel of Normals DuckDB
     AnnotatePon(AnnotatePonArgs),
+
+    /// Compute per-position coverage metrics from a BAM/CRAM file
+    Coverage(CoverageArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -252,6 +255,72 @@ pub struct AnnotatePonArgs {
     /// so that `geac merge` routes it to the `pon_evidence` table.
     #[arg(short, long)]
     pub output: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+pub struct CoverageArgs {
+    /// Input BAM or CRAM file
+    #[arg(short, long)]
+    pub input: PathBuf,
+
+    /// Reference FASTA (required for CRAM and GC content)
+    #[arg(short = 'r', long)]
+    pub reference: PathBuf,
+
+    /// Sample identifier.
+    /// If omitted, the SM tag from the BAM/CRAM read group header is used.
+    #[arg(short, long)]
+    pub sample_id: Option<String>,
+
+    /// Optional batch label stored as a column in the output Parquet
+    #[arg(long)]
+    pub batch: Option<String>,
+
+    /// Output Parquet file path (should end in .coverage.parquet)
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Read type: raw, simplex, or duplex
+    #[arg(long, default_value = "duplex")]
+    pub read_type: ReadType,
+
+    /// Pipeline that produced the BAM/CRAM: fgbio, dragen, or raw
+    #[arg(long, default_value = "fgbio")]
+    pub pipeline: Pipeline,
+
+    /// Optional BED file or Picard interval list of target regions.
+    /// When provided, only positions within targets are emitted (including zero-depth positions).
+    /// Without --targets, only positions with at least one read are emitted.
+    #[arg(long)]
+    pub targets: Option<PathBuf>,
+
+    /// Restrict processing to this region (e.g. "chr1:1000-2000")
+    #[arg(long)]
+    pub region: Option<String>,
+
+    /// Optional GFF3 or GTF gene annotation file
+    #[arg(long)]
+    pub gene_annotations: Option<PathBuf>,
+
+    /// Minimum mapping quality (used for total_depth; mapq stats computed from all non-dup reads)
+    #[arg(long, default_value_t = 0)]
+    pub min_map_qual: u8,
+
+    /// Base quality threshold for frac_low_bq
+    #[arg(long, default_value_t = 20)]
+    pub min_base_qual: u8,
+
+    /// Window size in bp (centred on position) for GC content computation
+    #[arg(long, default_value_t = 100)]
+    pub gc_window: usize,
+
+    /// Suppress positions with total_depth strictly below this value (0 = keep all)
+    #[arg(long, default_value_t = 0)]
+    pub min_depth: i32,
+
+    /// Progress reporting interval in seconds (0 to disable)
+    #[arg(long, default_value_t = 30)]
+    pub progress_interval: u64,
 }
 
 // Allow clap to parse ReadType and Pipeline from strings

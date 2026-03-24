@@ -1,6 +1,7 @@
 mod bam;
 mod cli;
 mod cohort;
+mod coverage;
 mod gene_annotations;
 mod merge;
 mod normal;
@@ -161,6 +162,48 @@ fn main() -> Result<()> {
 
             info!(n_records = records.len(), output = %args.output.display(), "writing normal evidence Parquet");
             writer::parquet_normal::write_parquet(&records, &args.output)?;
+
+            info!("done");
+        }
+
+        Command::Coverage(args) => {
+            info!(
+                input  = %args.input.display(),
+                output = %args.output.display(),
+                sample_id = %args.sample_id.as_deref().unwrap_or("<from SM tag>"),
+                "collecting coverage"
+            );
+
+            let target_intervals = args
+                .targets
+                .as_ref()
+                .map(|p| {
+                    info!(targets = %p.display(), "loading target intervals");
+                    targets::TargetIntervals::load(p)
+                })
+                .transpose()?;
+
+            if let Some(ref ti) = target_intervals {
+                info!(n_targets = ti.n_targets(), total_bases = ti.total_bases(), "target intervals loaded");
+            }
+
+            let gene_annots = args
+                .gene_annotations
+                .as_ref()
+                .map(|p| {
+                    info!(gene_annotations = %p.display(), "loading gene annotations");
+                    gene_annotations::GeneAnnotations::load(p)
+                })
+                .transpose()?;
+
+            let records = coverage::collect_coverage(
+                &args,
+                target_intervals.as_ref().map(|t| t as &_),
+                gene_annots.as_ref(),
+            )?;
+
+            info!(n_records = records.len(), output = %args.output.display(), "writing coverage Parquet");
+            writer::parquet_coverage::write_parquet(&records, &args.output)?;
 
             info!("done");
         }

@@ -54,13 +54,9 @@ Work through each item top to bottom. Check off items as verified, note failures
   produces a benchmarking report. Explorer would add precision-recall and ROC plots to the
   comparison tab.
 
-- [ ] **Tumor-normal mode** — add a paired tumor-normal workflow where a tumor Parquet is annotated
-  with the matched normal's VAF and depth at the same loci. This is a core somatic variant validation
-  use case: low-VAF sites in tumor that are also present in the normal at any VAF are likely germline
-  or artefact; sites absent in the normal are candidate somatic events. Possible design: a new
-  `geac annotate-normal` subcommand (or `--normal` flag on `collect`) that takes a normal Parquet/BAM
-  and adds columns like `normal_vaf`, `normal_alt_count`, `normal_depth` to the tumor output. The
-  Explorer would then expose these as additional filter dimensions (e.g. "exclude if normal VAF > 1%").
+- [x] **Tumor-normal mode** — implemented as `geac annotate-normal`. Produces a
+  `normal_evidence` Parquet that is routed to the `normal_evidence` table in `geac merge`.
+  Explorer has a dedicated Tumor/Normal tab.
 
 - [ ] **Replicate concordance mode** — given N Parquets from the same specimen (technical replicates
   or repeated library preps), measure per-locus reproducibility across replicates. Key metrics:
@@ -80,28 +76,10 @@ Work through each item top to bottom. Check off items as verified, note failures
   Shares infrastructure with replicate mode — both involve multi-sample per-locus aggregation with
   a manifest-driven join. Truth evaluation is the natural extension once replicates are working.
 
-- [ ] **Duplex/Simplex consensus analysis tab** — a dedicated Explorer tab for evaluating
-  error-corrected sequencing quality, only shown when `alt_reads` is present and `read_type`
-  is `duplex` or `simplex`. Proposed analyses:
-
-  - *Error rate vs family size* — VAF as a function of family size; the slope reveals how
-    much error correction is occurring. A flat curve suggests consensus calling is not
-    suppressing errors as expected.
-  - *AB/BA strand balance* — distribution of `ab_count` vs `ba_count` (fgbio `aD`/`bD`
-    tags) per locus. Imbalanced AB/BA at alt loci suggests strand-specific errors surviving
-    consensus, a key quality signal for duplex data.
-  - *Duplex efficiency* — fraction of families that are true duplex (both `ab_count > 0`
-    and `ba_count > 0`) vs simplex (one strand only). Low duplex efficiency means paying
-    the cost of duplex prep without the full error-correction benefit.
-  - *Family size distribution stratified by duplex/simplex* — separate histograms for
-    duplex and simplex families; duplex families should skew larger if library prep is
-    working well.
-  - *Consensus error spectrum by family type* — SBS96 profile for singleton, simplex,
-    and duplex families separately. Residual errors in duplex reads should have a
-    distinctly different spectrum from simplex errors if consensus is working.
-  - *Family size vs insert size* — scatter or heatmap revealing whether large families
-    are concentrated at certain insert sizes, which could indicate PCR duplication
-    patterns or probe capture biases.
+- [x] **Duplex/Simplex consensus analysis tab** — implemented as the "Duplex/Simplex" Explorer
+  tab. Shown only when `alt_reads` table is present. Includes AB/BA strand balance, read
+  position bias by cycle, base quality distribution, family size vs VAF scatter, and insert
+  size distribution.
 
 - [ ] **IGV.js integration** — evaluate embedding [IGV.js](https://github.com/igvteam/igv.js) (the
   JavaScript port of IGV) directly inside the Explorer rather than generating session zip files for
@@ -162,11 +140,9 @@ Work through each item top to bottom. Check off items as verified, note failures
   intronic error spectra — useful for separating true sequencing errors from mapping artefacts at
   intron/capture boundaries.
 
-- [ ] **Duplicate / secondary / supplementary read filtering** — the pileup currently does not filter
-  reads with BAM flags 0x400 (PCR/optical duplicate), 0x100 (secondary alignment), or 0x800
-  (supplementary alignment). For `--pipeline raw` (non-consensus reads) this could lead to inflated
-  depth and spurious alt counts. Consider adding `--filter-duplicates` (default on for raw mode) and
-  always filtering secondary/supplementary, consistent with what most pileup tools do.
+- [x] **Duplicate / secondary / supplementary read filtering** — implemented via
+  `--include-duplicates`, `--include-secondary`, `--include-supplementary` flags on both
+  `geac collect` and `geac annotate-normal`. All three classes are excluded by default.
 
 - [ ] **`--min-alt-count` filter at collect time** — currently every position with even one alt read
   is written to the Parquet. For WGS data this produces very large outputs. A minimum alt count
@@ -213,6 +189,7 @@ Work through each item top to bottom. Check off items as verified, note failures
 - [x] Reads sample ID from BAM SM tag when `--sample-id` is omitted
 - [x] `--sample-id` overrides SM tag correctly
 - [x] `--read-type` and `--pipeline` values stored correctly in output
+- [ ] `--batch` label stored in output Parquet `batch` column
 - [ ] `--region` restricts output to the specified region only
 - [ ] `--progress-interval 0` suppresses progress output
 
@@ -246,6 +223,11 @@ Work through each item top to bottom. Check off items as verified, note failures
 - [ ] Output DuckDB contains `alt_bases` and `samples` tables
 - [ ] Fails with a clear error if output file already exists
 - [ ] Handles Parquets with different optional annotation columns (`union_by_name`)
+- [ ] `.reads.parquet` files routed to `alt_reads` table; locus Parquets still go to `alt_bases`
+- [ ] `.normal_evidence.parquet` files routed to `normal_evidence` table
+- [ ] `.pon_evidence.parquet` files routed to `pon_evidence` table
+- [ ] Mix of all four suffix types in one `geac merge` call produces all four tables
+- [ ] Fails with clear error when only special-suffix files provided and no locus Parquets
 
 ---
 
@@ -265,6 +247,32 @@ Work through each item top to bottom. Check off items as verified, note failures
 - [ ] `--min-sample-fraction` threshold filters correctly
 - [ ] `--top-n` controls number of loci printed to stdout
 - [ ] `--on-target-only` restricts to on-target loci
+
+---
+
+## CLI — `geac annotate-normal`
+
+- [ ] Runs against a tumor Parquet and normal BAM; produces a `.normal_evidence.parquet` file
+- [ ] Normal sample ID read from BAM SM tag when `--normal-sample-id` is omitted
+- [ ] `--normal-sample-id` overrides SM tag correctly
+- [ ] NULL anchor row always present for each tumor locus (captures normal depth)
+- [ ] Non-reference bases observed in normal generate additional rows with `normal_alt_allele` set
+- [ ] `normal_depth = 0` rows emitted for tumor loci not covered by normal BAM
+- [ ] SNV positions produce NULL anchor + per-allele rows; indel positions produce anchor row only
+- [ ] `--min-base-qual` and `--min-map-qual` affect which normal reads are counted
+- [ ] `--include-duplicates` / `--include-secondary` / `--include-supplementary` change depth counts
+- [ ] Output passed to `geac merge` lands in `normal_evidence` table
+
+---
+
+## CLI — `geac annotate-pon`
+
+- [ ] Runs against a tumor Parquet and PoN DuckDB; produces a `.pon_evidence.parquet` file
+- [ ] `n_pon_samples = 0` for tumor loci absent from the PoN
+- [ ] `max_pon_vaf` and `mean_pon_vaf` are null when `n_pon_samples = 0`
+- [ ] `pon_total_samples` matches the distinct sample count in the PoN's `alt_bases` table
+- [ ] Output passed to `geac merge` lands in `pon_evidence` table
+- [ ] Fails with clear error if PoN DuckDB does not contain an `alt_bases` table
 
 ---
 
@@ -474,9 +482,36 @@ Work through each item top to bottom. Check off items as verified, note failures
 
 ---
 
+## Explorer — Tab: Tumor/Normal
+
+- [ ] Tab shows info message when `normal_evidence` table is absent
+- [ ] Tab shows data when `normal_evidence` table is present
+- [ ] Each locus correctly classified: Somatic candidate / Germline-like / Artifact-like / No normal coverage / No normal data
+- [ ] Classification bar chart renders with correct counts per category
+- [ ] Tumor VAF vs normal VAF scatter renders; color by classification works
+- [ ] Normal depth histogram renders
+- [ ] Data table expander shows joined data sorted correctly
+
+---
+
+## Explorer — Tab: Panel of Normals
+
+- [ ] Tab shows info message when `pon_evidence` table is absent
+- [ ] Tab shows data when `pon_evidence` table is present
+- [ ] Summary metrics row: PoN total samples, clean count, rare count, common count, no-data count
+- [ ] Each locus correctly classified: PoN clean / Rare in PoN / Common in PoN
+- [ ] Classification bar chart renders
+- [ ] Tumor VAF vs PoN sample fraction scatter renders; color by classification works
+- [ ] Max PoN VAF histogram renders (only loci with PoN evidence)
+- [ ] Data table expander sorted by `pon_sample_fraction` descending
+
+---
+
 ## WDL workflows *(Terra — future)*
 
 - [ ] `geac_collect.wdl` runs on Terra with a single sample
 - [ ] `geac_cohort.wdl` scatters across multiple samples and produces DuckDB
 - [ ] `geac_merge.wdl` merges existing Parquets into DuckDB
 - [ ] Optional inputs (`vcf`, `targets`, `gene_annotations`, `region`) work when provided
+- [ ] `geac_annotate_normal.wdl` runs on Terra with tumor Parquet + normal BAM
+- [ ] `geac_annotate_pon.wdl` runs on Terra with tumor Parquet + PoN DuckDB
