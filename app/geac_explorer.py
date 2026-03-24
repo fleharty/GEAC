@@ -3044,13 +3044,13 @@ with tab_duplex:
                 ROUND(ab.alt_count * 1.0 / ab.total_depth, 4) AS vaf,
                 AVG(ar.family_size) AS mean_family_size,
                 COUNT(*)            AS n_reads
-            FROM {table_expr} ab
+            FROM (SELECT * FROM {table_expr} WHERE {where}) ab
             INNER JOIN alt_reads ar
                 ON  ab.sample_id  = ar.sample_id
                 AND ab.chrom      = ar.chrom
                 AND ab.pos        = ar.pos
                 AND ab.alt_allele = ar.alt_allele
-            WHERE {where} AND ar.family_size IS NOT NULL
+            WHERE ar.family_size IS NOT NULL
             GROUP BY ab.sample_id, ab.chrom, ab.pos, ab.alt_allele, ab.alt_count, ab.total_depth
         """).df()
 
@@ -3252,3 +3252,53 @@ with tab_duplex:
                         "than rare variants, confirming they are sequencing noise rather than "
                         "recurrent true variants."
                     )
+
+        # ── AB vs BA strand count scatter ─────────────────────────────────────
+        _ab_has_data = con.execute(
+            "SELECT COUNT(*) FROM alt_reads WHERE ab_count IS NOT NULL LIMIT 1"
+        ).fetchone()[0] > 0
+
+        if _ab_has_data:
+            st.divider()
+            st.subheader("AB vs BA strand counts")
+            st.caption(
+                "`ab_count` (aD tag) and `ba_count` (bD tag) are the number of raw reads from "
+                "the AB (top) and BA (bottom) strands that contributed to each consensus read. "
+                "Points on the diagonal indicate balanced duplex support from both strands. "
+                "Points on the axes (ba_count = 0 or ab_count = 0) came from only one strand."
+            )
+
+            _ab_heat_df = con.execute(f"""
+                SELECT
+                    ar.ab_count,
+                    ar.ba_count,
+                    COUNT(*) AS n_reads
+                FROM {_r_join}
+                WHERE ar.ab_count IS NOT NULL AND ar.ba_count IS NOT NULL
+                GROUP BY ar.ab_count, ar.ba_count
+            """).df()
+
+            if _ab_heat_df.empty:
+                st.info("No AB/BA data in current selection.")
+            else:
+                _ab_heat_chart = (
+                    alt.Chart(_ab_heat_df)
+                    .mark_rect()
+                    .encode(
+                        alt.X("ab_count:O", title="AB strand count (aD tag)"),
+                        alt.Y("ba_count:O", title="BA strand count (bD tag)"),
+                        alt.Color("n_reads:Q", title="Alt-supporting reads",
+                                  scale=alt.Scale(scheme="blues")),
+                        tooltip=[
+                            alt.Tooltip("ab_count:Q", title="AB count"),
+                            alt.Tooltip("ba_count:Q", title="BA count"),
+                            alt.Tooltip("n_reads:Q", title="Reads"),
+                        ],
+                    )
+                    .properties(height=400)
+                )
+                st.altair_chart(_ab_heat_chart, width="stretch")
+                st.caption(
+                    "Colour intensity = number of alt-supporting reads with each (ab_count, ba_count) combination. "
+                    "Reads on the diagonal have balanced strand support; reads on the axes came from one strand only."
+                )
