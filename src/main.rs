@@ -196,15 +196,16 @@ fn main() -> Result<()> {
                 })
                 .transpose()?;
 
-            let records = coverage::collect_coverage(
+            let mut cov_writer = writer::parquet_coverage::CoverageWriter::new(&args.output)?;
+
+            coverage::collect_coverage(
                 &args,
                 target_intervals.as_ref().map(|t| t as &_),
                 gene_annots.as_ref(),
+                &mut cov_writer,
             )?;
 
-            info!(n_records = records.len(), output = %args.output.display(), "writing coverage Parquet");
-            writer::parquet_coverage::write_parquet(&records, &args.output)?;
-
+            cov_writer.close()?;
             info!("done");
         }
     }

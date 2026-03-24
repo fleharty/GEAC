@@ -10,6 +10,7 @@ use crate::cli::CoverageArgs;
 use crate::gene_annotations::GeneAnnotations;
 use crate::record::CoverageRecord;
 use crate::targets::TargetIntervals;
+use crate::writer::parquet_coverage::CoverageWriter;
 
 /// Process a BAM/CRAM file and return per-position coverage records.
 ///
@@ -20,7 +21,8 @@ pub fn collect_coverage(
     args: &CoverageArgs,
     target_intervals: Option<&TargetIntervals>,
     gene_annots: Option<&GeneAnnotations>,
-) -> Result<Vec<CoverageRecord>> {
+    writer: &mut CoverageWriter,
+) -> Result<()> {
     let mut reader = open_bam(&args.input, &args.reference)?;
     let mut ref_cache = RefCache::new(&args.reference)?;
 
@@ -53,8 +55,7 @@ pub fn collect_coverage(
     // When targets are provided, track which positions had reads so we can fill zeros.
     let mut seen: HashSet<(String, i64)> = HashSet::new();
 
-    let mut records: Vec<CoverageRecord> = Vec::new();
-    let mut positions_processed: u64 = 0;
+    let mut positions_written: u64 = 0;
 
     for pileup in reader.pileup() {
         let pileup = pileup.context("error reading pileup")?;
@@ -87,13 +88,13 @@ pub fn collect_coverage(
             seen.insert((chrom.clone(), pos));
         }
 
-        records.push(build_record(
+        writer.push(build_record(
             &sample_id, &chrom, pos, &tally, gc, on_target, gene, args,
-        ));
+        ))?;
 
-        positions_processed += 1;
-        if positions_processed % 100_000 == 0 {
-            info!(positions_processed, "coverage progress");
+        positions_written += 1;
+        if positions_written % 100_000 == 0 {
+            info!(positions_written, "coverage progress");
         }
     }
 
@@ -112,24 +113,28 @@ pub fn collect_coverage(
         if args.min_depth == 0 {
             let mut zero_ref = ZeroDepthRefReader::open(&args.reference)?;
 
+            let mut zero_err: Option<anyhow::Error> = None;
             ti.for_each_position(|chrom, pos| {
+                if zero_err.is_some() { return; }
                 if seen.contains(&(chrom.to_string(), pos)) {
                     return;
                 }
                 let gc = zero_ref.gc_content(chrom, pos, args.gc_window);
                 let gene = gene_annots.and_then(|g| g.get(chrom, pos).map(str::to_owned));
-                records.push(build_zero_record(
+                if let Err(e) = writer.push(build_zero_record(
                     &sample_id, chrom, pos, gc, Some(true), gene, args,
-                ));
+                )) {
+                    zero_err = Some(e);
+                }
             });
+            if let Some(e) = zero_err {
+                return Err(e);
+            }
         }
     }
 
-    // Sort by chrom, pos for consistent output
-    records.sort_by(|a, b| a.chrom.cmp(&b.chrom).then(a.pos.cmp(&b.pos)));
-
-    info!(n_records = records.len(), "coverage collection complete");
-    Ok(records)
+    info!(positions_written, "coverage collection complete");
+    Ok(())
 }
 
 // ── Pileup tallying ───────────────────────────────────────────────────────────

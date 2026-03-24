@@ -13,25 +13,54 @@ use parquet::file::properties::WriterProperties;
 
 use crate::record::CoverageRecord;
 
-/// Write a slice of CoverageRecord to a Parquet file.
-pub fn write_parquet(records: &[CoverageRecord], output: &Path) -> Result<()> {
-    let schema = coverage_schema();
-    let batch = records_to_batch(records, Arc::clone(&schema))?;
+const BATCH_SIZE: usize = 100_000;
 
-    let file = std::fs::File::create(output)
-        .with_context(|| format!("failed to create output file: {}", output.display()))?;
+/// Streaming Parquet writer for CoverageRecord.
+///
+/// Buffers records in memory and flushes to disk in fixed-size batches,
+/// keeping peak memory proportional to BATCH_SIZE rather than total output size.
+pub struct CoverageWriter {
+    writer: ArrowWriter<std::fs::File>,
+    schema: Arc<Schema>,
+    buf:    Vec<CoverageRecord>,
+}
 
-    let props = WriterProperties::builder()
-        .set_compression(Compression::SNAPPY)
-        .build();
+impl CoverageWriter {
+    pub fn new(output: &Path) -> Result<Self> {
+        let schema = coverage_schema();
+        let file = std::fs::File::create(output)
+            .with_context(|| format!("failed to create output file: {}", output.display()))?;
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))
+            .context("failed to create Parquet writer")?;
+        Ok(Self { writer, schema, buf: Vec::with_capacity(BATCH_SIZE) })
+    }
 
-    let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))
-        .context("failed to create Parquet writer")?;
+    pub fn push(&mut self, record: CoverageRecord) -> Result<()> {
+        self.buf.push(record);
+        if self.buf.len() >= BATCH_SIZE {
+            self.flush()?;
+        }
+        Ok(())
+    }
 
-    writer.write(&batch).context("failed to write record batch")?;
-    writer.close().context("failed to finalize Parquet file")?;
+    pub fn flush(&mut self) -> Result<()> {
+        if self.buf.is_empty() {
+            return Ok(());
+        }
+        let batch = records_to_batch(&self.buf, Arc::clone(&self.schema))?;
+        self.writer.write(&batch).context("failed to write record batch")?;
+        self.buf.clear();
+        Ok(())
+    }
 
-    Ok(())
+    pub fn close(mut self) -> Result<()> {
+        self.flush()?;
+        self.writer.close().context("failed to finalize Parquet file")?;
+        Ok(())
+    }
 }
 
 fn coverage_schema() -> Arc<Schema> {
