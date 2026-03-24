@@ -147,6 +147,26 @@ pub struct NormalEvidence {
     pub normal_alt_count:  i32,
 }
 
+/// PoN cross-annotation for a tumor alt locus.
+/// One row per (tumor_sample_id, chrom, pos, tumor_alt_allele).
+/// Positions are 0-based.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PonEvidence {
+    pub tumor_sample_id:   String,
+    pub chrom:             String,
+    /// 0-based position
+    pub pos:               i64,
+    pub tumor_alt_allele:  String,
+    /// Number of PoN samples carrying this exact alt allele at this locus
+    pub n_pon_samples:     i64,
+    /// Total samples in the PoN database (denominator for fraction)
+    pub pon_total_samples: i64,
+    /// Max(alt_count/total_depth) across PoN samples; None if locus absent from PoN
+    pub max_pon_vaf:       Option<f64>,
+    /// Mean(alt_count/total_depth) across PoN samples; None if locus absent from PoN
+    pub mean_pon_vaf:      Option<f64>,
+}
+
 /// One record per alt-supporting read at a locus.
 /// Linked to AltBase by (sample_id, chrom, pos, alt_allele).
 /// Positions are 0-based.

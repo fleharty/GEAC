@@ -26,22 +26,32 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
     // Partition inputs by suffix:
     //   *.reads.parquet           → alt_reads table
     //   *.normal_evidence.parquet → normal_evidence table
+    //   *.pon_evidence.parquet    → pon_evidence table
     //   everything else           → alt_bases table
     fn suffix(p: &&std::path::PathBuf, sfx: &str) -> bool {
         p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(sfx))
     }
     let reads_inputs:  Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| suffix(p, ".reads.parquet")).collect();
     let normal_inputs: Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| suffix(p, ".normal_evidence.parquet")).collect();
-    let locus_inputs:  Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| !suffix(p, ".reads.parquet") && !suffix(p, ".normal_evidence.parquet")).collect();
+    let pon_inputs:    Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| suffix(p, ".pon_evidence.parquet")).collect();
+    let locus_inputs:  Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| {
+        !suffix(p, ".reads.parquet")
+            && !suffix(p, ".normal_evidence.parquet")
+            && !suffix(p, ".pon_evidence.parquet")
+    }).collect();
 
     if locus_inputs.is_empty() {
-        bail!("no locus Parquet files provided (files ending in .reads.parquet or .normal_evidence.parquet are excluded from the locus table)");
+        bail!(
+            "no locus Parquet files provided (files ending in .reads.parquet, \
+             .normal_evidence.parquet, or .pon_evidence.parquet are excluded from the locus table)"
+        );
     }
 
     info!(
         n_locus_files  = locus_inputs.len(),
         n_reads_files  = reads_inputs.len(),
         n_normal_files = normal_inputs.len(),
+        n_pon_files    = pon_inputs.len(),
         output = %args.output.display(),
         "merging Parquet files into DuckDB"
     );
@@ -188,6 +198,44 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
              (tumor_sample_id, chrom, pos, tumor_alt_allele);",
         )
         .context("failed to create normal_evidence index")?;
+    }
+
+    // ── pon_evidence table (optional) ────────────────────────────────────────
+    if !pon_inputs.is_empty() {
+        info!("reading PoN evidence Parquet files and creating pon_evidence table...");
+
+        let first_pe = pon_inputs[0];
+        let first_pe_escaped = first_pe.display().to_string().replace('\'', "''");
+        conn.execute_batch(&format!(
+            "CREATE TABLE pon_evidence AS SELECT * FROM read_parquet('{first_pe_escaped}');"
+        ))
+        .context("failed to create pon_evidence table from first file")?;
+
+        for (idx, path) in pon_inputs[1..].iter().enumerate() {
+            let escaped = path.display().to_string().replace('\'', "''");
+            info!(
+                file = %path.display(),
+                idx = idx + 1,
+                total = pon_inputs.len(),
+                "inserting PoN evidence file"
+            );
+            conn.execute_batch(&format!(
+                "INSERT INTO pon_evidence SELECT * FROM read_parquet('{escaped}');"
+            ))
+            .with_context(|| format!("failed to insert PoN evidence file {}", path.display()))?;
+        }
+
+        let n_pe_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pon_evidence", [], |row| row.get(0))
+            .context("failed to count pon_evidence rows")?;
+
+        info!(n_pe_rows, "pon_evidence table created");
+
+        conn.execute_batch(
+            "CREATE INDEX idx_pe_locus ON pon_evidence \
+             (tumor_sample_id, chrom, pos, tumor_alt_allele);",
+        )
+        .context("failed to create pon_evidence index")?;
     }
 
     info!(output = %args.output.display(), "merge complete");

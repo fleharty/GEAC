@@ -4,6 +4,7 @@ mod cohort;
 mod gene_annotations;
 mod merge;
 mod normal;
+mod pon;
 mod progress;
 mod qc;
 mod record;
@@ -130,6 +131,22 @@ fn main() -> Result<()> {
 
         Command::Cohort(args) => {
             cohort::run_cohort(&args)?;
+        }
+
+        Command::AnnotatePon(args) => {
+            info!(
+                tumor_parquet = %args.tumor_parquet.display(),
+                pon_db        = %args.pon_db.display(),
+                output        = %args.output.display(),
+                "annotating PoN evidence"
+            );
+
+            let records = pon::annotate_pon(&args)?;
+
+            info!(n_records = records.len(), output = %args.output.display(), "writing PoN evidence Parquet");
+            writer::parquet_pon::write_parquet(&records, &args.output)?;
+
+            info!("done");
         }
 
         Command::AnnotateNormal(args) => {

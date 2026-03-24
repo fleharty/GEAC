@@ -31,6 +31,9 @@ pub enum Command {
 
     /// Cross-annotate tumor alt-base loci against a paired normal BAM/CRAM
     AnnotateNormal(AnnotateNormalArgs),
+
+    /// Cross-annotate tumor alt-base loci against a Panel of Normals DuckDB
+    AnnotatePon(AnnotatePonArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -233,6 +236,22 @@ pub struct AnnotateNormalArgs {
     /// Include supplementary alignments (FLAG 0x800); excluded by default
     #[arg(long)]
     pub include_supplementary: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct AnnotatePonArgs {
+    /// Tumor locus Parquet produced by `geac collect`
+    #[arg(long)]
+    pub tumor_parquet: PathBuf,
+
+    /// PoN DuckDB database produced by `geac merge` from normal samples
+    #[arg(long)]
+    pub pon_db: PathBuf,
+
+    /// Output Parquet file path.  Should end in `.pon_evidence.parquet`
+    /// so that `geac merge` routes it to the `pon_evidence` table.
+    #[arg(short, long)]
+    pub output: PathBuf,
 }
 
 // Allow clap to parse ReadType and Pipeline from strings

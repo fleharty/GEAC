@@ -49,8 +49,9 @@ except Exception as e:
     st.stop()
 
 # Detect whether optional tables are available (only possible in DuckDB mode).
-_has_alt_reads     = False
+_has_alt_reads       = False
 _has_normal_evidence = False
+_has_pon_evidence    = False
 if path.endswith(".duckdb"):
     try:
         con.execute("SELECT 1 FROM alt_reads LIMIT 1")
@@ -62,6 +63,11 @@ if path.endswith(".duckdb"):
         _has_normal_evidence = True
     except Exception:
         _has_normal_evidence = False
+    try:
+        con.execute("SELECT 1 FROM pon_evidence LIMIT 1")
+        _has_pon_evidence = True
+    except Exception:
+        _has_pon_evidence = False
 
 # ── Summary stats ─────────────────────────────────────────────────────────────
 stats = con.execute(f"""
@@ -922,7 +928,7 @@ _r_join = f"""
 """
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort", "Reads", "Duplex/Simplex", "Tumor/Normal"])
+tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort", "Reads", "Duplex/Simplex", "Tumor/Normal", "Panel of Normals"])
 
 with tab1:
     for vtype, color in [
@@ -3522,6 +3528,211 @@ with tab_tn:
                 st.dataframe(
                     _tn_df[_tbl_cols].sort_values(
                         ["classification", "tumor_vaf"], ascending=[True, False]
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
+
+# ── Panel of Normals tab ──────────────────────────────────────────────────────
+with tab_pon:
+    if not _has_pon_evidence:
+        st.info(
+            "No `pon_evidence` table found in this database. "
+            "To build one: run `geac collect` on each normal sample, "
+            "`geac merge` the results into a PoN DuckDB, then run "
+            "`geac annotate-pon --tumor-parquet <tumor.parquet> --pon-db <pon.duckdb>` "
+            "and include the `.pon_evidence.parquet` output when running `geac merge` "
+            "for the cohort."
+        )
+    else:
+        st.subheader("Panel of Normals evidence at tumor loci")
+        st.caption(
+            "Joins `alt_bases` to `pon_evidence` to show, for every tumor alt locus, "
+            "how frequently the same allele was observed across the Panel of Normals. "
+            "Loci common in the PoN are likely sequencing artefacts or germline variants. "
+            "All active sidebar filters are applied to the tumor loci."
+        )
+
+        # ── Main JOIN query ────────────────────────────────────────────────────
+        _pon_df = con.execute(f"""
+            SELECT
+                ab.sample_id                                      AS tumor_sample_id,
+                ab.chrom,
+                ab.pos,
+                ab.alt_allele                                     AS tumor_alt_allele,
+                ab.variant_type,
+                ROUND(ab.alt_count * 1.0 / ab.total_depth, 4)   AS tumor_vaf,
+                COALESCE(pe.n_pon_samples, 0)                    AS n_pon_samples,
+                pe.pon_total_samples,
+                CASE
+                    WHEN pe.pon_total_samples IS NULL OR pe.pon_total_samples = 0 THEN NULL
+                    ELSE ROUND(COALESCE(pe.n_pon_samples, 0) * 1.0 / pe.pon_total_samples, 4)
+                END AS pon_sample_fraction,
+                pe.max_pon_vaf,
+                pe.mean_pon_vaf,
+                CASE
+                    WHEN pe.pon_total_samples IS NULL THEN 'No PoN data'
+                    WHEN COALESCE(pe.n_pon_samples, 0) = 0 THEN 'PoN clean'
+                    WHEN COALESCE(pe.n_pon_samples, 0) * 1.0 / pe.pon_total_samples >= 0.1
+                        THEN 'Common in PoN'
+                    ELSE 'Rare in PoN'
+                END AS pon_classification
+            FROM (SELECT * FROM {table_expr} WHERE {where}) ab
+            LEFT JOIN pon_evidence pe
+                   ON pe.tumor_sample_id = ab.sample_id
+                  AND pe.chrom           = ab.chrom
+                  AND pe.pos             = ab.pos
+                  AND pe.tumor_alt_allele = ab.alt_allele
+        """).df()
+
+        if _pon_df.empty:
+            st.info("No records match the current filters.")
+        else:
+            # ── Summary metrics ────────────────────────────────────────────────
+            _pon_total = int(_pon_df["pon_total_samples"].dropna().iloc[0]) if not _pon_df["pon_total_samples"].dropna().empty else 0
+            _n_clean   = int((_pon_df["pon_classification"] == "PoN clean").sum())
+            _n_rare    = int((_pon_df["pon_classification"] == "Rare in PoN").sum())
+            _n_common  = int((_pon_df["pon_classification"] == "Common in PoN").sum())
+            _n_nodata  = int((_pon_df["pon_classification"] == "No PoN data").sum())
+
+            _pc1, _pc2, _pc3, _pc4, _pc5 = st.columns(5)
+            _pc1.metric("PoN samples",    f"{_pon_total:,}")
+            _pc2.metric("PoN clean",      f"{_n_clean:,}", help="No alt allele seen in any PoN sample")
+            _pc3.metric("Rare in PoN",    f"{_n_rare:,}",  help="Alt seen in < 10 % of PoN samples")
+            _pc4.metric("Common in PoN",  f"{_n_common:,}", help="Alt seen in ≥ 10 % of PoN samples")
+            _pc5.metric("No PoN data",    f"{_n_nodata:,}", help="Locus not in pon_evidence table")
+
+            st.divider()
+
+            # ── Classification bar chart ───────────────────────────────────────
+            _pon_cls_counts = (
+                _pon_df["pon_classification"]
+                .value_counts()
+                .rename_axis("classification")
+                .reset_index(name="n_loci")
+            )
+            _pon_cls_total = len(_pon_df)
+            _pon_cls_counts["pct"] = (_pon_cls_counts["n_loci"] / _pon_cls_total * 100).round(1)
+
+            _pon_cls_color = {
+                "PoN clean":       "#2ca02c",
+                "Rare in PoN":     "#ff7f0e",
+                "Common in PoN":   "#d62728",
+                "No PoN data":     "#c7c7c7",
+            }
+            _pon_cls_order = ["PoN clean", "Rare in PoN", "Common in PoN", "No PoN data"]
+
+            _pon_cls_chart = (
+                alt.Chart(_pon_cls_counts)
+                .mark_bar()
+                .encode(
+                    alt.X("n_loci:Q", title="Loci"),
+                    alt.Y("classification:N", sort=_pon_cls_order, title=None),
+                    alt.Color("classification:N",
+                              scale=alt.Scale(
+                                  domain=list(_pon_cls_color.keys()),
+                                  range=list(_pon_cls_color.values()),
+                              ),
+                              legend=None),
+                    tooltip=[
+                        alt.Tooltip("classification:N"),
+                        alt.Tooltip("n_loci:Q", title="Loci"),
+                        alt.Tooltip("pct:Q", title="%", format=".1f"),
+                    ],
+                )
+                .properties(height=180, title="Loci by PoN classification")
+            )
+            st.altair_chart(_pon_cls_chart, width="stretch")
+
+            st.divider()
+
+            # ── Tumor VAF vs PoN sample fraction scatter ───────────────────────
+            st.subheader("Tumor VAF vs PoN sample fraction")
+
+            _pon_scatter_df = _pon_df[_pon_df["pon_classification"] != "No PoN data"].copy()
+
+            if not _pon_scatter_df.empty:
+                _pon_scatter = (
+                    alt.Chart(_pon_scatter_df)
+                    .mark_circle(opacity=0.6, size=40)
+                    .encode(
+                        alt.X("tumor_vaf:Q", title="Tumor VAF",
+                              scale=alt.Scale(domain=[0, 1])),
+                        alt.Y("pon_sample_fraction:Q",
+                              title=f"PoN sample fraction (N={_pon_total})",
+                              scale=alt.Scale(domain=[0, 1])),
+                        alt.Color("pon_classification:N",
+                                  scale=alt.Scale(
+                                      domain=list(_pon_cls_color.keys()),
+                                      range=list(_pon_cls_color.values()),
+                                  )),
+                        tooltip=[
+                            alt.Tooltip("tumor_sample_id:N", title="Tumor sample"),
+                            alt.Tooltip("chrom:N"),
+                            alt.Tooltip("pos:Q"),
+                            alt.Tooltip("tumor_alt_allele:N", title="Alt allele"),
+                            alt.Tooltip("variant_type:N", title="Variant type"),
+                            alt.Tooltip("tumor_vaf:Q", title="Tumor VAF", format=".4f"),
+                            alt.Tooltip("n_pon_samples:Q", title="PoN samples with alt"),
+                            alt.Tooltip("pon_sample_fraction:Q", title="PoN fraction", format=".3f"),
+                            alt.Tooltip("max_pon_vaf:Q", title="Max PoN VAF", format=".4f"),
+                            alt.Tooltip("mean_pon_vaf:Q", title="Mean PoN VAF", format=".4f"),
+                        ],
+                    )
+                    .properties(height=500)
+                )
+                st.altair_chart(_pon_scatter, width="stretch")
+                st.caption(
+                    "Each point is one tumor alt locus. "
+                    "Somatic candidates cluster near Y = 0 (absent from PoN). "
+                    "Recurrent artefacts and germline variants appear at higher Y values. "
+                    f"PoN fraction threshold for 'Common in PoN' is ≥ 10 % ({max(1, round(_pon_total * 0.1))} / {_pon_total} samples)."
+                )
+
+            st.divider()
+
+            # ── Max PoN VAF distribution (loci present in PoN only) ────────────
+            st.subheader("Max PoN VAF distribution")
+
+            _pon_vaf_df = _pon_df[_pon_df["max_pon_vaf"].notna()][["max_pon_vaf"]].copy()
+
+            if not _pon_vaf_df.empty:
+                _pon_vaf_chart = (
+                    alt.Chart(_pon_vaf_df)
+                    .mark_bar(color="#d62728")
+                    .encode(
+                        alt.X("max_pon_vaf:Q", bin=alt.Bin(maxbins=50),
+                              title="Max PoN VAF (highest alt frequency seen in any PoN sample)"),
+                        alt.Y("count():Q", title="Loci"),
+                        tooltip=[
+                            alt.Tooltip("max_pon_vaf:Q", title="Max PoN VAF", bin=True),
+                            alt.Tooltip("count():Q", title="Loci"),
+                        ],
+                    )
+                    .properties(height=280)
+                )
+                st.altair_chart(_pon_vaf_chart, width="stretch")
+                st.caption(
+                    "Distribution of the highest alt VAF seen across all PoN samples at each locus "
+                    "(restricted to loci with ≥ 1 PoN sample showing the alt). "
+                    "Low max VAF suggests sequencing noise; high max VAF suggests a germline polymorphism."
+                )
+            else:
+                st.info("No loci with PoN alt evidence in current selection.")
+
+            st.divider()
+
+            # ── Data table ─────────────────────────────────────────────────────
+            with st.expander("PoN evidence data table"):
+                _pon_tbl_cols = [c for c in [
+                    "tumor_sample_id", "chrom", "pos", "tumor_alt_allele",
+                    "variant_type", "tumor_vaf",
+                    "n_pon_samples", "pon_total_samples", "pon_sample_fraction",
+                    "max_pon_vaf", "mean_pon_vaf", "pon_classification",
+                ] if c in _pon_df.columns]
+                st.dataframe(
+                    _pon_df[_pon_tbl_cols].sort_values(
+                        "pon_sample_fraction", ascending=False
                     ),
                     width="stretch",
                     hide_index=True,
