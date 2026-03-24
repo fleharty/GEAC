@@ -3112,13 +3112,13 @@ with tab_duplex:
                     CASE WHEN COALESCE(lfs.median_fs, 1) <= 1
                          THEN 'singleton' ELSE 'multi' END AS fs_group,
                     COUNT(*) AS count
-                FROM (SELECT * FROM {table_expr}) _t
+                FROM (SELECT * FROM {table_expr} WHERE {where}) _t
                 LEFT JOIN locus_fs lfs
                     ON  lfs.sample_id  = _t.sample_id
                     AND lfs.chrom      = _t.chrom
                     AND lfs.pos        = _t.pos
                     AND lfs.alt_allele = _t.alt_allele
-                WHERE {where} AND _t.variant_type = 'SNV'
+                WHERE _t.variant_type = 'SNV'
                   AND _t.trinuc_context IS NOT NULL
                   AND length(_t.trinuc_context) = 3
                 GROUP BY _t.trinuc_context, _t.ref_allele, _t.alt_allele, fs_group
