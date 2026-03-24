@@ -825,7 +825,7 @@ impl RefCache {
 
 /// Extract the SM (sample name) field from the first @RG line in the BAM header.
 /// Returns an error if no @RG line exists or none has an SM tag.
-fn read_group_sample_id(header: &bam::HeaderView) -> Result<String> {
+pub fn read_group_sample_id(header: &bam::HeaderView) -> Result<String> {
     let header_text = std::str::from_utf8(header.as_bytes())
         .context("BAM header is not valid UTF-8")?;
 
@@ -843,7 +843,7 @@ fn read_group_sample_id(header: &bam::HeaderView) -> Result<String> {
     anyhow::bail!("no SM tag found in any @RG line of the BAM/CRAM header")
 }
 
-fn open_bam(input: &Path, reference: &Path) -> Result<bam::IndexedReader> {
+pub fn open_bam(input: &Path, reference: &Path) -> Result<bam::IndexedReader> {
     let mut reader = bam::IndexedReader::from_path(input)
         .with_context(|| format!("failed to open BAM/CRAM: {}", input.display()))?;
     reader

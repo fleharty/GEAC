@@ -28,6 +28,9 @@ pub enum Command {
 
     /// Summarise recurrent loci across a cohort of Parquet files
     Cohort(CohortArgs),
+
+    /// Cross-annotate tumor alt-base loci against a paired normal BAM/CRAM
+    AnnotateNormal(AnnotateNormalArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -185,6 +188,51 @@ pub struct MergeArgs {
     /// Output DuckDB database file
     #[arg(short, long)]
     pub output: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+pub struct AnnotateNormalArgs {
+    /// Tumor locus Parquet produced by `geac collect`
+    #[arg(long)]
+    pub tumor_parquet: PathBuf,
+
+    /// Normal BAM or CRAM file
+    #[arg(long)]
+    pub normal_bam: PathBuf,
+
+    /// Reference FASTA (required for CRAM and for ref allele lookup)
+    #[arg(short = 'r', long)]
+    pub reference: PathBuf,
+
+    /// Sample identifier for the normal sample.
+    /// If omitted, the SM tag from the normal BAM/CRAM read group header is used.
+    #[arg(long)]
+    pub normal_sample_id: Option<String>,
+
+    /// Output Parquet file path.  Should end in `.normal_evidence.parquet`
+    /// so that `geac merge` routes it to the `normal_evidence` table.
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Minimum base quality to consider a base
+    #[arg(long, default_value_t = 1)]
+    pub min_base_qual: u8,
+
+    /// Minimum mapping quality to consider a read
+    #[arg(long, default_value_t = 0)]
+    pub min_map_qual: u8,
+
+    /// Include PCR/optical duplicate reads (FLAG 0x400); excluded by default
+    #[arg(long)]
+    pub include_duplicates: bool,
+
+    /// Include secondary alignments (FLAG 0x100); excluded by default
+    #[arg(long)]
+    pub include_secondary: bool,
+
+    /// Include supplementary alignments (FLAG 0x800); excluded by default
+    #[arg(long)]
+    pub include_supplementary: bool,
 }
 
 // Allow clap to parse ReadType and Pipeline from strings

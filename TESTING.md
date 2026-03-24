@@ -6,7 +6,7 @@ Work through each item top to bottom. Check off items as verified, note failures
 
 ## High Priority — To Explore
 
-- [ ] **VCF/TSV filter value sidebar filter** — add an Explorer sidebar control to filter loci by
+- [x] **VCF/TSV filter value sidebar filter** — add an Explorer sidebar control to filter loci by
   the `variant_filter` column (populated from VCF FILTER field or equivalent TSV column). The
   current `variant_called` selector only distinguishes called vs not-called; users also need to
   filter by specific filter values (e.g. show only `PASS`, or exclude `PASS` to focus on variants

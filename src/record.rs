@@ -123,6 +123,30 @@ pub struct AltBase {
     pub trinuc_context: Option<String>,
 }
 
+/// Cross-annotation of tumor alt-base loci against a paired normal sample.
+///
+/// Schema A1: one row per (tumor_sample_id, chrom, pos, tumor_alt_allele, normal_sample_id,
+/// normal_alt_allele).  For every tumor locus an anchor row with `normal_alt_allele = None`
+/// is always written so that `normal_depth` is available even when the normal is clean.
+/// Additional rows are appended for each non-ref allele observed in the normal (SNV positions).
+/// Positions are 0-based.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NormalEvidence {
+    pub tumor_sample_id:   String,
+    pub chrom:             String,
+    /// 0-based position
+    pub pos:               i64,
+    pub tumor_alt_allele:  String,
+    pub normal_sample_id:  String,
+    /// `None` = anchor row (no alt evidence in normal, or indel position).
+    /// `Some(allele)` = a non-ref allele observed in the normal.
+    pub normal_alt_allele: Option<String>,
+    /// Total fragment depth in the normal at this position (reads passing filters).
+    pub normal_depth:      i32,
+    /// Fragments in normal supporting `normal_alt_allele`; 0 for anchor rows.
+    pub normal_alt_count:  i32,
+}
+
 /// One record per alt-supporting read at a locus.
 /// Linked to AltBase by (sample_id, chrom, pos, alt_allele).
 /// Positions are 0-based.

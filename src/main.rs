@@ -3,6 +3,7 @@ mod cli;
 mod cohort;
 mod gene_annotations;
 mod merge;
+mod normal;
 mod progress;
 mod qc;
 mod record;
@@ -129,6 +130,22 @@ fn main() -> Result<()> {
 
         Command::Cohort(args) => {
             cohort::run_cohort(&args)?;
+        }
+
+        Command::AnnotateNormal(args) => {
+            info!(
+                tumor_parquet = %args.tumor_parquet.display(),
+                normal_bam    = %args.normal_bam.display(),
+                output        = %args.output.display(),
+                "annotating normal evidence"
+            );
+
+            let records = normal::annotate_normal(&args)?;
+
+            info!(n_records = records.len(), output = %args.output.display(), "writing normal evidence Parquet");
+            writer::parquet_normal::write_parquet(&records, &args.output)?;
+
+            info!("done");
         }
     }
 
