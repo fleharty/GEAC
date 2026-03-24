@@ -6,6 +6,7 @@ import duckdb
 import altair as alt
 import pandas as pd
 from scipy.optimize import nnls
+
 from igv_helpers import query_distinct_samples
 import geac_config
 
@@ -34,16 +35,13 @@ if not path or not path.strip():
 
 path = path.strip()
 
-@st.cache_resource
-def open_connection(p: str):
-    if p.endswith(".duckdb"):
-        return duckdb.connect(p, read_only=True), "alt_bases"
+try:
+    if path.endswith(".duckdb"):
+        con = duckdb.connect(path, read_only=True)
+        table_expr = "alt_bases"
     else:
         con = duckdb.connect()
-        return con, f"read_parquet('{p}', union_by_name=true)"
-
-try:
-    con, table_expr = open_connection(path)
+        table_expr = f"read_parquet('{path}', union_by_name=true)"
 except Exception as e:
     st.error(f"Could not open file: {e}")
     st.stop()
@@ -1370,19 +1368,24 @@ with tab2:
                         "Signatures with no exposure in any sample are hidden."
                     )
 
+                    _ps_has_batch  = _has_data("batch")
+                    _ps_id_sql     = "sample_id || ' / ' || batch" if _ps_has_batch else "sample_id"
+                    _ps_group_by   = "sample_id, batch" if _ps_has_batch else "sample_id"
+
                     _ps_raw = con.execute(f"""
-                        SELECT sample_id, trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
+                        SELECT {_ps_id_sql} AS sample_label,
+                               trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
                         FROM (SELECT * FROM {table_expr}) _t
                         WHERE {where} AND variant_type = 'SNV'
                           AND trinuc_context IS NOT NULL AND length(trinuc_context) = 3
-                        GROUP BY sample_id, trinuc_context, ref_allele, alt_allele
+                        GROUP BY {_ps_group_by}, trinuc_context, ref_allele, alt_allele
                     """).df()
 
                     if _ps_raw.empty:
                         st.info("No SNVs with trinucleotide context in current selection.")
                     else:
                         _ps_rows = []
-                        for _sid, _grp in _ps_raw.groupby("sample_id"):
+                        for _sid, _grp in _ps_raw.groupby("sample_label"):
                             _grp = _grp.copy()
                             _grp["sbs_label"] = _grp.apply(
                                 lambda r: _sbs_label(r["trinuc_context"], r["ref_allele"], r["alt_allele"]),
@@ -1405,7 +1408,7 @@ with tab2:
                             for _sig, _exp in zip(_cosmic_aligned.columns, _h_norm):
                                 if _exp > 0:
                                     _ps_rows.append({
-                                        "sample_id": _sid,
+                                        "sample_label": _sid,
                                         "signature": _sig,
                                         "exposure":  float(_exp),
                                         "n_snvs":    _n_snvs,
@@ -1420,22 +1423,18 @@ with tab2:
                             # Keep only signatures present in at least one sample
                             _ps_sigs = _ps_df["signature"].unique().tolist()
 
-                            # Sort samples by total SNV count descending
-                            _ps_order = (
-                                _ps_df.groupby("sample_id")["n_snvs"].first()
-                                .sort_values(ascending=False)
-                                .index.tolist()
-                            )
+                            # Sort samples alphabetically
+                            _ps_order = sorted(_ps_df["sample_label"].unique().tolist())
 
                             # Fill zeros for sample/signature combos with no exposure
                             _ps_full = (
                                 pd.MultiIndex.from_product(
                                     [_ps_order, _ps_sigs],
-                                    names=["sample_id", "signature"],
+                                    names=["sample_label", "signature"],
                                 )
                                 .to_frame(index=False)
-                                .merge(_ps_df[["sample_id", "signature", "exposure", "etiology"]],
-                                       on=["sample_id", "signature"], how="left")
+                                .merge(_ps_df[["sample_label", "signature", "exposure", "etiology"]],
+                                       on=["sample_label", "signature"], how="left")
                             )
                             _ps_full["exposure"] = _ps_full["exposure"].fillna(0.0)
                             _ps_full["etiology"] = _ps_full["etiology"].fillna("")
@@ -1446,12 +1445,12 @@ with tab2:
                                 .encode(
                                     alt.X("signature:N", sort=_ps_sigs, title="Signature",
                                           axis=alt.Axis(labelAngle=-45, labelLimit=200)),
-                                    alt.Y("sample_id:N", sort=_ps_order, title="Sample"),
+                                    alt.Y("sample_label:N", sort=_ps_order, title="Sample"),
                                     alt.Color("exposure:Q", title="Exposure",
                                               scale=alt.Scale(scheme="blues"),
                                               legend=alt.Legend(format=".0%")),
                                     tooltip=[
-                                        "sample_id:N",
+                                        "sample_label:N",
                                         "signature:N",
                                         alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
                                         "etiology:N",
@@ -1834,12 +1833,17 @@ with tab2:
         if not _has_data("trinuc_context"):
             st.info("Trinucleotide context unavailable — run geac collect with a reference FASTA.")
         else:
+            _hm_has_batch = _has_data("batch")
+            _hm_id_sql    = "sample_id || ' / ' || batch" if _hm_has_batch else "sample_id"
+            _hm_group_by  = "sample_id, batch" if _hm_has_batch else "sample_id"
+
             _hm_raw = con.execute(f"""
-                SELECT sample_id, trinuc_context, ref_allele, alt_allele, COUNT(*) AS n
+                SELECT {_hm_id_sql} AS sample_label,
+                       trinuc_context, ref_allele, alt_allele, COUNT(*) AS n
                 FROM {table_expr}
                 WHERE {where} AND variant_type = 'SNV'
                   AND trinuc_context IS NOT NULL AND length(trinuc_context) = 3
-                GROUP BY sample_id, trinuc_context, ref_allele, alt_allele
+                GROUP BY {_hm_group_by}, trinuc_context, ref_allele, alt_allele
             """).df()
 
             if _hm_raw.empty:
@@ -1850,17 +1854,17 @@ with tab2:
                     axis=1,
                 )
                 _hm_raw = _hm_raw.dropna(subset=["sbs_label"])
-                _hm_agg = _hm_raw.groupby(["sample_id", "sbs_label"], as_index=False)["n"].sum()
+                _hm_agg = _hm_raw.groupby(["sample_label", "sbs_label"], as_index=False)["n"].sum()
 
-                _totals = _hm_agg.groupby("sample_id")["n"].transform("sum")
+                _totals = _hm_agg.groupby("sample_label")["n"].transform("sum")
                 _hm_agg["fraction"] = _hm_agg["n"] / _totals
 
                 _all_combos = pd.MultiIndex.from_product(
-                    [_hm_agg["sample_id"].unique(), _SBS_ORDER],
-                    names=["sample_id", "sbs_label"],
+                    [_hm_agg["sample_label"].unique(), _SBS_ORDER],
+                    names=["sample_label", "sbs_label"],
                 )
                 _hm_full = (
-                    _hm_agg.set_index(["sample_id", "sbs_label"])
+                    _hm_agg.set_index(["sample_label", "sbs_label"])
                     .reindex(_all_combos, fill_value=0)
                     .reset_index()
                 )
@@ -1872,13 +1876,13 @@ with tab2:
                     .encode(
                         alt.X("sbs_label:N", sort=_SBS_ORDER, title=None,
                               axis=alt.Axis(labels=False, ticks=False)),
-                        alt.Y("sample_id:N", title="Sample"),
+                        alt.Y("sample_label:N", title="Sample"),
                         alt.Color("fraction:Q", title="Fraction of SNVs",
                                   scale=alt.Scale(scheme="blues")),
-                        alt.Tooltip(["sample_id:N", "sbs_label:N", "n:Q", "fraction:Q"]),
+                        alt.Tooltip(["sample_label:N", "sbs_label:N", "n:Q", "fraction:Q"]),
                     )
                     .properties(
-                        height=max(200, 20 * _hm_full["sample_id"].nunique()),
+                        height=max(200, 20 * _hm_full["sample_label"].nunique()),
                         title="Normalised SBS96 profile per sample (fraction of SNVs)",
                     )
                 )
@@ -2185,6 +2189,14 @@ with tab_cohort:
         _cohort_conditions = [c for c in conditions if not c.startswith("sample_id IN")]
         _cohort_where = " AND ".join(_cohort_conditions) if _cohort_conditions else "true"
 
+        # When batch is present each row is (sample_id, batch); combine into a
+        # single display label so every chart has one series per unique unit.
+        _has_batch = _has_data("batch")
+        _cohort_id_sql = (
+            "sample_id || ' / ' || batch" if _has_batch else "sample_id"
+        )
+        _cohort_group_by = "sample_id, batch" if _has_batch else "sample_id"
+
         _has_overlap = _has_data("overlap_alt_agree")
         _overlap_col = """
             ROUND(
@@ -2196,13 +2208,14 @@ with tab_cohort:
 
         _cohort_stats = con.execute(f"""
             SELECT
+                {_cohort_id_sql}                                     AS sample_label,
                 sample_id,
-                {'ANY_VALUE(batch) AS batch,' if _has_data('batch') else ''}
-                COUNT(*) FILTER (WHERE variant_type = 'SNV')       AS n_snv,
-                COUNT(*) FILTER (WHERE variant_type = 'insertion')  AS n_insertion,
-                COUNT(*) FILTER (WHERE variant_type = 'deletion')   AS n_deletion,
-                ROUND(AVG(total_depth), 1)                          AS mean_depth,
-                ROUND(AVG(alt_count * 1.0 / total_depth), 6)       AS mean_vaf,
+                {'batch,' if _has_batch else ''}
+                COUNT(*) FILTER (WHERE variant_type = 'SNV')        AS n_snv,
+                COUNT(*) FILTER (WHERE variant_type = 'insertion')   AS n_insertion,
+                COUNT(*) FILTER (WHERE variant_type = 'deletion')    AS n_deletion,
+                ROUND(AVG(total_depth), 1)                           AS mean_depth,
+                ROUND(AVG(alt_count * 1.0 / total_depth), 6)        AS mean_vaf,
                 ROUND(
                     AVG(fwd_alt_count * 1.0
                         / NULLIF(fwd_alt_count + rev_alt_count, 0)),
@@ -2212,8 +2225,8 @@ with tab_cohort:
                 COUNT(*) AS n_total
             FROM {table_expr}
             WHERE {_cohort_where}
-            GROUP BY sample_id
-            ORDER BY sample_id
+            GROUP BY {_cohort_group_by}
+            ORDER BY {_cohort_group_by}
         """).df()
 
         if _cohort_stats.empty:
@@ -2229,12 +2242,14 @@ with tab_cohort:
 
             _cohort_sel = (_cohort_event.selection or {}).get("rows", [])
             if _cohort_sel:
-                _focused_sample = _cohort_stats.iloc[_cohort_sel[0]]["sample_id"]
+                _focused_row    = _cohort_stats.iloc[_cohort_sel[0]]
+                _focused_sample = _focused_row["sample_id"]
+                _focused_label  = _focused_row["sample_label"]
                 st.caption(
-                    f"Focused on **{_focused_sample}** — "
+                    f"Focused on **{_focused_label}** — "
                     "click button below to filter all tabs to this sample."
                 )
-                if st.button(f"Filter all tabs to {_focused_sample}"):
+                if st.button(f"Filter all tabs to {_focused_label}"):
                     st.session_state["sample_sel"] = [_focused_sample]
                     st.rerun()
 
@@ -2243,7 +2258,7 @@ with tab_cohort:
             st.subheader("VAF distribution by sample")
 
             _vaf_raw = con.execute(f"""
-                SELECT sample_id,
+                SELECT {_cohort_id_sql} AS sample_label,
                        ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
                 FROM {table_expr}
                 WHERE {_cohort_where} AND variant_type = 'SNV'
@@ -2260,7 +2275,7 @@ with tab_cohort:
                     alt.Chart(_vaf_raw)
                     .transform_density(
                         density="vaf",
-                        groupby=["sample_id"],
+                        groupby=["sample_label"],
                         extent=[0, 1],
                         steps=200,
                     )
@@ -2269,8 +2284,8 @@ with tab_cohort:
                         alt.X("value:Q", title="VAF"),
                         alt.Y("density:Q", title="Density",
                               scale=alt.Scale(type="symlog" if _vaf_yscale == "Symlog" else "linear")),
-                        alt.Color("sample_id:N", title="Sample"),
-                        tooltip=["sample_id:N",
+                        alt.Color("sample_label:N", title="Sample"),
+                        tooltip=["sample_label:N",
                                  alt.Tooltip("value:Q", format=".3f", title="VAF")],
                     )
                     .properties(
@@ -2290,7 +2305,7 @@ with tab_cohort:
 
             _strand_stats = con.execute(f"""
                 SELECT
-                    sample_id,
+                    {_cohort_id_sql} AS sample_label,
                     ROUND(AVG(alt_count * 1.0 / total_depth), 6) AS mean_vaf,
                     ROUND(
                         AVG(fwd_alt_count * 1.0
@@ -2300,7 +2315,7 @@ with tab_cohort:
                     COUNT(*) AS n_loci
                 FROM {table_expr}
                 WHERE {_cohort_where} AND variant_type = 'SNV'
-                GROUP BY sample_id
+                GROUP BY {_cohort_group_by}
             """).df()
 
             if _strand_stats.empty:
@@ -2316,11 +2331,11 @@ with tab_cohort:
                         alt.Y("mean_vaf:Q",
                               title="Mean VAF",
                               scale=alt.Scale(zero=False)),
-                        alt.Color("sample_id:N", title="Sample"),
+                        alt.Color("sample_label:N", title="Sample"),
                         alt.Size("n_loci:Q", title="SNV loci",
                                  scale=alt.Scale(range=[40, 300])),
                         tooltip=[
-                            "sample_id:N",
+                            "sample_label:N",
                             alt.Tooltip("mean_strand_balance:Q", format=".4f",
                                         title="Mean strand balance"),
                             alt.Tooltip("mean_vaf:Q", format=".6f", title="Mean VAF"),
@@ -2351,14 +2366,17 @@ with tab_cohort:
                 "y = mean base quality across all alt-supporting reads. "
                 "Samples with many loci but low base quality may be artefact-driven."
             )
+            _bq_label_sql  = "ab.sample_id || ' / ' || ab.batch" if _has_batch else "ab.sample_id"
+            _bq_group_sql  = "ab.sample_id, ab.batch"            if _has_batch else "ab.sample_id"
+            _bq_batch_sel  = "batch,"                            if _has_batch else ""
             _bq_loci_df = con.execute(f"""
                 SELECT
-                    ab.sample_id,
+                    {_bq_label_sql} AS sample_label,
                     COUNT(DISTINCT CONCAT(ab.chrom, ':', ab.pos, ':', ab.alt_allele)) AS n_alt_loci,
                     ROUND(AVG(ar.base_qual), 2) AS mean_base_qual,
                     COUNT(ar.rowid) AS n_reads
                 FROM (
-                    SELECT sample_id, chrom, pos, alt_allele
+                    SELECT sample_id, {_bq_batch_sel} chrom, pos, alt_allele
                     FROM {table_expr}
                     WHERE {_cohort_where}
                 ) ab
@@ -2368,7 +2386,7 @@ with tab_cohort:
                     AND ab.pos        = ar.pos
                     AND ab.alt_allele = ar.alt_allele
                 WHERE ar.base_qual IS NOT NULL
-                GROUP BY ab.sample_id
+                GROUP BY {_bq_group_sql}
             """).df()
 
             if _bq_loci_df.empty:
@@ -2382,11 +2400,11 @@ with tab_cohort:
                               scale=alt.Scale(zero=True)),
                         alt.Y("mean_base_qual:Q", title="Mean base quality (Phred)",
                               scale=alt.Scale(zero=False)),
-                        alt.Color("sample_id:N", title="Sample"),
+                        alt.Color("sample_label:N", title="Sample"),
                         alt.Size("n_reads:Q", title="Alt-supporting reads",
                                  scale=alt.Scale(range=[40, 300])),
                         tooltip=[
-                            "sample_id:N",
+                            "sample_label:N",
                             alt.Tooltip("n_alt_loci:Q", format=",", title="Alt loci"),
                             alt.Tooltip("mean_base_qual:Q", format=".1f", title="Mean base qual"),
                             alt.Tooltip("n_reads:Q", format=",", title="Alt-supporting reads"),
@@ -2400,7 +2418,7 @@ with tab_cohort:
             st.subheader("SNV Count by Sample (SBS6 breakdown)")
             _sbs6_df = con.execute(f"""
                 SELECT
-                    sample_id,
+                    {_cohort_id_sql} AS sample_label,
                     CASE
                         WHEN ref_allele IN ('C','G') AND alt_allele IN ('A','T') THEN 'C>A'
                         WHEN ref_allele IN ('C','G') AND alt_allele IN ('G','C') THEN 'C>G'
@@ -2413,8 +2431,8 @@ with tab_cohort:
                     COUNT(*) AS n_snv
                 FROM {table_expr}
                 WHERE {_cohort_where} AND variant_type = 'SNV'
-                GROUP BY sample_id, substitution
-                ORDER BY sample_id, substitution
+                GROUP BY {_cohort_group_by}, substitution
+                ORDER BY {_cohort_group_by}, substitution
             """).df()
 
             if _sbs6_df.empty:
@@ -2428,12 +2446,12 @@ with tab_cohort:
                     alt.Chart(_sbs6_df)
                     .mark_bar()
                     .encode(
-                        alt.X("sample_id:N", title="Sample", sort="-y",
+                        alt.X("sample_label:N", title="Sample", sort="-y",
                               axis=alt.Axis(labelAngle=-45, labelLimit=200)),
                         alt.Y("n_snv:Q", title="SNV count", stack="zero"),
                         alt.Color("substitution:N", title="Substitution",
                                   scale=_sbs6_color_scale),
-                        alt.Tooltip(["sample_id:N", "substitution:N", "n_snv:Q"]),
+                        alt.Tooltip(["sample_label:N", "substitution:N", "n_snv:Q"]),
                     )
                     .properties(height=350, title="SNV count per sample colored by SBS6 substitution type")
                 )

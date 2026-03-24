@@ -71,7 +71,11 @@ Optional flags:
 | `--gene-annotations` | — | GFF3, GTF, or UCSC genePred file; adds `gene` string column |
 | `--repeat-window` | 10 | Bases on each side of locus to scan for homopolymers and STRs |
 | `--min-base-qual` | 1 | Minimum base quality to count a read |
-| `--min-map-qual` | 20 | Minimum mapping quality |
+| `--min-map-qual` | 0 | Minimum mapping quality |
+| `--include-duplicates` | off | Count PCR/optical duplicate reads (FLAG 0x400) |
+| `--include-secondary` | off | Count secondary alignments (FLAG 0x100) |
+| `--include-supplementary` | off | Count supplementary alignments (FLAG 0x800) |
+| `--batch` | — | Optional batch label stored in the output Parquet (use to tag processing groups) |
 | `--region` | whole genome | Restrict to a genomic region (e.g. `chr1:1-1000000`) |
 | `--progress-interval` | 30 | Seconds between progress reports to stderr |
 | `--reads-output` | off | Also write per-read detail Parquet (see below) |
@@ -165,14 +169,67 @@ Creates a DuckDB database with:
 - `samples` — one-row-per-sample summary (n_alt_loci, total_alt_reads, n_positions, etc.)
 - Indices on `(chrom, pos)` and `sample_id` for fast queries
 
-If any `.reads.parquet` files are present in the input list (produced by `--reads-output`),
-`geac merge` also creates:
-- `alt_reads` — all per-read detail records, linked to `alt_bases` by `(sample_id, chrom, pos, alt_allele)`
-- Index on `(sample_id, chrom, pos, alt_allele)` for efficient joins
+Files are routed automatically by filename suffix — no extra flag is needed:
 
-Files are routed automatically by filename suffix — no extra flag is needed.
+| Suffix | Table created |
+|---|---|
+| `.reads.parquet` | `alt_reads` — per-read detail records (from `--reads-output`) |
+| `.normal_evidence.parquet` | `normal_evidence` — per-locus normal pileup evidence (from `geac annotate-normal`) |
+| `.pon_evidence.parquet` | `pon_evidence` — per-locus PoN hit counts and VAFs (from `geac annotate-pon`) |
+| anything else | `alt_bases` — standard locus records |
+
+Indices are created on each optional table for efficient joins back to `alt_bases`.
 
 The output file must not already exist (use a new path or delete the old file first).
+
+### Annotate Normal — cross-check tumor loci against a paired normal BAM
+
+For each alt locus in the tumor Parquet, `geac annotate-normal` piles up the paired normal
+BAM at that position and records how many fragments support each allele.  The result is a
+`normal_evidence` Parquet that can be passed to `geac merge` so the Explorer can classify
+loci as somatic candidates, germline-like, or artefacts.
+
+```bash
+geac annotate-normal \
+  --tumor-parquet TUMOR.locus.parquet \
+  --normal-bam    NORMAL.bam \
+  --reference     hg38.fa \
+  --output        TUMOR.normal_evidence.parquet
+```
+
+Optional flags:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--normal-sample-id` | from SM tag | Override the normal sample identifier |
+| `--min-base-qual` | 1 | Minimum base quality to count a base in the normal pileup |
+| `--min-map-qual` | 0 | Minimum mapping quality |
+| `--include-duplicates` | off | Count duplicate reads in the normal |
+| `--include-secondary` | off | Count secondary alignments |
+| `--include-supplementary` | off | Count supplementary alignments |
+
+Output naming convention: use `.normal_evidence.parquet` so `geac merge` routes the file
+to the `normal_evidence` table automatically.
+
+### Annotate PoN — cross-check tumor loci against a Panel of Normals DuckDB
+
+`geac annotate-pon` queries a pre-built PoN DuckDB (produced by running `geac collect` on
+each normal sample and then `geac merge`) to find how many PoN samples carry each tumor
+alt allele and at what VAF — all via DuckDB analytics, with no BAM re-pileup.
+
+```bash
+geac annotate-pon \
+  --tumor-parquet TUMOR.locus.parquet \
+  --pon-db        pon.duckdb \
+  --output        TUMOR.pon_evidence.parquet
+```
+
+The PoN DuckDB must contain an `alt_bases` table (produced by a standard `geac merge` run
+on the normal cohort).  The output Parquet records, for each tumor alt locus, the number
+of PoN samples that carry the same allele and the maximum and mean PoN VAF.
+
+Output naming convention: use `.pon_evidence.parquet` so `geac merge` routes the file
+to the `pon_evidence` table automatically.
 
 ### Query the cohort (DuckDB)
 
@@ -249,6 +306,19 @@ Features:
     scatter; mapping quality distribution; cohort artefact family size comparison (boxplot
     of family size by cohort frequency); all plots support aggregate / sample / batch
     color-by options
+  - *Duplex/Simplex* (DuckDB only, requires `--reads-output`) — analyses focused on
+    error-corrected sequencing: AB/BA strand balance distribution (`aD`/`bD` fgbio tags),
+    read position bias by cycle, base quality distribution, family size vs VAF scatter,
+    and insert size distribution; all gated on fgbio tag availability
+  - *Tumor/Normal* (DuckDB only, requires `normal_evidence` table) — per-locus normal
+    pileup summary joined to tumor alt loci; loci classified as Somatic candidate, Germline-like
+    (normal VAF ≥ 20%), Artifact-like (normal VAF > 0%), No normal coverage, or No normal data;
+    classification bar chart, tumor VAF vs normal VAF scatter, normal depth histogram, and
+    data table
+  - *Panel of Normals* (DuckDB only, requires `pon_evidence` table) — per-locus PoN hit
+    summary; loci classified as PoN clean (not seen), Rare in PoN (< 10% of samples), or
+    Common in PoN (≥ 10%); classification bar chart, tumor VAF vs PoN sample fraction
+    scatter, max PoN VAF histogram, and data table sorted by PoN sample fraction
 - **Per-read filters** (DuckDB only, requires `--reads-output`) — when an `alt_reads`
   table is present, a "Per-read filters" section appears in the sidebar with three
   range sliders, each with an include/exclude toggle:
@@ -330,6 +400,7 @@ Each file contains one row per alt allele observed at a locus.
 | `overlap_ref_agree` | int32 | Overlapping pairs where both mates support the reference |
 | `read_type` | string | `raw` / `simplex` / `duplex` |
 | `pipeline` | string | `fgbio` / `dragen` / `raw` |
+| `batch` | string? | Batch/processing-group label (null if `--batch` not provided) |
 | `variant_called` | bool? | Whether a variant was called here (null if no VCF/TSV provided) |
 | `variant_filter` | string? | VCF FILTER value (`PASS`, filter reason, or null) |
 | `on_target` | bool? | Whether locus overlaps a target region (null if no `--targets` provided) |
@@ -359,6 +430,42 @@ fragment at a locus. Linked to the locus table by `(sample_id, chrom, pos, alt_a
 | `base_qual` | int32 | Base quality at the alt position |
 | `map_qual` | int32 | Mapping quality of the read |
 | `insert_size` | int32? | SAM TLEN (template length / insert size); null when 0 (unpaired or mate unmapped) |
+
+### Normal evidence table (`*.normal_evidence.parquet`)
+
+Produced by `geac annotate-normal`. One row per (tumor locus × normal allele observed).
+Always includes a NULL-allele anchor row to record normal depth even when no alt is seen.
+
+| Column | Type | Description |
+|---|---|---|
+| `tumor_sample_id` | string | Tumor sample identifier |
+| `chrom` | string | Chromosome |
+| `pos` | int64 | 0-based position |
+| `tumor_alt_allele` | string | Tumor alt allele being annotated |
+| `normal_sample_id` | string | Normal sample identifier |
+| `normal_alt_allele` | string? | Alt allele observed in the normal at this position (null = anchor/depth-only row) |
+| `normal_depth` | int32 | Total fragment depth in the normal at this position |
+| `normal_alt_count` | int32 | Fragments supporting `normal_alt_allele` (0 for anchor row) |
+
+For SNV positions, one NULL anchor row is always written (capturing `normal_depth`), plus
+one additional row for each non-reference base observed in the normal pileup.  For indel
+positions, only the NULL anchor row is written.
+
+### PoN evidence table (`*.pon_evidence.parquet`)
+
+Produced by `geac annotate-pon`. One row per (tumor alt locus) with Panel of Normals hit
+statistics derived from the PoN DuckDB.
+
+| Column | Type | Description |
+|---|---|---|
+| `tumor_sample_id` | string | Tumor sample identifier |
+| `chrom` | string | Chromosome |
+| `pos` | int64 | 0-based position |
+| `tumor_alt_allele` | string | Tumor alt allele being annotated |
+| `n_pon_samples` | int64 | Number of PoN samples that carry this allele |
+| `pon_total_samples` | int64 | Total number of samples in the PoN |
+| `max_pon_vaf` | float64? | Highest VAF seen for this allele across PoN samples (null if `n_pon_samples = 0`) |
+| `mean_pon_vaf` | float64? | Mean VAF across PoN samples that carry the allele (null if `n_pon_samples = 0`) |
 
 ## Docker
 
@@ -423,6 +530,8 @@ Three WDL 1.0 workflows are provided in `wdl/`:
 | `geac_collect.wdl` | Single-sample wrapper around `geac collect`; use this to scatter across a sample table |
 | `geac_cohort.wdl` | Full cohort workflow: scatters `geac collect` then gathers with `geac merge` |
 | `geac_merge.wdl` | Standalone merge — takes existing Parquets and builds a DuckDB |
+| `geac_annotate_normal.wdl` | Single-sample wrapper around `geac annotate-normal`; cross-checks tumor loci against a paired normal BAM |
+| `geac_annotate_pon.wdl` | Single-sample wrapper around `geac annotate-pon`; cross-checks tumor loci against a pre-built PoN DuckDB |
 
 ### `geac_collect.wdl` inputs
 
@@ -444,7 +553,11 @@ Three WDL 1.0 workflows are provided in `wdl/`:
 | `region` | String? | Restrict to a region, e.g. `chr1:1-1000000` |
 | `repeat_window` | Int | Bases each side of locus for homopolymer/STR scan (default: 10) |
 | `min_base_qual` | Int | Default: 1 |
-| `min_map_qual` | Int | Default: 20 |
+| `min_map_qual` | Int | Default: 0 |
+| `include_duplicates` | Boolean | Count duplicate reads (default: false) |
+| `include_secondary` | Boolean | Count secondary alignments (default: false) |
+| `include_supplementary` | Boolean | Count supplementary alignments (default: false) |
+| `batch` | String? | Optional batch label stored in the output Parquet |
 | `reads_output` | Boolean | Also write per-read detail Parquet (default: false) |
 | `threads` | Int | Default: 1 |
 | `memory_gb` | Int | Default: 8 |
@@ -458,7 +571,9 @@ Outputs: `locus_parquet` (File) — per-sample locus Parquet; `reads_parquets` (
 Per-sample parallel arrays: `input_bams`, `input_bam_indices`, optional `sample_ids`,
 optional `variants_tsvs`, optional `vcfs` + `vcf_indices` (per-sample VCF annotation).
 Shared inputs applied to all samples: `reference_fasta`, `targets`, `gene_annotations`,
-`region`, `repeat_window`, `read_type`, `pipeline`, `min_base_qual`, `min_map_qual`, `threads`.
+`region`, `repeat_window`, `read_type`, `pipeline`, `min_base_qual`, `min_map_qual`,
+`include_duplicates`, `include_secondary`, `include_supplementary`, `batches`
+(optional parallel array of per-sample batch labels), `threads`.
 
 Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty when `reads_output=false`), and `cohort_db` (File, the merged DuckDB).
 
@@ -475,6 +590,41 @@ Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty wh
 
 Output: `cohort_db` (File) — merged DuckDB database.
 
+### `geac_annotate_normal.wdl` inputs
+
+| Input | Type | Description |
+|---|---|---|
+| `tumor_parquet` | File | Locus Parquet from `geac collect` for the tumor sample |
+| `normal_bam` | File | Normal BAM or CRAM |
+| `normal_bam_index` | File | `.bai` or `.crai` index |
+| `reference_fasta` | File | Reference FASTA |
+| `reference_fasta_index` | File | `.fai` index |
+| `docker_image` | String | geac Docker image |
+| `normal_sample_id` | String? | Override normal sample ID (default: BAM SM tag) |
+| `min_base_qual` | Int | Default: 1 |
+| `min_map_qual` | Int | Default: 0 |
+| `include_duplicates` | Boolean | Count duplicate reads (default: false) |
+| `include_secondary` | Boolean | Count secondary alignments (default: false) |
+| `include_supplementary` | Boolean | Count supplementary alignments (default: false) |
+| `memory_gb` | Int | Default: 8 |
+| `disk_gb` | Int | Default: 100 |
+| `preemptible` | Int | Default: 2 |
+
+Output: `normal_evidence_parquet` (File) — `{tumor_stem}.normal_evidence.parquet`.
+
+### `geac_annotate_pon.wdl` inputs
+
+| Input | Type | Description |
+|---|---|---|
+| `tumor_parquet` | File | Locus Parquet from `geac collect` for the tumor sample |
+| `pon_db` | File | PoN DuckDB from `geac merge` on normal samples |
+| `docker_image` | String | geac Docker image |
+| `memory_gb` | Int | Default: 4 |
+| `disk_gb` | Int | Default: 50 |
+| `preemptible` | Int | Default: 2 |
+
+Output: `pon_evidence_parquet` (File) — `{tumor_stem}.pon_evidence.parquet`.
+
 ### Running on Terra
 
 1. Import the desired WDL into your Terra workspace.
@@ -487,8 +637,21 @@ Output: `cohort_db` (File) — merged DuckDB database.
 ## Architecture
 
 ```
-geac collect  →  per-sample .parquet
-geac merge    →  cohort .duckdb  (alt_bases + samples tables)
+geac collect  →  per-sample .locus.parquet  [+ .reads.parquet with --reads-output]
+                       │
+                       ├──► geac annotate-normal  (paired normal BAM)
+                       │         →  .normal_evidence.parquet
+                       │
+                       └──► geac annotate-pon  (PoN DuckDB)
+                                 →  .pon_evidence.parquet
+
+geac merge  →  cohort .duckdb
+    alt_bases         (locus Parquets)
+    samples           (one-row-per-sample summary)
+    alt_reads         (.reads.parquet files, optional)
+    normal_evidence   (.normal_evidence.parquet files, optional)
+    pon_evidence      (.pon_evidence.parquet files, optional)
+
 streamlit run app/geac_explorer.py  →  interactive browser
 ```
 

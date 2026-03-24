@@ -27,31 +27,28 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
     //   *.reads.parquet           → alt_reads table
     //   *.normal_evidence.parquet → normal_evidence table
     //   *.pon_evidence.parquet    → pon_evidence table
+    //   *.coverage.parquet        → coverage table
     //   everything else           → alt_bases table
     fn suffix(p: &&std::path::PathBuf, sfx: &str) -> bool {
         p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(sfx))
     }
-    let reads_inputs:  Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| suffix(p, ".reads.parquet")).collect();
-    let normal_inputs: Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| suffix(p, ".normal_evidence.parquet")).collect();
-    let pon_inputs:    Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| suffix(p, ".pon_evidence.parquet")).collect();
-    let locus_inputs:  Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| {
+    let reads_inputs:    Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| suffix(p, ".reads.parquet")).collect();
+    let normal_inputs:   Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| suffix(p, ".normal_evidence.parquet")).collect();
+    let pon_inputs:      Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| suffix(p, ".pon_evidence.parquet")).collect();
+    let coverage_inputs: Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| suffix(p, ".coverage.parquet")).collect();
+    let locus_inputs:    Vec<&std::path::PathBuf> = args.inputs.iter().filter(|p| {
         !suffix(p, ".reads.parquet")
             && !suffix(p, ".normal_evidence.parquet")
             && !suffix(p, ".pon_evidence.parquet")
+            && !suffix(p, ".coverage.parquet")
     }).collect();
 
-    if locus_inputs.is_empty() {
-        bail!(
-            "no locus Parquet files provided (files ending in .reads.parquet, \
-             .normal_evidence.parquet, or .pon_evidence.parquet are excluded from the locus table)"
-        );
-    }
-
     info!(
-        n_locus_files  = locus_inputs.len(),
-        n_reads_files  = reads_inputs.len(),
-        n_normal_files = normal_inputs.len(),
-        n_pon_files    = pon_inputs.len(),
+        n_locus_files    = locus_inputs.len(),
+        n_reads_files    = reads_inputs.len(),
+        n_normal_files   = normal_inputs.len(),
+        n_pon_files      = pon_inputs.len(),
+        n_coverage_files = coverage_inputs.len(),
         output = %args.output.display(),
         "merging Parquet files into DuckDB"
     );
@@ -59,39 +56,40 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
     let conn = Connection::open(&args.output)
         .with_context(|| format!("failed to create DuckDB database: {}", args.output.display()))?;
 
-    // ── alt_bases table ───────────────────────────────────────────────────────
+    // ── alt_bases table (optional) ────────────────────────────────────────────
     // Create the table from the first file to establish the schema, then
     // INSERT the remaining files one at a time.  This avoids the multi-file
     // schema-inference path in DuckDB which can segfault when given a large
     // array literal or when files have subtly different nullable/type metadata.
-    info!("reading locus Parquet files and creating alt_bases table...");
+    if !locus_inputs.is_empty() {
+        info!("reading locus Parquet files and creating alt_bases table...");
 
-    let first = locus_inputs[0];
-    let first_escaped = first.display().to_string().replace('\'', "''");
-    conn.execute_batch(&format!(
-        "CREATE TABLE alt_bases AS SELECT * FROM read_parquet('{first_escaped}');"
-    ))
-    .context("failed to create alt_bases table from first file")?;
-
-    for (idx, path) in locus_inputs[1..].iter().enumerate() {
-        let escaped = path.display().to_string().replace('\'', "''");
-        info!(
-            file = %path.display(),
-            idx = idx + 1,
-            total = locus_inputs.len(),
-            "inserting locus file"
-        );
+        let first = locus_inputs[0];
+        let first_escaped = first.display().to_string().replace('\'', "''");
         conn.execute_batch(&format!(
-            "INSERT INTO alt_bases SELECT * FROM read_parquet('{escaped}');"
+            "CREATE TABLE alt_bases AS SELECT * FROM read_parquet('{first_escaped}');"
         ))
-        .with_context(|| format!("failed to insert {}", path.display()))?;
-    }
+        .context("failed to create alt_bases table from first file")?;
 
-    let n_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM alt_bases", [], |row| row.get(0))
-        .context("failed to count rows")?;
+        for (idx, path) in locus_inputs[1..].iter().enumerate() {
+            let escaped = path.display().to_string().replace('\'', "''");
+            info!(
+                file = %path.display(),
+                idx = idx + 1,
+                total = locus_inputs.len(),
+                "inserting locus file"
+            );
+            conn.execute_batch(&format!(
+                "INSERT INTO alt_bases SELECT * FROM read_parquet('{escaped}');"
+            ))
+            .with_context(|| format!("failed to insert {}", path.display()))?;
+        }
 
-    info!(n_rows, "alt_bases table created");
+        let n_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM alt_bases", [], |row| row.get(0))
+            .context("failed to count rows")?;
+
+        info!(n_rows, "alt_bases table created");
 
     // Create indices for common query patterns
     info!("creating indices...");
@@ -101,11 +99,16 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
     )
     .context("failed to create indices")?;
 
-    // Create a samples summary table
+    // Create a samples summary table.
+    // GROUP BY (sample_id, batch) so that a single biological sample processed
+    // with multiple BAM types (e.g. raw / simplex / duplex) produces one row
+    // per type rather than one collapsed row.  batch is NULL for datasets
+    // collected without --batch, in which case this reduces to GROUP BY sample_id.
     conn.execute_batch(
         "CREATE TABLE samples AS
          SELECT
              sample_id,
+             batch,
              COUNT(*)                                   AS n_alt_loci,
              SUM(alt_count)                             AS total_alt_reads,
              COUNT(DISTINCT chrom || ':' || pos)        AS n_positions,
@@ -114,8 +117,8 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
              ANY_VALUE(read_type)                       AS read_type,
              ANY_VALUE(pipeline)                        AS pipeline
          FROM alt_bases
-         GROUP BY sample_id
-         ORDER BY sample_id;",
+         GROUP BY sample_id, batch
+         ORDER BY sample_id, batch;",
     )
     .context("failed to create samples summary table")?;
 
@@ -124,6 +127,7 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
         .context("failed to count samples")?;
 
     info!(n_samples, "samples summary table created");
+    } // end if !locus_inputs.is_empty()
 
     // ── alt_reads table (optional) ────────────────────────────────────────────
     if !reads_inputs.is_empty() {
@@ -236,6 +240,43 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
              (tumor_sample_id, chrom, pos, tumor_alt_allele);",
         )
         .context("failed to create pon_evidence index")?;
+    }
+
+    // ── coverage table (optional) ─────────────────────────────────────────────
+    if !coverage_inputs.is_empty() {
+        info!("reading coverage Parquet files and creating coverage table...");
+
+        let first_cov = coverage_inputs[0];
+        let first_cov_escaped = first_cov.display().to_string().replace('\'', "''");
+        conn.execute_batch(&format!(
+            "CREATE TABLE coverage AS SELECT * FROM read_parquet('{first_cov_escaped}');"
+        ))
+        .context("failed to create coverage table from first file")?;
+
+        for (idx, path) in coverage_inputs[1..].iter().enumerate() {
+            let escaped = path.display().to_string().replace('\'', "''");
+            info!(
+                file = %path.display(),
+                idx = idx + 1,
+                total = coverage_inputs.len(),
+                "inserting coverage file"
+            );
+            conn.execute_batch(&format!(
+                "INSERT INTO coverage SELECT * FROM read_parquet('{escaped}');"
+            ))
+            .with_context(|| format!("failed to insert coverage file {}", path.display()))?;
+        }
+
+        let n_cov_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM coverage", [], |row| row.get(0))
+            .context("failed to count coverage rows")?;
+
+        info!(n_cov_rows, "coverage table created");
+
+        conn.execute_batch(
+            "CREATE INDEX idx_coverage_locus ON coverage (sample_id, chrom, pos);",
+        )
+        .context("failed to create coverage index")?;
     }
 
     info!(output = %args.output.display(), "merge complete");

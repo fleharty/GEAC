@@ -167,6 +167,70 @@ pub struct PonEvidence {
     pub mean_pon_vaf:      Option<f64>,
 }
 
+/// Per-position coverage record produced by `geac coverage`.
+/// One row per position (or per bin when --bin-size > 1). Positions are 0-based.
+#[derive(Debug, Clone)]
+pub struct CoverageRecord {
+    pub sample_id: String,
+    pub chrom: String,
+    /// 0-based start position
+    pub pos: i64,
+    /// Exclusive end: pos+1 normally
+    pub end: i64,
+
+    // ── Fragment depth ─────────────────────────────────────────────────────────
+    // Unique fragments (duplicates excluded, overlapping pairs collapsed to 1)
+    // passing --min-map-qual.
+    pub total_depth:   i32,
+    pub fwd_depth:     i32,
+    pub rev_depth:     i32,
+
+    // ── Duplicate metrics ──────────────────────────────────────────────────────
+    /// All reads at this position (excluding secondary/supplementary), including dups
+    pub raw_read_depth: i32,
+    /// Fraction of raw reads flagged BAM_FDUP (0x400)
+    pub frac_dup:       f32,
+
+    // ── Overlap metrics ────────────────────────────────────────────────────────
+    /// Fragment pairs where both reads cover this position
+    pub overlap_depth:  i32,
+    /// overlap_depth / total_depth (0.0 when total_depth = 0)
+    pub frac_overlap:   f32,
+
+    // ── Mappability signals (non-dup reads, before --min-map-qual filter) ──────
+    pub mean_mapq:      f32,
+    pub frac_mapq0:     f32,
+    pub frac_low_mapq:  f32,
+
+    // ── Base quality signals (non-dup, passing --min-map-qual) ─────────────────
+    pub mean_base_qual: f32,
+    /// Lowest base quality observed (stored as i32 for Arrow Int32)
+    pub min_base_qual_obs: i32,
+    /// Highest base quality observed
+    pub max_base_qual_obs: i32,
+    /// Fraction of bases below --min-base-qual (default 20)
+    pub frac_low_bq:    f32,
+
+    // ── Insert size (properly paired, non-dup, passing --min-map-qual, R1) ──────
+    pub mean_insert_size:  f32,
+    pub min_insert_size:   i32,
+    pub max_insert_size:   i32,
+    pub n_insert_size_obs: i32,
+
+    // ── GC content ─────────────────────────────────────────────────────────────
+    /// Fraction of G+C bases in --gc-window bp window around this position
+    pub gc_content: f32,
+
+    // ── Annotations ────────────────────────────────────────────────────────────
+    pub on_target: Option<bool>,
+    pub gene:      Option<String>,
+
+    // ── Provenance ─────────────────────────────────────────────────────────────
+    pub read_type: ReadType,
+    pub pipeline:  Pipeline,
+    pub batch:     Option<String>,
+}
+
 /// One record per alt-supporting read at a locus.
 /// Linked to AltBase by (sample_id, chrom, pos, alt_allele).
 /// Positions are 0-based.

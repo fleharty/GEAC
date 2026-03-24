@@ -96,6 +96,29 @@ impl TargetIntervals {
     pub fn n_targets(&self) -> usize {
         self.by_chrom.values().map(|v| v.len()).sum()
     }
+
+    /// Iterate every (chrom, pos) pair covered by any target interval (0-based).
+    /// Chromosomes are visited in sorted order; positions within each chromosome
+    /// are visited in ascending order.
+    pub fn for_each_position<F: FnMut(&str, i64)>(&self, mut f: F) {
+        let mut chroms: Vec<&String> = self.by_chrom.keys().collect();
+        chroms.sort();
+        for chrom in chroms {
+            for &(start, end) in &self.by_chrom[chrom] {
+                for pos in start..end {
+                    f(chrom, pos as i64);
+                }
+            }
+        }
+    }
+
+    /// Total number of base positions covered by all intervals.
+    pub fn total_bases(&self) -> usize {
+        self.by_chrom.values()
+            .flat_map(|ivs| ivs.iter())
+            .map(|(s, e)| (e - s) as usize)
+            .sum()
+    }
 }
 
 #[cfg(test)]
