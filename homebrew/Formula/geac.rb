@@ -8,21 +8,6 @@ class Geac < Formula
       url "https://github.com/fleharty/GEAC/releases/download/v#{version}/geac-macos-arm64.tar.gz"
       sha256 "SHA256_MACOS_ARM64"
     end
-    on_intel do
-      url "https://github.com/fleharty/GEAC/releases/download/v#{version}/geac-macos-x86_64.tar.gz"
-      sha256 "SHA256_MACOS_X86_64"
-    end
-  end
-
-  on_linux do
-    on_intel do
-      url "https://github.com/fleharty/GEAC/releases/download/v#{version}/geac-linux-x86_64.tar.gz"
-      sha256 "SHA256_LINUX_X86_64"
-    end
-    on_arm do
-      url "https://github.com/fleharty/GEAC/releases/download/v#{version}/geac-linux-arm64.tar.gz"
-      sha256 "SHA256_LINUX_ARM64"
-    end
   end
 
   depends_on "htslib"
