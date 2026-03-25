@@ -121,6 +121,14 @@ workflow run to be cancelled.
 **Fix:** Dropped `macos-x86_64` (and all Linux native builds) from CI entirely —
 only `macos-arm64` is needed for the Homebrew tap.
 
+### Homebrew install: "No developer tools installed" on headless Mac
+**Symptom:** `brew install fleharty/geac/geac` fails immediately with "No developer tools installed" on a collaborator's machine with no GUI access.
+**Root cause:** Homebrew requires Xcode Command Line Tools. `xcode-select --install` only works when a GUI is available (it spawns a dialog).
+**Fix (headless):**
+1. Create a placeholder file to surface CLT in softwareupdate: `touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress`
+2. Find the package name: `softwareupdate --list`
+3. Install: `softwareupdate --install "Command Line Tools for Xcode-16.4" --agree-to-license`
+
 ### Homebrew formula: SHA256 mismatch on source tarball
 **Symptom:** `brew install` failed with "Resource reports different checksum".
 **Root cause:** CI used `gh api repos/.../tarball/refs/tags/TAG` to download the source tarball for SHA256 computation, but Homebrew fetches from `https://github.com/.../archive/refs/tags/TAG.tar.gz`. GitHub serves slightly different tarballs from these two endpoints, so the SHA256s don't match.
