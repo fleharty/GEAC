@@ -394,13 +394,15 @@ _reads_active = bool(_reads_conditions)
 if _reads_active:
     _reads_where = " AND ".join(_reads_conditions)
     if recompute_vaf:
+        # LEFT JOIN so loci with no rows in alt_reads (e.g. indels) keep their
+        # original alt_count rather than being dropped by an INNER JOIN.
         table_expr = f"""(
             SELECT
                 ab.* EXCLUDE (alt_count),
-                ar_agg.filtered_alt_count AS alt_count,
+                COALESCE(ar_agg.filtered_alt_count, ab.alt_count) AS alt_count,
                 ROUND(ab.alt_count * 1.0 / ab.total_depth, 4) AS original_vaf
             FROM alt_bases ab
-            INNER JOIN (
+            LEFT JOIN (
                 SELECT sample_id, chrom, pos, alt_allele, COUNT(*) AS filtered_alt_count
                 FROM alt_reads
                 WHERE {_reads_where}
@@ -411,11 +413,20 @@ if _reads_active:
                      AND ab.alt_allele = ar_agg.alt_allele
         )"""
     else:
-        # Locus-inclusion mode: keep only loci with ≥1 passing read; VAF unchanged.
+        # Locus-inclusion mode: exclude loci that HAVE reads in alt_reads but
+        # none pass the filter. Loci with NO reads in alt_reads (e.g. indels,
+        # which are not yet written to alt_reads by geac collect) pass through.
         table_expr = f"""(
             SELECT ab.*
             FROM alt_bases ab
-            WHERE EXISTS (
+            WHERE NOT EXISTS (
+                SELECT 1 FROM alt_reads ar
+                WHERE ar.sample_id  = ab.sample_id
+                  AND ar.chrom      = ab.chrom
+                  AND ar.pos        = ab.pos
+                  AND ar.alt_allele = ab.alt_allele
+            )
+            OR EXISTS (
                 SELECT 1 FROM alt_reads ar
                 WHERE ar.sample_id  = ab.sample_id
                   AND ar.chrom      = ab.chrom
