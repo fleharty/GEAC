@@ -69,8 +69,11 @@ fn coverage_schema() -> Arc<Schema> {
         Field::new("chrom",              DataType::Utf8,    false),
         Field::new("pos",                DataType::Int64,   false),
         Field::new("end",                DataType::Int64,   false),
+        Field::new("bin_n",              DataType::Int32,   false),
         // Fragment depth
         Field::new("total_depth",        DataType::Int32,   false),
+        Field::new("min_depth",          DataType::Int32,   false),
+        Field::new("max_depth",          DataType::Int32,   false),
         Field::new("fwd_depth",          DataType::Int32,   false),
         Field::new("rev_depth",          DataType::Int32,   false),
         // Duplicate metrics
@@ -114,8 +117,11 @@ fn records_to_batch(records: &[CoverageRecord], schema: Arc<Schema>) -> Result<R
     ));
     let pos: ArrayRef = Arc::new(Int64Array::from_iter_values(records.iter().map(|r| r.pos)));
     let end: ArrayRef = Arc::new(Int64Array::from_iter_values(records.iter().map(|r| r.end)));
+    let bin_n: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.bin_n)));
 
     let total_depth:   ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.total_depth)));
+    let min_depth:     ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.min_depth)));
+    let max_depth:     ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.max_depth)));
     let fwd_depth:     ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.fwd_depth)));
     let rev_depth:     ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.rev_depth)));
 
@@ -161,8 +167,8 @@ fn records_to_batch(records: &[CoverageRecord], schema: Arc<Schema>) -> Result<R
     RecordBatch::try_new(
         schema,
         vec![
-            sample_id, chrom, pos, end,
-            total_depth, fwd_depth, rev_depth,
+            sample_id, chrom, pos, end, bin_n,
+            total_depth, min_depth, max_depth, fwd_depth, rev_depth,
             raw_read_depth, frac_dup,
             overlap_depth, frac_overlap,
             mean_mapq, frac_mapq0, frac_low_mapq,

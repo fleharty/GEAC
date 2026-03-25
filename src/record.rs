@@ -177,11 +177,14 @@ pub struct CoverageRecord {
     pub pos: i64,
     /// Exclusive end: pos+1 normally
     pub end: i64,
+    pub bin_n: i32,
 
     // ── Fragment depth ─────────────────────────────────────────────────────────
     // Unique fragments (duplicates excluded, overlapping pairs collapsed to 1)
     // passing --min-map-qual.
     pub total_depth:   i32,
+    pub min_depth:     i32,
+    pub max_depth:     i32,
     pub fwd_depth:     i32,
     pub rev_depth:     i32,
 

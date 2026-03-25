@@ -10,77 +10,9 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # ── Build each platform natively ─────────────────────────────────────────────
-  build:
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            runner: ubuntu-latest
-          - platform: linux/arm64
-            runner: ubuntu-22.04-arm
-
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Lowercase image name
-        run: echo "IMAGE_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
-        env:
-          IMAGE_NAME: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_LC }}
-
-      - name: Build and push by digest
-        id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: ${{ matrix.platform }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.IMAGE_LC }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,scope=${{ matrix.platform }},mode=max
-
-      - name: Export digest
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-
-      - name: Upload digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: digest-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
-  # ── Merge into a single multi-platform manifest ───────────────────────────────
-  merge:
+  # ── Build and push linux/amd64 Docker image ───────────────────────────────────
+  docker:
     runs-on: ubuntu-latest
-    needs: build
 
     permissions:
       contents: read
@@ -115,16 +47,126 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
-      - name: Download digests
-        uses: actions/download-artifact@v4
+      - name: Build and push
+        uses: docker/build-push-action@v5
         with:
-          path: /tmp/digests
-          pattern: digest-*
-          merge-multiple: true
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Create and push multi-platform manifest
-        working-directory: /tmp/digests
+  native-binaries:
+    name: Native binary (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-14
+          - name: macos-x86_64
+            os: macos-13
+          - name: linux-x86_64
+            os: ubuntu-latest
+          - name: linux-arm64
+            os: ubuntu-22.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install htslib pkg-config
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        env:
+          HTSLIB_VERSION: "1.21"
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.IMAGE_LC }}@sha256:%s ' *)
+          sudo apt-get -o Acquire::Check-Valid-Until=false update
+          sudo apt-get install -y curl build-essential pkg-config \
+            libbz2-dev liblzma-dev libcurl4-openssl-dev zlib1g-dev \
+            libssl-dev libdeflate-dev
+          curl -fsSL \
+            "https://github.com/samtools/htslib/releases/download/${HTSLIB_VERSION}/htslib-${HTSLIB_VERSION}.tar.bz2" \
+            | tar -xj
+          cd "htslib-${HTSLIB_VERSION}"
+          ./configure --prefix=/usr/local
+          make -j"$(nproc)"
+          sudo make install
+          sudo ldconfig
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Package binary
+        run: |
+          ARCHIVE="geac-${{ matrix.name }}.tar.gz"
+          tar -czf "${ARCHIVE}" -C target/release geac
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Upload to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARCHIVE }}
+
+  update-homebrew-tap:
+    name: Update Homebrew tap
+    runs-on: ubuntu-latest
+    needs: [docker, native-binaries]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute checksums and update formula
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+
+          # Download each binary and compute SHA256
+          declare -A SHA256
+          for NAME in macos-arm64 macos-x86_64 linux-x86_64 linux-arm64; do
+            FILE="geac-${NAME}.tar.gz"
+            gh release download "${TAG}" --pattern "${FILE}" --repo "${{ github.repository }}"
+            SHA256["${NAME}"]=$(sha256sum "${FILE}" | awk '{print $1}')
+          done
+
+          # Source tarball SHA256
+          SOURCE_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
+          curl -fsSL "${SOURCE_URL}" -o source.tar.gz
+          SOURCE_SHA256=$(sha256sum source.tar.gz | awk '{print $1}')
+
+          # Generate the formula from the template, substituting version and SHA256s
+          sed \
+            -e "s/FORMULA_VERSION/${VERSION}/g" \
+            -e "s/SHA256_MACOS_ARM64/${SHA256[macos-arm64]}/g" \
+            -e "s/SHA256_MACOS_X86_64/${SHA256[macos-x86_64]}/g" \
+            -e "s/SHA256_LINUX_X86_64/${SHA256[linux-x86_64]}/g" \
+            -e "s/SHA256_LINUX_ARM64/${SHA256[linux-arm64]}/g" \
+            -e "s/SHA256_SOURCE/${SOURCE_SHA256}/g" \
+            homebrew/Formula/geac.rb > geac_final.rb
+
+          # Push to the homebrew-geac tap repo
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/fleharty/homebrew-geac.git" tap
+          mkdir -p tap/Formula
+          cp geac_final.rb tap/Formula/geac.rb
+          cd tap
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add Formula/geac.rb
+          git diff --cached --quiet || git commit -m "geac ${VERSION}"
+          git push

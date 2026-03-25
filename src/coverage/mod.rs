@@ -56,6 +56,11 @@ pub fn collect_coverage(
     let mut seen: HashSet<(String, i64)> = HashSet::new();
 
     let mut positions_written: u64 = 0;
+    let mut positions_seen: u64 = 0;
+    let start = std::time::Instant::now();
+    let progress_interval = std::time::Duration::from_secs(args.progress_interval);
+    let mut last_progress = start;
+    let mut acc = BinAccumulator::new(args.bin_size);
 
     for pileup in reader.pileup() {
         let pileup = pileup.context("error reading pileup")?;
@@ -88,14 +93,44 @@ pub fn collect_coverage(
             seen.insert((chrom.clone(), pos));
         }
 
-        writer.push(build_record(
-            &sample_id, &chrom, pos, &tally, gc, on_target, gene, args,
-        ))?;
-
-        positions_written += 1;
-        if positions_written % 100_000 == 0 {
-            info!(positions_written, "coverage progress");
+        let record = build_record(&sample_id, &chrom, pos, &tally, gc, on_target, gene, args);
+        if args.adaptive_depth_threshold.map_or(false, |t| tally.total_depth < t) {
+            // Flush any in-progress bin, then emit this position at single-base resolution
+            if let Some(bin) = acc.finish() {
+                writer.push(bin)?;
+                positions_written += 1;
+            }
+            acc = BinAccumulator::new(args.bin_size);
+            writer.push(record)?;
+            positions_written += 1;
+        } else {
+            if let Some(bin) = acc.push(record) {
+                writer.push(bin)?;
+                positions_written += 1;
+            }
         }
+
+        positions_seen += 1;
+
+        // Check clock every 10_000 positions to limit overhead; skip if interval is 0
+        if args.progress_interval > 0 && positions_seen % 10_000 == 0 {
+            let now = std::time::Instant::now();
+            if now.duration_since(last_progress) >= progress_interval {
+                info!(
+                    positions_written = %fmt_with_commas(positions_written),
+                    locus = %format!("{}:{}", chrom, fmt_with_commas(pos as u64)),
+                    elapsed = %fmt_elapsed(start.elapsed()),
+                    "coverage progress"
+                );
+                last_progress = now;
+            }
+        }
+    }
+
+    // Flush any partial bin from the pileup phase before zero-depth fill
+    if let Some(bin) = acc.finish() {
+        writer.push(bin)?;
+        positions_written += 1;
     }
 
     // Fill in zero-depth positions within targets that had no reads
@@ -113,6 +148,7 @@ pub fn collect_coverage(
         if args.min_depth == 0 {
             let mut zero_ref = ZeroDepthRefReader::open(&args.reference)?;
 
+            let mut zero_acc = BinAccumulator::new(args.bin_size);
             let mut zero_err: Option<anyhow::Error> = None;
             ti.for_each_position(|chrom, pos| {
                 if zero_err.is_some() { return; }
@@ -121,20 +157,215 @@ pub fn collect_coverage(
                 }
                 let gc = zero_ref.gc_content(chrom, pos, args.gc_window);
                 let gene = gene_annots.and_then(|g| g.get(chrom, pos).map(str::to_owned));
-                if let Err(e) = writer.push(build_zero_record(
-                    &sample_id, chrom, pos, gc, Some(true), gene, args,
-                )) {
-                    zero_err = Some(e);
+                let record = build_zero_record(&sample_id, chrom, pos, gc, Some(true), gene, args);
+                if let Some(bin) = zero_acc.push(record) {
+                    if let Err(e) = writer.push(bin) {
+                        zero_err = Some(e);
+                    }
                 }
             });
             if let Some(e) = zero_err {
                 return Err(e);
+            }
+            if let Some(bin) = zero_acc.finish() {
+                writer.push(bin)?;
             }
         }
     }
 
     info!(positions_written, "coverage collection complete");
     Ok(())
+}
+
+// ── Bin accumulator ───────────────────────────────────────────────────────────
+
+struct BinAccumulator {
+    bin_size: i64,
+    n: u32,
+    chrom: String,
+    bin_start: i64,
+    // depth
+    sum_total: f64,
+    min_total: i32,
+    max_total: i32,
+    sum_fwd: f64,
+    sum_rev: f64,
+    // dup
+    sum_raw: f64,
+    sum_frac_dup: f64,
+    // overlap
+    sum_overlap: f64,
+    sum_frac_overlap: f64,
+    // mapq
+    sum_mean_mapq: f64,
+    sum_frac_mapq0: f64,
+    sum_frac_low_mapq: f64,
+    // base qual
+    sum_mean_bq: f64,
+    min_bq: i32,
+    max_bq: i32,
+    sum_frac_low_bq: f64,
+    // insert size
+    sum_mean_ins: f64,
+    min_ins: i32,
+    max_ins: i32,
+    n_ins_obs: i32,
+    n_ins_pos: u32,
+    // gc
+    sum_gc: f64,
+    // annotations
+    on_target: Option<bool>,
+    gene: Option<String>,
+    // provenance
+    sample_id: String,
+    read_type: crate::record::ReadType,
+    pipeline: crate::record::Pipeline,
+    batch: Option<String>,
+}
+
+impl BinAccumulator {
+    fn new(bin_size: i64) -> Self {
+        Self {
+            bin_size,
+            n: 0,
+            chrom: String::new(),
+            bin_start: 0,
+            sum_total: 0.0, min_total: 0, max_total: 0,
+            sum_fwd: 0.0, sum_rev: 0.0,
+            sum_raw: 0.0, sum_frac_dup: 0.0,
+            sum_overlap: 0.0, sum_frac_overlap: 0.0,
+            sum_mean_mapq: 0.0, sum_frac_mapq0: 0.0, sum_frac_low_mapq: 0.0,
+            sum_mean_bq: 0.0, min_bq: 0, max_bq: 0, sum_frac_low_bq: 0.0,
+            sum_mean_ins: 0.0, min_ins: 0, max_ins: 0, n_ins_obs: 0, n_ins_pos: 0,
+            sum_gc: 0.0,
+            on_target: None, gene: None,
+            sample_id: String::new(),
+            read_type: crate::record::ReadType::Duplex,
+            pipeline: crate::record::Pipeline::Fgbio,
+            batch: None,
+        }
+    }
+
+    /// Push a single-position record. Returns a completed bin record if a boundary was crossed.
+    fn push(&mut self, r: CoverageRecord) -> Option<CoverageRecord> {
+        let new_bin_start = (r.pos / self.bin_size) * self.bin_size;
+        let boundary = self.n > 0 && (r.chrom != self.chrom || new_bin_start != self.bin_start);
+        let completed = if boundary { Some(self.build()) } else { None };
+        if boundary || self.n == 0 {
+            self.reset(&r, new_bin_start);
+        }
+        self.accumulate(&r);
+        completed
+    }
+
+    /// Flush any remaining accumulated positions as a final bin record.
+    fn finish(&mut self) -> Option<CoverageRecord> {
+        if self.n > 0 { Some(self.build()) } else { None }
+    }
+
+    fn reset(&mut self, r: &CoverageRecord, bin_start: i64) {
+        self.chrom = r.chrom.clone();
+        self.bin_start = bin_start;
+        self.n = 0;
+        self.sum_total = 0.0; self.min_total = i32::MAX; self.max_total = i32::MIN;
+        self.sum_fwd = 0.0; self.sum_rev = 0.0;
+        self.sum_raw = 0.0; self.sum_frac_dup = 0.0;
+        self.sum_overlap = 0.0; self.sum_frac_overlap = 0.0;
+        self.sum_mean_mapq = 0.0; self.sum_frac_mapq0 = 0.0; self.sum_frac_low_mapq = 0.0;
+        self.sum_mean_bq = 0.0; self.min_bq = i32::MAX; self.max_bq = i32::MIN; self.sum_frac_low_bq = 0.0;
+        self.sum_mean_ins = 0.0; self.min_ins = i32::MAX; self.max_ins = i32::MIN;
+        self.n_ins_obs = 0; self.n_ins_pos = 0;
+        self.sum_gc = 0.0;
+        self.on_target = None; self.gene = None;
+        self.sample_id = r.sample_id.clone();
+        self.read_type = r.read_type;
+        self.pipeline = r.pipeline;
+        self.batch = r.batch.clone();
+    }
+
+    fn accumulate(&mut self, r: &CoverageRecord) {
+        self.n += 1;
+        self.sum_total += r.total_depth as f64;
+        self.min_total = self.min_total.min(r.total_depth);
+        self.max_total = self.max_total.max(r.total_depth);
+        self.sum_fwd += r.fwd_depth as f64;
+        self.sum_rev += r.rev_depth as f64;
+        self.sum_raw += r.raw_read_depth as f64;
+        self.sum_frac_dup += r.frac_dup as f64;
+        self.sum_overlap += r.overlap_depth as f64;
+        self.sum_frac_overlap += r.frac_overlap as f64;
+        self.sum_mean_mapq += r.mean_mapq as f64;
+        self.sum_frac_mapq0 += r.frac_mapq0 as f64;
+        self.sum_frac_low_mapq += r.frac_low_mapq as f64;
+        self.sum_mean_bq += r.mean_base_qual as f64;
+        self.min_bq = self.min_bq.min(r.min_base_qual_obs);
+        self.max_bq = self.max_bq.max(r.max_base_qual_obs);
+        self.sum_frac_low_bq += r.frac_low_bq as f64;
+        if r.n_insert_size_obs > 0 {
+            self.sum_mean_ins += r.mean_insert_size as f64;
+            self.min_ins = self.min_ins.min(r.min_insert_size);
+            self.max_ins = self.max_ins.max(r.max_insert_size);
+            self.n_ins_obs += r.n_insert_size_obs;
+            self.n_ins_pos += 1;
+        }
+        self.sum_gc += r.gc_content as f64;
+        if self.gene.is_none() {
+            self.gene = r.gene.clone();
+        }
+        match (self.on_target, r.on_target) {
+            (_, Some(true)) => self.on_target = Some(true),
+            (None, v) => self.on_target = v,
+            _ => {}
+        }
+    }
+
+    fn build(&self) -> CoverageRecord {
+        let n = self.n as f64;
+        let mean = |s: f64| (s / n) as f32;
+        let mean_i = |s: f64| (s / n).round() as i32;
+        let (mean_ins, min_ins, max_ins) = if self.n_ins_pos > 0 {
+            (
+                (self.sum_mean_ins / self.n_ins_pos as f64) as f32,
+                self.min_ins,
+                self.max_ins,
+            )
+        } else {
+            (0.0, 0, 0)
+        };
+        CoverageRecord {
+            sample_id: self.sample_id.clone(),
+            chrom: self.chrom.clone(),
+            pos: self.bin_start,
+            end: self.bin_start + self.bin_size,
+            bin_n: self.n as i32,
+            total_depth: mean_i(self.sum_total),
+            min_depth: self.min_total,
+            max_depth: self.max_total,
+            fwd_depth: mean_i(self.sum_fwd),
+            rev_depth: mean_i(self.sum_rev),
+            raw_read_depth: mean_i(self.sum_raw),
+            frac_dup: mean(self.sum_frac_dup),
+            overlap_depth: mean_i(self.sum_overlap),
+            frac_overlap: mean(self.sum_frac_overlap),
+            mean_mapq: mean(self.sum_mean_mapq),
+            frac_mapq0: mean(self.sum_frac_mapq0),
+            frac_low_mapq: mean(self.sum_frac_low_mapq),
+            mean_base_qual: mean(self.sum_mean_bq),
+            min_base_qual_obs: if self.min_bq == i32::MAX { 0 } else { self.min_bq },
+            max_base_qual_obs: if self.max_bq == i32::MIN { 0 } else { self.max_bq },
+            frac_low_bq: mean(self.sum_frac_low_bq),
+            mean_insert_size: mean_ins,
+            min_insert_size: min_ins,
+            max_insert_size: max_ins,
+            n_insert_size_obs: self.n_ins_obs,
+            gc_content: mean(self.sum_gc),
+            on_target: self.on_target,
+            gene: self.gene.clone(),
+            read_type: self.read_type,
+            pipeline: self.pipeline,
+            batch: self.batch.clone(),
+        }
+    }
 }
 
 // ── Pileup tallying ───────────────────────────────────────────────────────────
@@ -316,7 +547,10 @@ fn build_record(
         chrom: chrom.to_string(),
         pos,
         end: pos + 1,
+        bin_n: 1,
         total_depth: t.total_depth,
+        min_depth: t.total_depth,
+        max_depth: t.total_depth,
         fwd_depth: t.fwd_depth,
         rev_depth: t.rev_depth,
         raw_read_depth: t.raw_read_depth,
@@ -357,7 +591,10 @@ fn build_zero_record(
         chrom: chrom.to_string(),
         pos,
         end: pos + 1,
+        bin_n: 1,
         total_depth: 0,
+        min_depth: 0,
+        max_depth: 0,
         fwd_depth: 0,
         rev_depth: 0,
         raw_read_depth: 0,
@@ -418,6 +655,31 @@ fn insert_size_stats(sizes: &[i32]) -> (f32, i32, i32, i32) {
     let min_v = *sizes.iter().min().unwrap();
     let max_v = *sizes.iter().max().unwrap();
     (mean, min_v, max_v, n)
+}
+
+// ── Formatting helpers ────────────────────────────────────────────────────────
+
+fn fmt_elapsed(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    if s < 60 {
+        format!("{}s", s)
+    } else if s < 3600 {
+        format!("{}m{}s", s / 60, s % 60)
+    } else {
+        format!("{}h{}m{}s", s / 3600, (s % 3600) / 60, s % 60)
+    }
+}
+
+fn fmt_with_commas(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
 }
 
 // ── Zero-depth reference reader ───────────────────────────────────────────────

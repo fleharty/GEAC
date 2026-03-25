@@ -318,8 +318,17 @@ pub struct CoverageArgs {
     #[arg(long, default_value_t = 0)]
     pub min_depth: i32,
 
+    /// When set, positions with total_depth below this value are emitted at single-base
+    /// resolution (bin_size=1) and split any in-progress bin. Disabled by default.
+    #[arg(long)]
+    pub adaptive_depth_threshold: Option<i32>,
+
+    /// Aggregate consecutive positions into bins of this size (1 = per-position, no binning)
+    #[arg(long, default_value_t = 1)]
+    pub bin_size: i64,
+
     /// Progress reporting interval in seconds (0 to disable)
-    #[arg(long, default_value_t = 30)]
+    #[arg(long, default_value_t = 20)]
     pub progress_interval: u64,
 }
 

@@ -3,6 +3,9 @@ import duckdb
 import altair as alt
 import pandas as pd
 import geac_config
+import json
+import streamlit.components.v1 as components
+from igv_helpers import load_manifest, resolve_index_uri
 
 st.set_page_config(page_title="GEAC Coverage Explorer", layout="wide")
 st.title("GEAC Coverage Explorer")
@@ -53,6 +56,7 @@ _cols = {
 }
 _has_gene      = "gene" in _cols
 _has_on_target = "on_target" in _cols
+_has_bin_n     = "bin_n" in _cols
 
 # ── Sidebar filters ────────────────────────────────────────────────────────────
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
@@ -92,6 +96,23 @@ if _has_on_target:
 else:
     on_target_sel = "All"
 
+# ── Manifest (IGV) ─────────────────────────────────────────────────────────────
+st.sidebar.divider()
+st.sidebar.header("IGV Integration")
+_default_manifest = _cfg.get("manifest", "")
+manifest_path = st.sidebar.text_input(
+    "Manifest file",
+    value=_default_manifest,
+    placeholder="/path/to/manifest.tsv",
+    help="TSV with columns: collaborator_sample_id, duplex_output_bam, duplex_output_bam_index",
+)
+_manifest: dict = {}
+if manifest_path and manifest_path.strip():
+    try:
+        _manifest = load_manifest(manifest_path.strip())
+        st.sidebar.success(f"{len(_manifest):,} samples loaded")
+    except Exception as _e:
+        st.sidebar.error(f"Could not load manifest: {_e}")
 
 # ── Filter helpers ─────────────────────────────────────────────────────────────
 def _filter_clauses(extra: list[str] | None = None) -> list[str]:
@@ -119,9 +140,91 @@ def where(extra: list[str] | None = None) -> str:
     return ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
 
+# ── IGV.js component ───────────────────────────────────────────────────────────
+@st.cache_data(ttl=2700, show_spinner=False)  # refresh well before the 60-min token expiry
+def _gcs_access_token() -> str | None:
+    """Return a GCS read-only access token from ADC, or None if unavailable."""
+    try:
+        import google.auth
+        import google.auth.transport.requests
+        credentials, project = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/devstorage.read_only"]
+        )
+        credentials.refresh(google.auth.transport.requests.Request())
+        token = credentials.token
+        print(f"[IGV] credential type : {type(credentials).__name__}", flush=True)
+        print(f"[IGV] project         : {project}", flush=True)
+        print(f"[IGV] token obtained  : {bool(token)}", flush=True)
+        print(f"[IGV] token prefix    : {token[:20] if token else 'None'}...", flush=True)
+        print(f"[IGV] token expiry    : {getattr(credentials, 'expiry', 'unknown')}", flush=True)
+        return token
+    except Exception as e:
+        print(f"[IGV] token error: {e}", flush=True)
+        return None
+def _igv_tracks(sample_ids: tuple[str, ...], manifest_json: str, oauth_token: str | None = None) -> list[dict]:
+    """Build IGV track dicts for *sample_ids*, passing URIs (including gs://) directly."""
+    manifest = json.loads(manifest_json)
+    tracks = []
+    for sid in sample_ids:
+        entry = manifest.get(str(sid))
+        if not entry:
+            continue
+        bam_uri = entry["bam"]
+        index_uri = resolve_index_uri(bam_uri, entry.get("bai"))
+        track: dict = {
+            "name": sid,
+            "url": bam_uri,
+            "height": 100,
+            "colorBy": "strand",
+        }
+        if index_uri:
+            track["indexURL"] = index_uri
+        if oauth_token:
+            track["oauthToken"] = oauth_token
+        tracks.append(track)
+    return tracks
+
+
+def _igv_html(locus: str, tracks: list[dict], genome: str = "hg38", oauth_token: str | None = None) -> str:
+    tracks_json = json.dumps(tracks, indent=2)
+    token_js = f'igv.setOauthToken("{oauth_token}", "storage.googleapis.com");' if oauth_token else ""
+    oauth_option = f'"oauthToken": "{oauth_token}",' if oauth_token else ""
+    # Explicit hg38 reference ensures CRAM decoding works regardless of what
+    # reference path is embedded in the CRAM header.
+    reference = {
+        "id": "hg38",
+        "fastaURL": "https://s3.amazonaws.com/igv.broadinstitute.org/genomes/seq/hg38/hg38.fa",
+        "indexURL": "https://s3.amazonaws.com/igv.broadinstitute.org/genomes/seq/hg38/hg38.fa.fai",
+        "cytobandURL": "https://s3.amazonaws.com/igv.org.genomes/hg38/cytoBandIdeo.txt.gz",
+    }
+    reference_json = json.dumps(reference)
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body {{ margin: 0; padding: 4px; font-family: sans-serif; }}
+  #igv-div {{ width: 100%; }}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/igv@3.0.2/dist/igv.min.js"></script>
+</head>
+<body>
+<div id="igv-div"></div>
+<script>
+  {token_js}
+  igv.createBrowser(document.getElementById("igv-div"), {{
+    {oauth_option}
+    reference: {reference_json},
+    locus: "{locus}",
+    tracks: {tracks_json}
+  }});
+</script>
+</body>
+</html>"""
+
+
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-tab_summary, tab_depth, tab_gc, tab_low = st.tabs(
-    ["Summary", "Depth Distribution", "GC Bias", "Low Coverage"]
+tab_summary, tab_depth, tab_gc, tab_low, tab_igv = st.tabs(
+    ["Summary", "Depth Distribution", "GC Bias", "Low Coverage", "IGV"]
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -206,11 +309,13 @@ with tab_depth:
     st.subheader("Depth distribution")
     depth_cap = st.slider("Cap depth display at", 10, 1000, 200, step=10)
 
+    _loci_expr = "SUM(bin_n)" if _has_bin_n else "COUNT(*)"
+
     depth_df = con.execute(f"""
         SELECT
             sample_id,
             LEAST(total_depth, {depth_cap}) AS depth_bin,
-            COUNT(*) AS n_positions
+            {_loci_expr} AS n_loci
         FROM {table_expr}
         {where()}
         GROUP BY sample_id, depth_bin
@@ -225,9 +330,9 @@ with tab_depth:
             .mark_line(opacity=0.8)
             .encode(
                 x=alt.X("depth_bin:Q", title=f"Total depth (capped at {depth_cap})"),
-                y=alt.Y("n_positions:Q", title="Number of positions"),
+                y=alt.Y("n_loci:Q", title="Number of loci"),
                 color=alt.Color("sample_id:N", title="Sample"),
-                tooltip=["sample_id", "depth_bin", "n_positions"],
+                tooltip=["sample_id", "depth_bin", "n_loci"],
             )
             .properties(width=700, height=350)
             .interactive()
@@ -235,15 +340,14 @@ with tab_depth:
         st.altair_chart(chart, use_container_width=True)
 
         # Fraction at depth thresholds
-        st.markdown("**Fraction of positions at or above depth threshold**")
+        st.markdown("**Fraction of loci at or above depth threshold**")
         thresholds = [1, 10, 20, 30, 50, 100]
         rows = []
         for sid, grp in depth_df.groupby("sample_id"):
-            total = grp["n_positions"].sum()
+            total = grp["n_loci"].sum()
             row = {"sample_id": sid}
-            cumsum = grp.sort_values("depth_bin")["n_positions"].cumsum()
             for t in thresholds:
-                below = grp.loc[grp["depth_bin"] < t, "n_positions"].sum()
+                below = grp.loc[grp["depth_bin"] < t, "n_loci"].sum()
                 row[f">={t}x"] = round((total - below) / total, 3) if total > 0 else 0.0
             rows.append(row)
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
@@ -359,11 +463,14 @@ with tab_low:
     gene_col  = "gene,"       if _has_gene else ""
     gene_sel  = "gene,"       if _has_gene else ""
 
+    _bin_n_col = "MAX(bin_n) AS bin_n," if _has_bin_n else ""
+
     low_df = con.execute(f"""
         SELECT
             chrom,
             pos,
             {gene_col}
+            {_bin_n_col}
             COUNT(DISTINCT sample_id)          AS n_samples_below,
             ROUND(AVG(total_depth), 1)         AS mean_depth,
             ROUND(MIN(total_depth * 1.0), 0)   AS min_depth,
@@ -386,30 +493,110 @@ with tab_low:
     if low_df.empty:
         st.success("No positions below threshold for the current filters.")
     else:
-        st.dataframe(low_df, use_container_width=True)
+        _low_event = st.dataframe(
+            low_df,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="single-row",
+        )
+        _low_rows = (_low_event.selection or {}).get("rows", [])
+        if _low_rows:
+            _row = low_df.iloc[_low_rows[0]]
+            _end = int(_row.get("end", int(_row["pos"]) + 1)) if "end" in _row else int(_row["pos"]) + 1
+            st.session_state["_igv_locus"] = f"{_row['chrom']}:{int(_row['pos'])}-{_end}"
+            st.caption(f"Locus set to {st.session_state['_igv_locus']} — switch to IGV tab to view.")
 
         if _has_gene and "gene" in low_df.columns:
-            st.markdown("**Affected positions per gene**")
+            st.markdown("**Affected loci per gene**")
+            _loci_agg = ("bin_n", "sum") if _has_bin_n else ("pos", "count")
             by_gene = (
                 low_df.groupby("gene", dropna=False)
-                .agg(n_positions=("pos", "count"), mean_depth=("mean_depth", "mean"))
+                .agg(n_loci=_loci_agg, mean_depth=("mean_depth", "mean"))
                 .reset_index()
-                .sort_values("n_positions", ascending=False)
+                .sort_values("n_loci", ascending=False)
                 .head(30)
             )
+            _gene_sel = alt.selection_point(fields=["gene"])
             gene_bar = (
                 alt.Chart(by_gene)
                 .mark_bar()
                 .encode(
-                    x=alt.X("n_positions:Q", title="Positions below threshold"),
+                    x=alt.X("n_loci:Q", title="Loci below threshold"),
                     y=alt.Y("gene:N", sort="-x", title="Gene"),
                     color=alt.Color(
                         "mean_depth:Q",
                         scale=alt.Scale(scheme="reds", reverse=True),
                         title="Mean depth",
                     ),
-                    tooltip=["gene", "n_positions", alt.Tooltip("mean_depth:Q", format=".1f")],
+                    opacity=alt.condition(_gene_sel, alt.value(1.0), alt.value(0.4)),
+                    tooltip=["gene", "n_loci", alt.Tooltip("mean_depth:Q", format=".1f")],
                 )
+                .add_params(_gene_sel)
                 .properties(height=max(120, 22 * len(by_gene)))
             )
-            st.altair_chart(gene_bar, use_container_width=True)
+            event = st.altair_chart(gene_bar, use_container_width=True, on_select="rerun")
+            # event.selection is an AttributeDictionary keyed by the Altair param name;
+            # find the first non-empty list value regardless of key
+            pts = []
+            if event.selection:
+                for v in event.selection.values():
+                    if isinstance(v, list) and v:
+                        pts = v
+                        break
+            if pts:
+                st.session_state["_low_selected_gene"] = pts[0].get("gene")
+            elif event.selection is not None and not any(
+                isinstance(v, list) and v for v in event.selection.values()
+            ):
+                st.session_state.pop("_low_selected_gene", None)
+
+            selected_gene = st.session_state.get("_low_selected_gene")
+            if selected_gene and selected_gene in low_df["gene"].values:
+                st.markdown(f"**Records for {selected_gene}**")
+                st.dataframe(
+                    low_df[low_df["gene"] == selected_gene].reset_index(drop=True),
+                    use_container_width=True,
+                )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tab 5 — IGV
+# ──────────────────────────────────────────────────────────────────────────────
+with tab_igv:
+    st.subheader("IGV.js Genome Browser")
+
+    # Locus input — pre-populated from Low Coverage row click if available
+    _default_locus = st.session_state.get("_igv_locus", "chr20")
+    igv_locus = st.text_input(
+        "Locus",
+        value=_default_locus,
+        placeholder="e.g. chr20:1000000-1010000",
+        key="igv_locus_input",
+    )
+    if igv_locus:
+        st.session_state["_igv_locus"] = igv_locus
+
+    if not _manifest:
+        st.info("Add a manifest file in the sidebar to load BAM/CRAM tracks.")
+    else:
+        # Use only samples currently selected in the sidebar
+        _igv_samples = tuple(s for s in sample_sel if str(s) in _manifest)
+        _missing = [s for s in sample_sel if str(s) not in _manifest]
+        if _missing:
+            st.warning(f"Not in manifest (no track): {', '.join(str(s) for s in _missing)}")
+
+        if not _igv_samples:
+            st.info("No selected samples found in manifest.")
+        else:
+            if st.button("Load IGV", type="primary"):
+                st.session_state["_igv_loaded"] = True
+
+            if st.session_state.get("_igv_loaded"):
+                _token = _gcs_access_token()
+                st.caption(f"Auth token: {'✓ obtained' if _token else '✗ not available'}")
+                tracks = _igv_tracks(_igv_samples, json.dumps(_manifest), oauth_token=_token)
+                component_height = 300 + 110 * len(tracks)
+                components.html(
+                    _igv_html(igv_locus or "chr20", tracks, oauth_token=_token),
+                    height=component_height,
+                    scrolling=False,
+                )
