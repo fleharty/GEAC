@@ -410,24 +410,22 @@ if _reads_active:
         # Locus-inclusion mode: exclude loci that HAVE reads in alt_reads but
         # none pass the filter. Loci with NO reads in alt_reads (e.g. indels,
         # which are not yet written to alt_reads by geac collect) pass through.
+        # Single LEFT JOIN with BOOL_OR: one pass over alt_reads, no correlated subqueries.
+        # ar.sample_id IS NULL  → locus has no alt_reads rows at all (e.g. indels): pass through.
+        # ar.any_passing        → locus has at least one read satisfying the filter: include.
         table_expr = f"""(
             SELECT ab.*
             FROM alt_bases ab
-            WHERE NOT EXISTS (
-                SELECT 1 FROM alt_reads ar
-                WHERE ar.sample_id  = ab.sample_id
-                  AND ar.chrom      = ab.chrom
-                  AND ar.pos        = ab.pos
-                  AND ar.alt_allele = ab.alt_allele
-            )
-            OR EXISTS (
-                SELECT 1 FROM alt_reads ar
-                WHERE ar.sample_id  = ab.sample_id
-                  AND ar.chrom      = ab.chrom
-                  AND ar.pos        = ab.pos
-                  AND ar.alt_allele = ab.alt_allele
-                  AND {_reads_where}
-            )
+            LEFT JOIN (
+                SELECT sample_id, chrom, pos, alt_allele,
+                       BOOL_OR({_reads_where}) AS any_passing
+                FROM alt_reads
+                GROUP BY sample_id, chrom, pos, alt_allele
+            ) ar ON ab.sample_id = ar.sample_id
+                AND ab.chrom     = ar.chrom
+                AND ab.pos       = ar.pos
+                AND ab.alt_allele = ar.alt_allele
+            WHERE ar.sample_id IS NULL OR ar.any_passing
         )"""
 
 # ── IGV integration (sidebar) ─────────────────────────────────────────────────
