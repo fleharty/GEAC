@@ -581,6 +581,16 @@ struct IndelCount {
 /// Decoded indel allele for one read at the anchor position, or None if no indel.
 type IndelAllele = Option<(String, String, VariantType)>; // (alt_allele, ref_allele, variant_type)
 
+/// Compare two indel allele strings treating N (in either string) as a wildcard.
+/// Returns true if the alleles are compatible (same length, every position matches or is N).
+fn indels_compatible(a: &str, b: &str) -> bool {
+    if a == b { return true; }
+    let ab = a.as_bytes();
+    let bb = b.as_bytes();
+    if ab.len() != bb.len() { return false; }
+    ab.iter().zip(bb.iter()).all(|(x, y)| *x == b'N' || *y == b'N' || x == y)
+}
+
 /// Tally indel alleles at a pileup column with overlap detection.
 ///
 /// Groups reads by query name. A name appearing twice means both reads of the
@@ -705,11 +715,18 @@ fn tally_indels(
                         e.overlap_alt_disagree += 1;
                     }
                     (Some((alt1, ref_a1, vt1)), Some((alt2, ref_a2, vt2))) => {
-                        if alt1 == alt2 {
-                            // Same indel: count once with agree.
-                            let e = indels.entry(alt1.clone()).or_insert_with(|| IndelCount {
-                                ref_allele: ref_a1.clone(), alt_allele: alt1.clone(),
-                                variant_type: *vt1, total: 0, fwd: 0, rev: 0,
+                        if indels_compatible(&alt1, &alt2) {
+                            // Same indel (or N-masked equivalent): count once with agree.
+                            // Prefer the allele without N as the canonical key.
+                            let (canon_alt, canon_ref, canon_vt) =
+                                if alt1.contains('N') && !alt2.contains('N') {
+                                    (&alt2, &ref_a2, vt2)
+                                } else {
+                                    (&alt1, &ref_a1, vt1)
+                                };
+                            let e = indels.entry(canon_alt.to_string()).or_insert_with(|| IndelCount {
+                                ref_allele: canon_ref.to_string(), alt_allele: canon_alt.to_string(),
+                                variant_type: *canon_vt, total: 0, fwd: 0, rev: 0,
                                 overlap_alt_agree: 0, overlap_alt_disagree: 0,
                             });
                             e.total += 1;
@@ -850,4 +867,49 @@ pub fn open_bam(input: &Path, reference: &Path) -> Result<bam::IndexedReader> {
         .set_reference(reference)
         .with_context(|| format!("failed to set reference: {}", reference.display()))?;
     Ok(reader)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::indels_compatible;
+
+    // ── indels_compatible ─────────────────────────────────────────────────────
+
+    /// The bug: "GACTT" vs "GACTN" was treated as disagree because N was not
+    /// recognised as a wildcard. This test would fail on the old `alt1 == alt2`
+    /// check and must pass now.
+    #[test]
+    fn n_in_second_allele_is_compatible() {
+        assert!(indels_compatible("GACTT", "GACTN"));
+    }
+
+    #[test]
+    fn n_in_first_allele_is_compatible() {
+        assert!(indels_compatible("GACTN", "GACTT"));
+    }
+
+    #[test]
+    fn n_in_both_alleles_is_compatible() {
+        assert!(indels_compatible("GNCTN", "GACTN"));
+    }
+
+    #[test]
+    fn identical_alleles_are_compatible() {
+        assert!(indels_compatible("GACTT", "GACTT"));
+    }
+
+    #[test]
+    fn different_alleles_are_incompatible() {
+        assert!(!indels_compatible("GACTT", "GACTA"));
+    }
+
+    #[test]
+    fn different_lengths_are_incompatible() {
+        assert!(!indels_compatible("GACTT", "GAC"));
+    }
+
+    #[test]
+    fn all_n_second_is_compatible() {
+        assert!(indels_compatible("GACTT", "NNNNN"));
+    }
 }

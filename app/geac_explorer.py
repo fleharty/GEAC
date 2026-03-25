@@ -104,6 +104,7 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["variant_sel"]        = ["SNV", "insertion", "deletion"]
     st.session_state["vaf_range"]          = (0.0, 1.0)
     st.session_state["min_alt"]            = 1
+    st.session_state["max_alt"]            = 0
     st.session_state["min_fwd_alt"]        = 0
     st.session_state["min_rev_alt"]        = 0
     st.session_state["min_overlap_agree"]   = 0
@@ -167,6 +168,7 @@ variant_sel = st.sidebar.multiselect(
 )
 vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01, key="vaf_range")
 min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, value=1, step=1, key="min_alt")
+max_alt = st.sidebar.number_input("Max alt count (0 = no maximum)", min_value=0, max_value=10000, value=0, step=1, key="max_alt")
 min_fwd_alt = st.sidebar.number_input("Min fwd alt count (0 = no minimum)", min_value=0, max_value=10000, value=0, step=1, key="min_fwd_alt")
 min_rev_alt = st.sidebar.number_input("Min rev alt count (0 = no minimum)", min_value=0, max_value=10000, value=0, step=1, key="min_rev_alt")
 min_overlap_agree    = st.sidebar.number_input("Min overlap alt agree (0 = no minimum)",    min_value=0, max_value=10000, value=0, step=1, key="min_overlap_agree")
@@ -645,6 +647,8 @@ conditions = [
     f"alt_count >= {min_alt}",
     f"alt_count * 1.0 / total_depth BETWEEN {vaf_range[0]} AND {vaf_range[1]}",
 ]
+if max_alt > 0:
+    conditions.append(f"alt_count <= {max_alt}")
 if chrom_sel != "All":
     conditions.append(f"chrom = '{chrom_sel}'")
 if sample_sel:
@@ -912,8 +916,9 @@ if _selected_rows:
 # ── Shared alt_reads join subquery (used by Duplex/Simplex and Reads tabs) ────
 # Joins alt_reads to the current filtered locus set so all reads plots respect
 # the active sidebar filters.  Defined here so both tabs can share it.
+_r_reads_filter = f"WHERE {_reads_where}" if _reads_active else ""
 _r_join = f"""
-    alt_reads ar
+    (SELECT * FROM alt_reads {_r_reads_filter}) ar
     INNER JOIN (
         SELECT DISTINCT sample_id, chrom, pos, alt_allele
         FROM {table_expr}
