@@ -106,8 +106,8 @@ jobs:
           gh release download "${TAG}" --pattern "geac-macos-arm64.tar.gz" --repo "${{ github.repository }}"
           SHA256_MACOS_ARM64=$(sha256sum geac-macos-arm64.tar.gz | awk '{print $1}')
 
-          # Source tarball SHA256
-          gh api repos/${{ github.repository }}/tarball/refs/tags/${TAG} > source.tar.gz
+          # Source tarball SHA256 — must use the exact URL Homebrew will fetch
+          curl -fsSL "https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz" -o source.tar.gz
           SOURCE_SHA256=$(sha256sum source.tar.gz | awk '{print $1}')
 
           # Generate the formula from the template, substituting version and SHA256s
