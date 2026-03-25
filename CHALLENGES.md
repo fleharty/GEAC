@@ -44,6 +44,28 @@ genomic positions. Counting rows (`COUNT(*)`) treated a 100bp bin the same as a
 **Fix:** Added a `bin_n` column to `CoverageRecord` tracking positions per bin.
 All locus-count queries now use `SUM(bin_n)` instead of `COUNT(*)`.
 
+### Filter defaults silently excluding records at startup
+**Symptom:** With no filters active, the "Filtered" Alt records count was
+slightly lower than the "Overall" count (e.g. 299,487 vs 299,669). The
+discrepancy persisted after clearing all filters.
+**Root cause:** Four filter conditions were unconditionally injected into
+every query, even when at their neutral defaults:
+- `alt_count >= 1` — excluded records with `alt_count = 0` (rare but possible)
+- `alt_count * 1.0 / total_depth BETWEEN 0.0 AND 1.0` — excluded records
+  where `total_depth = 0` (VAF → inf) or `alt_count > total_depth` (VAF > 1)
+- `homopolymer_len BETWEEN 0 AND 20` — excluded records with `homopolymer_len > 20`
+- `str_len BETWEEN 0 AND 50` — excluded records with `str_len > 50`
+
+The NULL issue for the repeat columns was identified first and partially fixed
+(wrapping with `IS NULL OR`), but the ceiling truncation was still active. The
+VAF range condition was the next fix, but the repeat ceiling issue persisted
+until a third pass.
+
+**Fix:** Each condition is now only added when the user has actually moved it
+away from its default: `min_alt > 1`, `vaf_range != (0.0, 1.0)`,
+`homopolymer_range != (0, 20)`, `str_len_range != (0, 50)`. The `where`
+clause falls back to `"TRUE"` when no conditions are active.
+
 ### Gene bar chart click-to-drill-down not working
 **Symptom:** Clicking a bar in the "Affected loci per gene" chart appeared to
 trigger a Streamlit rerun, but the detail table never appeared.
