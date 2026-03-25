@@ -121,6 +121,11 @@ workflow run to be cancelled.
 **Fix:** Dropped `macos-x86_64` (and all Linux native builds) from CI entirely —
 only `macos-arm64` is needed for the Homebrew tap.
 
+### Homebrew formula: `#{version}` empty inside `resource` block
+**Symptom:** `brew install` attempted to fetch `v.tar.gz` (version missing from URL).
+**Root cause:** In Homebrew's DSL, `#{version}` inside a `resource` block refers to the *resource's* own version, not the enclosing formula's version. Since the resource has no version set, it stringifies to empty string.
+**Fix:** Changed the resource URL template to use the `FORMULA_VERSION` sed placeholder (`vFORMULA_VERSION.tar.gz`) so CI substitutes the correct version directly, rather than relying on Ruby interpolation at install time.
+
 ### Homebrew tap: `HOMEBREW_TAP_TOKEN` secret not set
 **Symptom:** CI log shows `TAP_TOKEN: ` (blank); `git push` to `homebrew-geac` would fail silently or with auth error.
 **Root cause:** The `HOMEBREW_TAP_TOKEN` secret must be manually created in GitHub repo settings — it is not auto-provisioned like `GITHUB_TOKEN`.
