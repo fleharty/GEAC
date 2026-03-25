@@ -66,6 +66,42 @@ away from its default: `min_alt > 1`, `vaf_range != (0.0, 1.0)`,
 `homopolymer_range != (0, 20)`, `str_len_range != (0, 50)`. The `where`
 clause falls back to `"TRUE"` when no conditions are active.
 
+### VAF distribution charts empty for insertion and deletion
+**Symptom:** After fixing filter defaults (removing the always-on VAF BETWEEN
+condition), the insertion and deletion VAF distribution charts appeared visually
+but showed no bars. SNV worked correctly. Deselecting SNV from the variant type
+filter made insertion/deletion charts render correctly.
+
+**Root cause (first attempt — wrong):** Assumed the three `st.altair_chart(...,
+on_select="rerun")` calls in the same render pass were colliding because all
+used the same Vega-Lite selection name (`"bar_click"`). Fixed by using unique
+names per variant type (`bar_click_SNV`, etc.) — did not resolve the issue.
+
+**Root cause (second attempt — wrong):** Assumed Streamlit only properly
+initialises the first `st.altair_chart(..., on_select="rerun")` call per pass.
+Rewrote to collect all three sub-charts and render as a single `alt.vconcat`
+spec. This broke all three charts instead of just two.
+
+**Root cause (actual):** Removing the always-on `alt_count * 1.0 / total_depth
+BETWEEN 0.0 AND 1.0` filter exposed records where `total_depth = 0` (VAF → inf)
+or `alt_count > total_depth` (VAF > 1.0). These records produce `vaf_bin` values
+outside [0, 1] or non-finite. Altair sanitizes `inf` to `null`; Vega-Lite then
+renders no bar for that datum, making the chart appear empty. Insertion/deletion
+records were more likely to have this edge case than SNV records in the dataset.
+
+**Fix:** Reverted to separate `st.altair_chart` calls; added three guards to the
+VAF distribution query:
+```sql
+AND total_depth > 0
+AND alt_count <= total_depth
+HAVING vaf_bin IS NOT NULL AND vaf_bin >= 0.0
+```
+
+Also fixed `_to_spec96_strat` and `_strat_sbs96_chart` being defined inside
+`if not raw.empty:` in the Error Spectrum tab, making them unavailable in the
+Reads tab. Moved both definitions above `_trinuc_available` so they are always
+defined.
+
 ### Gene bar chart click-to-drill-down not working
 **Symptom:** Clicking a bar in the "Affected loci per gene" chart appeared to
 trigger a Streamlit rerun, but the detail table never appeared.
