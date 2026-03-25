@@ -14,7 +14,7 @@ class Geac < Formula
   depends_on "python@3.12"
 
   resource "geac-apps" do
-    url "https://github.com/fleharty/GEAC/archive/refs/tags/v#{version}.tar.gz"
+    url "https://github.com/fleharty/GEAC/archive/refs/tags/vFORMULA_VERSION.tar.gz"
     sha256 "SHA256_SOURCE"
   end
 
