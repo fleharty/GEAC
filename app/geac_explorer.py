@@ -326,38 +326,32 @@ if _has_alt_reads:
 
     if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
         if fs_exclude_mode:
+            # Exclude mode: reads with unknown family_size pass (can't say they're bad)
             _reads_conditions.append(
                 f"(family_size IS NULL OR family_size < {_fs_lo} OR family_size > {_fs_hi})"
             )
         else:
-            _reads_conditions.append(
-                f"(family_size IS NULL OR family_size BETWEEN {_fs_lo} AND {_fs_hi})"
-            )
+            # Include mode: reads with unknown family_size fail (we can't confirm they're good)
+            _reads_conditions.append(f"family_size BETWEEN {_fs_lo} AND {_fs_hi}")
 
     if _dfe_lo > 0 or _dfe_hi < _dfe_max:
         if dfe_exclude_mode:
             _reads_conditions.append(
-                f"(dist_from_read_end IS NULL OR dist_from_read_end < {_dfe_lo} OR dist_from_read_end > {_dfe_hi})"
+                f"(dist_from_read_end < {_dfe_lo} OR dist_from_read_end > {_dfe_hi})"
             )
         else:
-            _reads_conditions.append(
-                f"(dist_from_read_end IS NULL OR dist_from_read_end BETWEEN {_dfe_lo} AND {_dfe_hi})"
-            )
+            _reads_conditions.append(f"dist_from_read_end BETWEEN {_dfe_lo} AND {_dfe_hi}")
 
     if _mq_lo > 0 or _mq_hi < _mq_max:
         if mq_exclude_mode:
             _reads_conditions.append(
-                f"(map_qual IS NULL OR map_qual < {_mq_lo} OR map_qual > {_mq_hi})"
+                f"(map_qual < {_mq_lo} OR map_qual > {_mq_hi})"
             )
         else:
-            _reads_conditions.append(
-                f"(map_qual IS NULL OR map_qual BETWEEN {_mq_lo} AND {_mq_hi})"
-            )
+            _reads_conditions.append(f"map_qual BETWEEN {_mq_lo} AND {_mq_hi}")
 
     if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
-        _reads_conditions.append(
-            f"(insert_size IS NULL OR insert_size BETWEEN {_is_lo} AND {_is_hi})"
-        )
+        _reads_conditions.append(f"insert_size BETWEEN {_is_lo} AND {_is_hi}")
 
     if _reads_conditions:
         if recompute_vaf:
