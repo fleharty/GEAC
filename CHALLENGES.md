@@ -121,6 +121,11 @@ workflow run to be cancelled.
 **Fix:** Dropped `macos-x86_64` (and all Linux native builds) from CI entirely —
 only `macos-arm64` is needed for the Homebrew tap.
 
+### Homebrew formula: SHA256 mismatch on source tarball
+**Symptom:** `brew install` failed with "Resource reports different checksum".
+**Root cause:** CI used `gh api repos/.../tarball/refs/tags/TAG` to download the source tarball for SHA256 computation, but Homebrew fetches from `https://github.com/.../archive/refs/tags/TAG.tar.gz`. GitHub serves slightly different tarballs from these two endpoints, so the SHA256s don't match.
+**Fix:** Changed CI to use plain `curl` against the exact `archive/refs/tags` URL that Homebrew uses. Works now that the repo is public (no auth needed).
+
 ### Homebrew formula: `#{version}` empty inside `resource` block
 **Symptom:** `brew install` attempted to fetch `v.tar.gz` (version missing from URL).
 **Root cause:** In Homebrew's DSL, `#{version}` inside a `resource` block refers to the *resource's* own version, not the enclosing formula's version. Since the resource has no version set, it stringifies to empty string.
