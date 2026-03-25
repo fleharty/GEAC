@@ -91,7 +91,7 @@ _FILTER_KEYS = [
     "min_overlap_agree", "min_overlap_disagree",
     "variant_called_sel", "variant_filter_sel", "on_target_sel",
     "homopolymer_range", "str_len_range", "min_depth", "max_depth",
-    "table_limit_sel",
+    "table_limit_sel", "recompute_vaf",
 ]
 
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
@@ -117,6 +117,7 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["min_depth"]          = 0
     st.session_state["max_depth"]          = 0
     st.session_state["table_limit_sel"]    = 500
+    st.session_state["recompute_vaf"]      = False
     _r_fs_max  = st.session_state.get("_cached_fs_max", 0)
     _r_dfe_max = st.session_state.get("_cached_dfe_max", 300)
     _r_mq_max  = st.session_state.get("_cached_mq_max", 60)
@@ -227,9 +228,15 @@ if _has_alt_reads:
 
     st.sidebar.divider()
     st.sidebar.subheader("Per-read filters")
-    st.sidebar.caption(
-        "When active, alt_count and VAF are re-computed from the reads table "
-        "using only reads that pass these filters. Loci with no passing reads are excluded."
+    recompute_vaf = st.sidebar.checkbox(
+        "Recompute alt count from filtered reads",
+        value=False,
+        key="recompute_vaf",
+        help="When checked, alt_count is re-aggregated from the reads table using only "
+             "reads that pass the filters below. VAF denominator (total_depth) is unchanged — "
+             "so displayed VAF is a lower bound, not the true filtered VAF.\n\n"
+             "When unchecked (default), filters control which loci are visible: loci with "
+             "no passing reads are hidden, but alt_count and VAF reflect all reads.",
     )
 
     if _fs_has_data:
@@ -343,6 +350,18 @@ if _has_alt_reads:
 
     if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
         _reads_conditions.append(f"insert_size BETWEEN {_is_lo} AND {_is_hi}")
+
+    if _reads_conditions:
+        if recompute_vaf:
+            st.sidebar.caption(
+                "Alt count re-aggregated from filtered reads. "
+                "VAF = filtered alt count / total depth (all reads) — a lower bound, not true filtered VAF."
+            )
+        else:
+            st.sidebar.caption(
+                "Loci with no alt reads passing these filters are hidden. "
+                "Alt count and VAF reflect all reads."
+            )
 else:
     family_size_range = (0, 0)
     dist_from_end_range = (0, 0)
@@ -353,28 +372,50 @@ else:
     mq_exclude_mode = False
     _fs_lo = _fs_hi = _dfe_lo = _dfe_hi = _mq_lo = _mq_hi = _is_lo = _is_hi = 0
 
-# When per-read filters are active, redefine table_expr as a JOIN subquery that
-# replaces alt_count with the filtered fragment count. Every downstream query
-# (counts, VAF, plots, IGV, drill-down) automatically sees the re-aggregated values.
+# When per-read filters are active, redefine table_expr as a JOIN subquery.
+# Two modes controlled by the "Recompute alt count from filtered reads" checkbox:
+#
+# recompute_vaf=False (default, locus-inclusion mode):
+#   INNER JOIN keeps only loci that have ≥1 passing read. alt_count and VAF
+#   come from alt_bases unchanged — VAF is always meaningful and consistent.
+#
+# recompute_vaf=True (re-aggregation mode):
+#   alt_count is replaced with the filtered read count. total_depth is unchanged
+#   so displayed VAF = filtered_alt_count / total_depth (a lower bound).
 _reads_active = bool(_reads_conditions)
 if _reads_active:
     _reads_where = " AND ".join(_reads_conditions)
-    table_expr = f"""(
-        SELECT
-            ab.* EXCLUDE (alt_count),
-            ar_agg.filtered_alt_count AS alt_count,
-            ROUND(ab.alt_count * 1.0 / ab.total_depth, 4) AS original_vaf
-        FROM alt_bases ab
-        INNER JOIN (
-            SELECT sample_id, chrom, pos, alt_allele, COUNT(*) AS filtered_alt_count
-            FROM alt_reads
-            WHERE {_reads_where}
-            GROUP BY sample_id, chrom, pos, alt_allele
-        ) ar_agg ON ab.sample_id = ar_agg.sample_id
-                 AND ab.chrom = ar_agg.chrom
-                 AND ab.pos = ar_agg.pos
-                 AND ab.alt_allele = ar_agg.alt_allele
-    )"""
+    if recompute_vaf:
+        table_expr = f"""(
+            SELECT
+                ab.* EXCLUDE (alt_count),
+                ar_agg.filtered_alt_count AS alt_count,
+                ROUND(ab.alt_count * 1.0 / ab.total_depth, 4) AS original_vaf
+            FROM alt_bases ab
+            INNER JOIN (
+                SELECT sample_id, chrom, pos, alt_allele, COUNT(*) AS filtered_alt_count
+                FROM alt_reads
+                WHERE {_reads_where}
+                GROUP BY sample_id, chrom, pos, alt_allele
+            ) ar_agg ON ab.sample_id = ar_agg.sample_id
+                     AND ab.chrom = ar_agg.chrom
+                     AND ab.pos = ar_agg.pos
+                     AND ab.alt_allele = ar_agg.alt_allele
+        )"""
+    else:
+        # Locus-inclusion mode: keep only loci with ≥1 passing read; VAF unchanged.
+        table_expr = f"""(
+            SELECT ab.*
+            FROM alt_bases ab
+            WHERE EXISTS (
+                SELECT 1 FROM alt_reads ar
+                WHERE ar.sample_id  = ab.sample_id
+                  AND ar.chrom      = ab.chrom
+                  AND ar.pos        = ab.pos
+                  AND ar.alt_allele = ab.alt_allele
+                  AND {_reads_where}
+            )
+        )"""
 
 # ── IGV integration (sidebar) ─────────────────────────────────────────────────
 st.sidebar.divider()
