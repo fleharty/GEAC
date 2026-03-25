@@ -978,6 +978,12 @@ _r_join = f"""
 tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort", "Reads", "Duplex/Simplex", "Tumor/Normal", "Panel of Normals"])
 
 with tab1:
+    # Build all three charts first, then render as a single concatenated spec.
+    # Rendering multiple st.altair_chart(..., on_select="rerun") calls in the
+    # same pass causes Streamlit to only properly initialise the first chart;
+    # subsequent charts appear but are visually empty.
+    _vaf_specs   = []   # (vtype, color, sel_name, sub_chart, counts_df)
+
     for vtype, color in [
         ("SNV",       "#4c78a8"),
         ("insertion", "#f58518"),
@@ -985,11 +991,12 @@ with tab1:
     ]:
         counts = con.execute(f"""
             SELECT
-                FLOOR(ROUND(alt_count * 1.0 / total_depth, 4) * 50) / 50.0 AS vaf_bin,
-                FLOOR(ROUND(alt_count * 1.0 / total_depth, 4) * 50) / 50.0 + 0.02 AS vaf_bin_end,
+                FLOOR(ROUND(alt_count * 1.0 / NULLIF(total_depth, 0), 4) * 50) / 50.0 AS vaf_bin,
+                FLOOR(ROUND(alt_count * 1.0 / NULLIF(total_depth, 0), 4) * 50) / 50.0 + 0.02 AS vaf_bin_end,
                 COUNT(*) AS count
             FROM {table_expr}
             WHERE {where} AND variant_type = '{vtype}'
+              AND total_depth > 0
             GROUP BY vaf_bin, vaf_bin_end
             ORDER BY vaf_bin
         """).df()
@@ -1003,7 +1010,7 @@ with tab1:
                 fields=["vaf_bin", "vaf_bin_end"],
                 on="click",
             )
-            chart = (
+            sub_chart = (
                 alt.Chart(counts)
                 .mark_bar(color=color)
                 .encode(
@@ -1018,10 +1025,15 @@ with tab1:
                     ],
                 )
                 .add_params(sel_param)
-                .properties(title=f"{vtype} VAF Distribution", height=300)
+                .properties(title=f"{vtype} VAF Distribution", height=250)
             )
-            event = st.altair_chart(chart, width="stretch", on_select="rerun")
+            _vaf_specs.append((vtype, color, _sel_name, sub_chart, counts))
 
+    if _vaf_specs:
+        _combined_vaf = alt.vconcat(*[s[3] for s in _vaf_specs]).resolve_scale(y="independent")
+        event = st.altair_chart(_combined_vaf, width="stretch", on_select="rerun")
+
+        for vtype, color, _sel_name, _, counts in _vaf_specs:
             pts = (event.selection or {}).get(_sel_name, [])
             if pts:
                 bin_start = pts[0].get("vaf_bin")
