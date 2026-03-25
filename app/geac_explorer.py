@@ -997,8 +997,9 @@ with tab1:
         if counts.empty:
             st.info(f"No {vtype}s in current selection.")
         else:
+            _sel_name = f"bar_click_{vtype}"
             sel_param = alt.selection_point(
-                name="bar_click",
+                name=_sel_name,
                 fields=["vaf_bin", "vaf_bin_end"],
                 on="click",
             )
@@ -1021,7 +1022,7 @@ with tab1:
             )
             event = st.altair_chart(chart, width="stretch", on_select="rerun")
 
-            pts = (event.selection or {}).get("bar_click", [])
+            pts = (event.selection or {}).get(_sel_name, [])
             if pts:
                 bin_start = pts[0].get("vaf_bin")
                 bin_end   = pts[0].get("vaf_bin_end")
@@ -1146,6 +1147,56 @@ with tab2:
         for b5 in "ACGT"
         for b3 in "ACGT"
     ]
+
+    # ── Helpers for stratified SBS96 spectra (used in Error Spectrum and Reads tabs) ──
+    def _to_spec96_strat(raw_df):
+        if raw_df.empty:
+            return None, 0
+        df = raw_df.copy()
+        df["sbs_label"] = df.apply(
+            lambda r: _sbs_label(r["trinuc_context"], r["ref_allele"], r["alt_allele"]),
+            axis=1,
+        )
+        df = df.dropna(subset=["sbs_label"])
+        df["mut_type"] = df["sbs_label"].str.extract(r'\[([A-Z]>[A-Z])\]')[0]
+        agg = df.groupby(["sbs_label", "mut_type"], as_index=False)["count"].sum()
+        full = pd.DataFrame({
+            "sbs_label": _SBS_ORDER,
+            "mut_type":  [lbl[2:5] for lbl in _SBS_ORDER],
+        })
+        s96 = full.merge(agg, on=["sbs_label", "mut_type"], how="left")
+        s96["count"] = s96["count"].fillna(0).astype(int)
+        total = int(s96["count"].sum())
+        s96["fraction"] = s96["count"] / total if total > 0 else 0.0
+        return s96, total
+
+    def _strat_sbs96_chart(spec_df, title):
+        panels = []
+        for _mt in _SBS_MUT_TYPES:
+            _s = spec_df[spec_df["mut_type"] == _mt]
+            _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+            panels.append(
+                alt.Chart(_s)
+                .mark_bar(color=_SBS_COLORS[_mt])
+                .encode(
+                    alt.X("sbs_label:N", sort=_order, title=None,
+                          axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
+                    alt.Y("fraction:Q", title="Fraction",
+                          axis=alt.Axis(format=".3f")),
+                    tooltip=["sbs_label:N",
+                             alt.Tooltip("fraction:Q", format=".3f", title="Fraction")],
+                )
+                .properties(
+                    title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt],
+                                          fontSize=11, fontWeight="bold"),
+                    width=120, height=110,
+                )
+            )
+        return (
+            alt.concat(*panels, columns=3)
+            .resolve_scale(y="shared")
+            .properties(title=alt.TitleParams(title, fontSize=13))
+        )
 
     _trinuc_available = _has_data("trinuc_context")
 
@@ -1732,55 +1783,6 @@ with tab2:
                             )
                             st.dataframe(_pivot, width="stretch", hide_index=True)
 
-            # ── Helpers for stratified spectra ─────────────────────────────────
-            def _to_spec96_strat(raw_df):
-                if raw_df.empty:
-                    return None, 0
-                df = raw_df.copy()
-                df["sbs_label"] = df.apply(
-                    lambda r: _sbs_label(r["trinuc_context"], r["ref_allele"], r["alt_allele"]),
-                    axis=1,
-                )
-                df = df.dropna(subset=["sbs_label"])
-                df["mut_type"] = df["sbs_label"].str.extract(r'\[([A-Z]>[A-Z])\]')[0]
-                agg = df.groupby(["sbs_label", "mut_type"], as_index=False)["count"].sum()
-                full = pd.DataFrame({
-                    "sbs_label": _SBS_ORDER,
-                    "mut_type":  [lbl[2:5] for lbl in _SBS_ORDER],
-                })
-                s96 = full.merge(agg, on=["sbs_label", "mut_type"], how="left")
-                s96["count"] = s96["count"].fillna(0).astype(int)
-                total = int(s96["count"].sum())
-                s96["fraction"] = s96["count"] / total if total > 0 else 0.0
-                return s96, total
-
-            def _strat_sbs96_chart(spec_df, title):
-                panels = []
-                for _mt in _SBS_MUT_TYPES:
-                    _s = spec_df[spec_df["mut_type"] == _mt]
-                    _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
-                    panels.append(
-                        alt.Chart(_s)
-                        .mark_bar(color=_SBS_COLORS[_mt])
-                        .encode(
-                            alt.X("sbs_label:N", sort=_order, title=None,
-                                  axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
-                            alt.Y("fraction:Q", title="Fraction",
-                                  axis=alt.Axis(format=".3f")),
-                            tooltip=["sbs_label:N",
-                                     alt.Tooltip("fraction:Q", format=".3f", title="Fraction")],
-                        )
-                        .properties(
-                            title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt],
-                                                  fontSize=11, fontWeight="bold"),
-                            width=120, height=110,
-                        )
-                    )
-                return (
-                    alt.concat(*panels, columns=3)
-                    .resolve_scale(y="shared")
-                    .properties(title=alt.TitleParams(title, fontSize=13))
-                )
 
             # ── VAF-stratified spectrum ────────────────────────────────────────
             st.divider()
