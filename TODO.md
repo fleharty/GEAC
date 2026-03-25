@@ -550,6 +550,39 @@ WHERE c.frac_mapq0 > 0.3;
 - [ ] Design longitudinal tracking — `run_id` / `run_date` provenance in coverage schema
   to support tracking coverage stability across instrument runs and reagent lots
 
+## Fragmentomics (long-term, low priority)
+
+**Motivation:** Cell-free DNA (cfDNA) derived from tumour cells has distinct fragmentation
+patterns compared to normal cfDNA. Capturing fragment-level features enables nucleosome
+positioning analysis and cancer detection via fragmentation signatures — without requiring
+additional sequencing.
+
+All required infrastructure is already in place: `RefCache` for reference access,
+`insert_size` in the reads schema, and read start/end positions.
+
+### Candidate columns to add to `alt_reads`
+
+| Column | Description | Notes |
+|--------|-------------|-------|
+| `frag_end_motif` | 4 bp sequence at the 5′ cut site (from reference) | Highest-value feature; requires per-fragment reference lookup via `RefCache` |
+| `frag_gc` | GC fraction of the full insert | Computed from reference sequence between fragment start and end |
+| `frag_midpoint` | Genomic centre of the insert | Useful for nucleosome positioning / NDR analysis |
+| `frag_start` | Genomic start coordinate of the fragment | Already derivable from SAM `POS` |
+| `frag_end` | Genomic end coordinate of the fragment | Already derivable from SAM `TLEN` |
+
+### Implementation notes
+
+- `frag_end_motif` requires fetching 4 bases from the reference at the 5′ cut site for each
+  fragment; `RefCache` already handles this efficiently.
+- `frag_gc` requires fetching the full insert sequence from the reference — cost scales with
+  insert size, but typical cfDNA inserts are short (~167 bp).
+- These columns are optional additions to the existing `alt_reads` schema; they do not affect
+  the locus table or any existing analysis.
+
+- [ ] Add `frag_end_motif`, `frag_gc`, `frag_midpoint` to `AltRead` struct in `src/record.rs`
+- [ ] Populate these fields during BAM pileup in `src/bam/mod.rs` using `RefCache`
+- [ ] Add end-motif frequency plot and fragment midpoint distribution to the Reads tab in the Explorer
+
 ## Release roadmap
 
 | Version | Theme | Key deliverables |

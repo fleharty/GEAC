@@ -210,7 +210,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
         }
 
         // ── Indel records ─────────────────────────────────────────────────────
-        let indels = tally_indels(
+        let (indels, indel_read_details) = tally_indels(
             &pileup,
             pos,
             ref_cache.current_seq(),
@@ -218,6 +218,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
             args.include_duplicates,
             args.include_secondary,
             args.include_supplementary,
+            collect_reads,
         );
 
         for (_, indel) in &indels {
@@ -263,6 +264,28 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                 trinuc_context:  None,
             });
         }
+
+        if collect_reads {
+            for (alt_allele, details) in &indel_read_details {
+                for d in details {
+                    read_records.push(AltRead {
+                        sample_id: sample_id.clone(),
+                        chrom: chrom.clone(),
+                        pos,
+                        alt_allele: alt_allele.clone(),
+                        dist_from_read_start: d.qpos as i32,
+                        dist_from_read_end: (d.read_len as i32) - (d.qpos as i32) - 1,
+                        read_length: d.read_len as i32,
+                        ab_count: d.ab_count,
+                        ba_count: d.ba_count,
+                        family_size: d.family_size,
+                        base_qual: d.base_qual as i32,
+                        map_qual: d.map_qual as i32,
+                        insert_size: d.insert_size,
+                    });
+                }
+            }
+        }
     }
 
     reporter.finish(start);
@@ -272,6 +295,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
 // ── Pileup tallying ───────────────────────────────────────────────────────────
 
 /// Per-read detail collected during tallying, used to build AltRead records.
+#[derive(Clone)]
 struct ReadDetail {
     qpos: usize,
     read_len: usize,
@@ -607,9 +631,10 @@ fn tally_indels(
     include_duplicates: bool,
     include_secondary: bool,
     include_supplementary: bool,
-) -> HashMap<String, IndelCount> {
-    // First pass: collect (indel_allele_or_none, is_reverse, is_first_in_pair) per query name.
-    let mut by_qname: HashMap<Vec<u8>, Vec<(IndelAllele, bool, bool)>> = HashMap::new();
+    collect_reads: bool,
+) -> (HashMap<String, IndelCount>, HashMap<String, Vec<ReadDetail>>) {
+    // First pass: collect (indel_allele_or_none, is_reverse, is_first_in_pair, read_detail) per query name.
+    let mut by_qname: HashMap<Vec<u8>, Vec<(IndelAllele, bool, bool, Option<ReadDetail>)>> = HashMap::new();
 
     for alignment in pileup.alignments() {
         if alignment.is_refskip() {
@@ -635,13 +660,13 @@ fn tally_indels(
         let allele: IndelAllele = match alignment.indel() {
             Indel::Ins(len) => {
                 let Some(qpos) = alignment.qpos() else {
-                    by_qname.entry(qname).or_default().push((None, is_reverse, is_first_in_pair));
+                    by_qname.entry(qname).or_default().push((None, is_reverse, is_first_in_pair, None));
                     continue;
                 };
                 let seq = record.seq();
                 let len = len as usize;
                 if qpos + len >= seq.len() {
-                    by_qname.entry(qname).or_default().push((None, is_reverse, is_first_in_pair));
+                    by_qname.entry(qname).or_default().push((None, is_reverse, is_first_in_pair, None));
                     continue;
                 }
                 let inserted: String = (1..=len)
@@ -664,7 +689,7 @@ fn tally_indels(
                     .map(|&b| b as char)
                     .collect();
                 if deleted.len() != len as usize {
-                    by_qname.entry(qname).or_default().push((None, is_reverse, is_first_in_pair));
+                    by_qname.entry(qname).or_default().push((None, is_reverse, is_first_in_pair, None));
                     continue;
                 }
                 Some((format!("-{deleted}"), deleted.clone(), VariantType::Deletion))
@@ -673,15 +698,34 @@ fn tally_indels(
             Indel::None => None,
         };
 
-        by_qname.entry(qname).or_default().push((allele, is_reverse, is_first_in_pair));
+        let detail: Option<ReadDetail> = if collect_reads && allele.is_some() {
+            let qpos = alignment.qpos().unwrap_or(0);
+            let qual = record.qual();
+            let tlen = record.insert_size();
+            Some(ReadDetail {
+                qpos,
+                read_len: record.seq_len(),
+                base_qual: qual.get(qpos).copied().unwrap_or(0),
+                map_qual: record.mapq(),
+                ab_count: aux_i32(&record, b"aD"),
+                ba_count: aux_i32(&record, b"bD"),
+                family_size: aux_i32(&record, b"cD"),
+                insert_size: if tlen == 0 { None } else { Some(tlen.unsigned_abs() as i32) },
+            })
+        } else {
+            None
+        };
+
+        by_qname.entry(qname).or_default().push((allele, is_reverse, is_first_in_pair, detail));
     }
 
     // Second pass: tally with overlap detection.
     let mut indels: HashMap<String, IndelCount> = HashMap::new();
+    let mut indel_details: HashMap<String, Vec<ReadDetail>> = HashMap::new();
 
     for reads in by_qname.values() {
         match reads.as_slice() {
-            [(allele, is_rev, _)] => {
+            [(allele, is_rev, _, detail)] => {
                 // Non-overlapping read
                 if let Some((alt, ref_a, vt)) = allele {
                     let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
@@ -691,20 +735,25 @@ fn tally_indels(
                     });
                     e.total += 1;
                     if *is_rev { e.rev += 1; } else { e.fwd += 1; }
+                    if let Some(d) = detail {
+                        indel_details.entry(alt.clone()).or_default().push(d.clone());
+                    }
                 }
             }
 
-            [(allele1, is_rev1, is_first1), (allele2, is_rev2, _is_first2)] => {
+            [(allele1, is_rev1, is_first1, detail1), (allele2, is_rev2, _is_first2, detail2)] => {
                 // Overlapping fragment — fragment-level counting.
                 // Strand is attributed using R1's orientation (BAM flag 0x40).
                 let r1_is_rev = if *is_first1 { *is_rev1 } else { *is_rev2 };
+                // For read detail, prefer R1 when both reads support the same indel.
+                let r1_detail = if *is_first1 { detail1 } else { detail2 };
 
                 match (allele1, allele2) {
                     (None, None) => {
                         // Neither read has an indel — nothing to tally.
                     }
-                    (Some((alt, ref_a, vt)), None) | (None, Some((alt, ref_a, vt))) => {
-                        // Indel + no indel: alt wins; classify as indel with disagree.
+                    (Some((alt, ref_a, vt)), None) => {
+                        // Indel only in read 1: alt wins; classify as indel with disagree.
                         let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
                             ref_allele: ref_a.clone(), alt_allele: alt.clone(),
                             variant_type: *vt, total: 0, fwd: 0, rev: 0,
@@ -713,6 +762,23 @@ fn tally_indels(
                         e.total += 1;
                         if r1_is_rev { e.rev += 1; } else { e.fwd += 1; }
                         e.overlap_alt_disagree += 1;
+                        if let Some(d) = detail1 {
+                            indel_details.entry(alt.clone()).or_default().push(d.clone());
+                        }
+                    }
+                    (None, Some((alt, ref_a, vt))) => {
+                        // Indel only in read 2: alt wins; classify as indel with disagree.
+                        let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
+                            ref_allele: ref_a.clone(), alt_allele: alt.clone(),
+                            variant_type: *vt, total: 0, fwd: 0, rev: 0,
+                            overlap_alt_agree: 0, overlap_alt_disagree: 0,
+                        });
+                        e.total += 1;
+                        if r1_is_rev { e.rev += 1; } else { e.fwd += 1; }
+                        e.overlap_alt_disagree += 1;
+                        if let Some(d) = detail2 {
+                            indel_details.entry(alt.clone()).or_default().push(d.clone());
+                        }
                     }
                     (Some((alt1, ref_a1, vt1)), Some((alt2, ref_a2, vt2))) => {
                         if indels_compatible(&alt1, &alt2) {
@@ -732,6 +798,9 @@ fn tally_indels(
                             e.total += 1;
                             if r1_is_rev { e.rev += 1; } else { e.fwd += 1; }
                             e.overlap_alt_agree += 1;
+                            if let Some(d) = r1_detail {
+                                indel_details.entry(canon_alt.to_string()).or_default().push(d.clone());
+                            }
                         } else {
                             // Different indels: tally both with disagree (edge case).
                             let e1 = indels.entry(alt1.clone()).or_insert_with(|| IndelCount {
@@ -742,6 +811,9 @@ fn tally_indels(
                             e1.total += 1;
                             if r1_is_rev { e1.rev += 1; } else { e1.fwd += 1; }
                             e1.overlap_alt_disagree += 1;
+                            if let Some(d) = detail1 {
+                                indel_details.entry(alt1.clone()).or_default().push(d.clone());
+                            }
 
                             let e2 = indels.entry(alt2.clone()).or_insert_with(|| IndelCount {
                                 ref_allele: ref_a2.clone(), alt_allele: alt2.clone(),
@@ -751,6 +823,9 @@ fn tally_indels(
                             e2.total += 1;
                             if r1_is_rev { e2.rev += 1; } else { e2.fwd += 1; }
                             e2.overlap_alt_disagree += 1;
+                            if let Some(d) = detail2 {
+                                indel_details.entry(alt2.clone()).or_default().push(d.clone());
+                            }
                         }
                     }
                 }
@@ -758,7 +833,7 @@ fn tally_indels(
 
             _ => {
                 // More than 2 reads with same name — treat as non-overlapping.
-                for (allele, is_rev, _) in reads {
+                for (allele, is_rev, _, detail) in reads {
                     if let Some((alt, ref_a, vt)) = allele {
                         let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
                             ref_allele: ref_a.clone(), alt_allele: alt.clone(),
@@ -767,13 +842,16 @@ fn tally_indels(
                         });
                         e.total += 1;
                         if *is_rev { e.rev += 1; } else { e.fwd += 1; }
+                        if let Some(d) = detail {
+                            indel_details.entry(alt.clone()).or_default().push(d.clone());
+                        }
                     }
                 }
             }
         }
     }
 
-    indels
+    (indels, indel_details)
 }
 
 // ── Reference cache ───────────────────────────────────────────────────────────

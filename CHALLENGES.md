@@ -17,6 +17,24 @@ time and flushes to disk as it goes (`src/writer/parquet_coverage.rs`). The sort
 also dropped — pileup order is already genomic order.
 **Lesson:** For genome-scale outputs, never buffer the full result set in memory.
 
+### `alt_reads` table missing all insertion and deletion records
+**Symptom:** Family size (and other per-read) filters in the Explorer had no visible
+effect on insertion and deletion VAF distributions. Debug output confirmed the
+`alt_reads` table contained zero insertion or deletion rows, only SNVs.
+**Root cause:** `tally_indels()` in `src/bam/mod.rs` returned only a
+`HashMap<String, IndelCount>` (aggregate counts). No `AltRead` records were ever
+pushed for indel-supporting reads. The code that populated `AltRead` records for
+SNVs (using `read_details` from `tally_pileup`) had no equivalent for indels.
+**Fix:** Extended `tally_indels()` to also accept a `collect_reads: bool` parameter
+and return a second `HashMap<String, Vec<ReadDetail>>` keyed by alt allele. In the
+first pass each alignment now also captures a `ReadDetail` (qpos, read length, base
+qual, map qual, fgbio tags, insert size) when `collect_reads` is true and the allele
+is non-None. In the second pass the detail is stored alongside the count increment,
+split by case (single read / agree overlap / disagree overlap / multi-read). The
+caller now iterates `indel_read_details` and pushes one `AltRead` per entry.
+**Lesson:** When adding per-read output for SNVs, explicitly audit whether the same
+path is needed for the indel tally — they are separate code paths.
+
 ### Rust import path: `ReadType` not in scope in submodule
 **Symptom:** Compiler error when `BinAccumulator` in `src/coverage/mod.rs` tried to
 reference `crate::cli::ReadType`.
