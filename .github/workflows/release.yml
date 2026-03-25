@@ -107,8 +107,7 @@ jobs:
           SHA256_MACOS_ARM64=$(sha256sum geac-macos-arm64.tar.gz | awk '{print $1}')
 
           # Source tarball SHA256
-          SOURCE_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
-          curl -fsSL "${SOURCE_URL}" -o source.tar.gz
+          gh api repos/${{ github.repository }}/tarball/refs/tags/${TAG} > source.tar.gz
           SOURCE_SHA256=$(sha256sum source.tar.gz | awk '{print $1}')
 
           # Generate the formula from the template, substituting version and SHA256s
