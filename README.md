@@ -21,25 +21,34 @@ cohort database for efficient SQL queries across thousands of samples.
 
 ## Setup
 
-Requires [Miniforge](https://github.com/conda-forge/miniforge) (or Anaconda) and internet access.
+### Homebrew (macOS arm64 — recommended)
 
 ```bash
-bash scripts/setup.sh
-conda activate geac
-cargo build --release
+brew install fleharty/geac/geac
 ```
 
-The setup script:
-1. Creates the `geac` conda environment with `htslib`, Python dependencies, and Streamlit
-2. Installs conda activate hooks so `LIBRARY_PATH`, `PKG_CONFIG_PATH`, and `RUSTFLAGS`
-   (macOS rpath) are set automatically on `conda activate geac`
-3. Installs or updates Rust via `rustup`
+This installs the `geac` binary plus `geac-explorer` and `geac-coverage-explorer` Streamlit launchers.
 
-After building, optionally add a shell alias so you can run `geac` from anywhere:
+### Docker (linux/amd64 — Terra / cloud)
 
 ```bash
-echo 'alias geac="/path/to/GEAC/target/release/geac"' >> ~/.zshrc
-source ~/.zshrc
+docker pull ghcr.io/fleharty/geac:latest
+```
+
+The Docker image contains only the `geac` binary (no Streamlit). It is intended for running `geac collect` on Terra or other cloud compute platforms.
+
+### Local development (from source)
+
+Requires Rust and htslib:
+
+```bash
+# macOS
+brew install htslib pkg-config
+cargo build --release
+
+# Linux
+# Build htslib from source (see .github/workflows/release.yml for the exact steps)
+cargo build --release
 ```
 
 ## Usage
@@ -261,15 +270,22 @@ WHERE overlap_alt_disagree > overlap_alt_agree;
 
 ## Explorer UI
 
-An interactive Streamlit web app for browsing and visualising alt base data:
+Two interactive Streamlit apps are included:
 
 ```bash
-conda activate geac
-streamlit run app/geac_explorer.py
+geac-explorer            # alt base / cohort explorer
+geac-coverage-explorer   # per-position coverage explorer
 ```
 
-Then open `http://localhost:8501` in your browser. Enter a Parquet or DuckDB
-file path in the text box to load data.
+Both are installed by `brew install fleharty/geac/geac`. Run either command from any directory — Streamlit opens a browser tab automatically. Enter a Parquet or DuckDB file path in the sidebar text box to load data.
+
+For local development, run directly:
+
+```bash
+streamlit run /path/to/GEAC/app/geac_explorer.py
+```
+
+Then open `http://localhost:8501` in your browser.
 
 Features:
 - **Summary statistics** — alt records, samples, total alt bases, mean VAF, mean depth,
@@ -469,8 +485,9 @@ statistics derived from the PoN DuckDB.
 
 ## Docker
 
-Multi-platform images (linux/amd64 + linux/arm64) are built automatically by the GitHub
-Actions release workflow (`.github/workflows/release.yml`) when a `v*.*.*` tag is pushed.
+`linux/amd64` images are built automatically when a `v*.*.*` tag is pushed.
+The image contains only the `geac` binary — it is intended for Terra and other
+cloud compute platforms, not for running the Explorer.
 Images are published to the GitHub Container Registry:
 
 ```
@@ -481,26 +498,19 @@ ghcr.io/fleharty/geac:latest
 ### Pulling the image
 
 ```bash
-podman pull ghcr.io/fleharty/geac:latest
+docker pull ghcr.io/fleharty/geac:latest
 # or a specific version:
-podman pull ghcr.io/fleharty/geac:0.3.2
+docker pull ghcr.io/fleharty/geac:0.3.7
 ```
 
-### Running the Explorer
+### Running geac on Terra
 
-Use the provided `run_explorer.sh` script (requires Podman):
+Set `docker_image` in your WDL inputs to `ghcr.io/fleharty/geac:<version>`.
 
-```bash
-./run_explorer.sh /path/to/data/directory
-```
-
-Then open `http://localhost:8501` in your browser. The data directory is mounted at `/data`
-inside the container — place your `cohort.duckdb` and optional `geac.toml` there.
-
-### Running geac collect / merge directly
+### Running geac locally via Docker
 
 ```bash
-podman run --rm \
+docker run --rm \
     -v /path/to/data:/data \
     ghcr.io/fleharty/geac:latest \
     collect --input /data/sample.bam --reference /data/ref.fa --output /data/sample.parquet \
@@ -509,17 +519,16 @@ podman run --rm \
 
 ### Cutting a release
 
-Releases are gated on changes that require rebuilding `cohort.duckdb` (i.e. Rust / data
-pipeline changes). To release:
-
 ```bash
-# update version = "..." in Cargo.toml
-git add Cargo.toml Cargo.lock && git commit -m "Bump version to 0.X.Y"
+# 1. Bump version in Cargo.toml, commit, push
+# 2. Tag and push:
 git tag v0.X.Y && git push origin v0.X.Y
 ```
 
-The GitHub Actions workflow builds native amd64 and arm64 images and merges them into a
-multi-platform manifest automatically.
+The GitHub Actions workflow will:
+1. Build and push the `linux/amd64` Docker image to ghcr.io
+2. Build a native `macos-arm64` binary and attach it to the GitHub release
+3. Update the Homebrew tap formula automatically
 
 ## WDL / Terra
 
@@ -543,7 +552,7 @@ Three WDL 1.0 workflows are provided in `wdl/`:
 | `reference_fasta_index` | File | `.fai` index |
 | `read_type` | String | `duplex` / `simplex` / `raw` |
 | `pipeline` | String | `fgbio` / `dragen` / `raw` |
-| `docker_image` | String | e.g. `gcr.io/my-project/geac:0.1.0` |
+| `docker_image` | String | e.g. `ghcr.io/fleharty/geac:0.3.7` |
 | `sample_id` | String? | Override sample ID (default: BAM SM tag) |
 | `vcf` | File? | VCF/BCF for variant call annotation |
 | `vcf_index` | File? | `.tbi` or `.csi` index for VCF |
@@ -628,7 +637,7 @@ Output: `pon_evidence_parquet` (File) — `{tumor_stem}.pon_evidence.parquet`.
 ### Running on Terra
 
 1. Import the desired WDL into your Terra workspace.
-2. Set `docker_image` to your pushed GCR image (e.g. `gcr.io/my-project/geac:0.1.0`).
+2. Set `docker_image` to `ghcr.io/fleharty/geac:<version>` (e.g. `ghcr.io/fleharty/geac:0.3.7`).
 3. For `geac_collect.wdl`: link `input_bam`, `input_bam_index`, `reference_fasta`, and
    `reference_fasta_index` to your workspace data table columns; Terra will scatter automatically.
 4. For `geac_cohort.wdl`: provide parallel arrays directly and let the workflow scatter and merge.
@@ -652,11 +661,12 @@ geac merge  →  cohort .duckdb
     normal_evidence   (.normal_evidence.parquet files, optional)
     pon_evidence      (.pon_evidence.parquet files, optional)
 
-streamlit run app/geac_explorer.py  →  interactive browser
+geac-explorer  →  interactive alt base / cohort browser
+geac-coverage-explorer  →  interactive coverage browser
 ```
 
 - **Rust + rust-htslib** for BAM/CRAM pileup processing
 - **Apache Arrow + Parquet** for columnar per-sample storage
 - **DuckDB (bundled)** for cohort-level SQL with no external database server
-- **Streamlit + Altair** for the interactive explorer
-- **conda + bioconda** for the htslib C library dependency
+- **Streamlit + Altair** for the interactive explorers
+- **Homebrew** for macOS installation; **ghcr.io** Docker image for Terra/cloud
