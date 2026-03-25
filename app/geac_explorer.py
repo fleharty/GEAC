@@ -643,10 +643,11 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
 
 
 # ── Filtered query ────────────────────────────────────────────────────────────
-conditions = [
-    f"alt_count >= {min_alt}",
-    f"alt_count * 1.0 / total_depth BETWEEN {vaf_range[0]} AND {vaf_range[1]}",
-]
+conditions = []
+if min_alt > 1:
+    conditions.append(f"alt_count >= {min_alt}")
+if vaf_range != (0.0, 1.0):
+    conditions.append(f"alt_count * 1.0 / total_depth BETWEEN {vaf_range[0]} AND {vaf_range[1]}")
 if max_alt > 0:
     conditions.append(f"alt_count <= {max_alt}")
 if chrom_sel != "All":
@@ -691,10 +692,12 @@ if gene_text.strip() and "gene" in _schema_cols:
     conditions.append(f"gene = '{_gene_escaped}'")
 
 if _repeat_cols_present:
-    conditions.append(f"homopolymer_len BETWEEN {homopolymer_range[0]} AND {homopolymer_range[1]}")
-    conditions.append(f"str_len BETWEEN {str_len_range[0]} AND {str_len_range[1]}")
+    if homopolymer_range != (0, 20):
+        conditions.append(f"(homopolymer_len IS NULL OR homopolymer_len BETWEEN {homopolymer_range[0]} AND {homopolymer_range[1]})")
+    if str_len_range != (0, 50):
+        conditions.append(f"(str_len IS NULL OR str_len BETWEEN {str_len_range[0]} AND {str_len_range[1]})")
 
-where = " AND ".join(conditions)
+where = " AND ".join(conditions) if conditions else "TRUE"
 
 # ── Summary stats display ──────────────────────────────────────────────────────
 fstats = con.execute(f"""
