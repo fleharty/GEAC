@@ -13,7 +13,7 @@ version 1.0
 ## Inputs:
 ##   tumor_parquet  - Locus Parquet from `geac collect` for the tumor sample
 ##   pon_db         - PoN DuckDB from `geac merge` (must contain alt_bases table)
-##   docker_image   - geac Docker image, e.g. ghcr.io/fleharty/geac:0.3.5
+##   docker_image   - geac Docker image, e.g. ghcr.io/fleharty/geac:0.3.7
 ##
 ## Outputs:
 ##   pon_evidence_parquet - PoN evidence Parquet ({stem}.pon_evidence.parquet)

@@ -19,7 +19,7 @@ version 1.0
 ##   include_duplicates    - include PCR/optical duplicate reads (FLAG 0x400); default false
 ##   include_secondary     - include secondary alignments (FLAG 0x100); default false
 ##   include_supplementary - include supplementary alignments (FLAG 0x800); default false
-##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:0.3.5
+##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:0.3.7
 ##
 ## Outputs:
 ##   normal_evidence_parquet - Normal evidence Parquet ({stem}.normal_evidence.parquet)

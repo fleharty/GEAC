@@ -31,7 +31,7 @@ version 1.0
 ##   include_supplementary - include supplementary alignments (FLAG 0x800); default false
 ##   reads_output          - also write per-read detail Parquets and merge into alt_reads table (default false)
 ##   cohort_name           - Base name for the output DuckDB file (default: cohort)
-##   docker_image          - geac Docker image, e.g. gcr.io/my-project/geac:latest
+##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##
 ## Outputs:
 ##   locus_parquets        - Per-sample locus Parquet files from geac collect

@@ -27,8 +27,10 @@ version 1.0
 ##   min_base_qual         - base quality threshold for frac_low_bq (default 20)
 ##   gc_window             - bp window centred on position for GC content (default 100)
 ##   min_depth             - suppress positions with total_depth below this (default 0)
+##   bin_size              - aggregate consecutive positions into bins of this size (default 1 = per-position)
+##   adaptive_depth_threshold - when set, positions below this depth are emitted at single-base resolution
 ##   cohort_name           - base name for the output DuckDB file (default: cohort)
-##   docker_image          - geac Docker image, e.g. gcr.io/my-project/geac:latest
+##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##
 ## Outputs:
 ##   coverage_parquets     - Per-sample coverage Parquet files from geac coverage
@@ -56,6 +58,8 @@ workflow GeacCoverage {
         Int     min_base_qual = 20
         Int     gc_window     = 100
         Int     min_depth     = 0
+        Int     bin_size      = 1
+        Int?    adaptive_depth_threshold
 
         String cohort_name = "cohort"
 
@@ -95,8 +99,10 @@ workflow GeacCoverage {
                 min_map_qual          = min_map_qual,
                 min_base_qual         = min_base_qual,
                 gc_window             = gc_window,
-                min_depth             = min_depth,
-                docker_image          = docker_image,
+                min_depth                 = min_depth,
+                bin_size                  = bin_size,
+                adaptive_depth_threshold  = adaptive_depth_threshold,
+                docker_image              = docker_image,
                 memory_gb             = coverage_memory_gb,
                 disk_gb               = coverage_disk_gb,
                 preemptible           = preemptible,
@@ -140,6 +146,8 @@ task Coverage {
         Int     min_base_qual
         Int     gc_window
         Int     min_depth
+        Int     bin_size
+        Int?    adaptive_depth_threshold
 
         String docker_image
         Int    memory_gb
@@ -163,6 +171,8 @@ task Coverage {
             --min-base-qual    ~{min_base_qual} \
             --gc-window        ~{gc_window} \
             --min-depth        ~{min_depth} \
+            --bin-size         ~{bin_size} \
+            ~{"--adaptive-depth-threshold " + adaptive_depth_threshold} \
             ~{"--sample-id "        + sample_id} \
             ~{"--batch "            + batch} \
             ~{"--targets "          + targets} \

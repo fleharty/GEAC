@@ -11,7 +11,7 @@ version 1.0
 ## Inputs:
 ##   parquets     - Per-sample Parquet files produced by `geac collect`
 ##   cohort_name  - Base name for the output DuckDB file (default: cohort)
-##   docker_image - geac Docker image, e.g. gcr.io/my-project/geac:latest
+##   docker_image - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##   memory_gb    - Memory in GB for the merge task (default: 16)
 ##   disk_gb      - Local disk in GB for the merge task (default: 50)
 ##   preemptible  - Number of preemptible retries (default: 2)
