@@ -499,6 +499,11 @@ manifest_path = st.sidebar.text_input(
     value=_default_manifest,
     help="Tab-separated file with columns: collaborator_sample_id, duplex_output_bam, duplex_output_bam_index, final_annotated_variants",
 )
+target_regions = st.sidebar.text_input(
+    "Target regions (optional)",
+    value=_cfg.get("target_regions", ""),
+    help="Path to a BED or interval list file. When set, it is added as a track in every IGV session.",
+)
 _genome_options = ["hg19", "hg38", "mm10", "mm39", "other"]
 _cfg_genome = _cfg.get("genome_build") or _cfg.get("genome", "hg19")
 if _cfg_genome in _genome_options:
@@ -603,12 +608,18 @@ def launch_igv_session(session_xml: str, bed: str) -> str:
     )
 
 
-def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str) -> str:
+def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str, target_regions: str = "") -> str:
     sample_ids = df["sample_id"].unique().tolist()
     first = df.sort_values(["chrom", "pos"]).iloc[0]
     locus = f"{first['chrom']}:{max(0, int(first['pos']) - 99)}-{int(first['pos']) + 101}"
 
     resources, tracks = [], []
+
+    if target_regions and target_regions.strip():
+        tr = target_regions.strip()
+        resources.append(f'        <Resource path="{tr}" name="Target regions"/>')
+        tracks.append(f'        <Track id="{tr}" name="Target regions" color="0,100,200" height="40" featureVisibilityWindow="-1"/>')
+
     for sid in sample_ids:
         entry = manifest.get(str(sid))
         if entry:
@@ -720,7 +731,7 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
 
         igv_df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
         bed = make_bed(igv_df)
-        session = make_igv_session(igv_df, manifest, genome)
+        session = make_igv_session(igv_df, manifest, genome, target_regions)
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("session.xml", session)

@@ -13,6 +13,7 @@ Supported keys (all optional):
     genome_build     = "hg19"                     # hg19 | hg38 | mm10 | mm39 | other  (preferred)
     genome           = "hg19"                     # alias for genome_build (kept for compatibility)
     auto_launch_igv  = false                      # auto-launch IGV when a session is created
+    target_regions   = "/path/to/targets.bed"     # BED or interval list added as a track in IGV sessions
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ except ImportError:
         tomllib = None  # type: ignore[assignment]
 
 
-_STRING_KEYS = {"data", "manifest", "cosmic", "genome", "genome_build"}
+_STRING_KEYS = {"data", "manifest", "cosmic", "genome", "genome_build", "target_regions"}
 _BOOL_KEYS   = {"auto_launch_igv"}
 _KNOWN_KEYS  = _STRING_KEYS | _BOOL_KEYS
 

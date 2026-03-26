@@ -15,3 +15,6 @@ cosmic = "/path/to/COSMIC_v3.4_SBS_GRCh38.txt"
 
 # Reference genome for IGV sessions: hg19 | hg38 | mm10 | mm39 | other
 genome = "hg38"
+
+# Target region BED or interval list — added as a track in every IGV session (optional)
+# target_regions = "/path/to/targets.bed"
