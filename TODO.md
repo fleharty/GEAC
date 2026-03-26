@@ -75,6 +75,12 @@ Two output files per sample from `geac collect`:
 - [x] Step 6: Update WDL workflows to handle the optional reads Parquet output from `Collect` and pass it to `Merge`
 - [x] Step 7: Explorer — in the position drill-down, JOIN `alt_reads` on `(sample_id, chrom, pos, alt_allele)` to show per-read detail (dist from end, family size, base qual) when reads table is present
 - [x] Step 8: Explorer — sidebar filters for `family_size`, `dist_from_read_end`, and `map_qual` with include/exclude toggles; `alt_count` and `vaf` re-aggregated from reads when filters are active
+- [ ] **Add `is_read1` column to `alt_reads`** — `is_first_in_pair` (BAM flag 0x40) is tracked
+  internally during pileup but never written to `AltRead` or the Parquet schema. Adding it as a
+  boolean column would enable R1/R2-stratified artefact analysis (e.g. R2-biased substitution
+  patterns). Changes needed: `AltRead` struct (`src/record.rs`), Parquet schema
+  (`src/writer/parquet_reads.rs`), and both collection sites in `src/bam/mod.rs` (SNV and indel
+  paths). **Requires re-running `geac collect --reads-output` — warrants a new release.**
 
 ## Intra-sample comparison (read-type)
 
