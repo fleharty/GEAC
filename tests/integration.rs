@@ -3,8 +3,8 @@ mod common;
 use common::{
     assert_geac_success, count_bam_reads, duckdb_count, duckdb_table_exists,
     parquet_count, parquet_query_f32, parquet_query_i32, parquet_query_i64, parquet_query_str,
-    write_bam, write_bed, write_coverage_bam, write_reference, write_reference_with_base,
-    CovRead,
+    write_bam, write_bed, write_coverage_bam, write_paired_bam, write_reference,
+    write_reference_with_base, CovRead,
 };
 use tempfile::TempDir;
 
@@ -859,4 +859,72 @@ fn merge_routes_coverage_parquet_to_coverage_table() {
 
     assert!(duckdb_table_exists(&db, "coverage"), "coverage table not created");
     assert!(duckdb_count(&db, "coverage") > 0,    "coverage table is empty");
+}
+
+// ── fwd/rev alt count read-level semantics ────────────────────────────────────
+
+/// For overlapping pairs where both R1 (forward) and R2 (reverse) carry the alt,
+/// fwd_alt_count and rev_alt_count each equal the number of alt pairs.
+/// This verifies that fwd + rev = 2 * alt_count for standard overlapping pairs,
+/// distinguishing read-level counts from the fragment-level alt_count.
+#[test]
+fn collect_fwd_rev_alt_counts_are_read_level() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 200);
+    // 2 pairs where both R1+R2 carry alt, 8 pairs where both carry ref
+    let bam = write_paired_bam(
+        dir.path(), "paired.bam", "sample1", 200,
+        vec![(50, b'T', 2, 8, 0)],
+        20,
+    );
+    let out = dir.path().join("paired.parquet");
+
+    assert_geac_success(&[
+        "collect",
+        "--input",     bam.to_str().unwrap(),
+        "--reference", fa.to_str().unwrap(),
+        "--output",    out.to_str().unwrap(),
+        "--read-type", "raw",
+        "--pipeline",  "raw",
+    ]);
+
+    assert_eq!(parquet_query_i32(&out, "alt_count",     "pos = 50"), 2,
+        "fragment-level alt count: 2 pairs");
+    assert_eq!(parquet_query_i32(&out, "fwd_alt_count", "pos = 50"), 2,
+        "R1 forward reads carrying alt: 2");
+    assert_eq!(parquet_query_i32(&out, "rev_alt_count", "pos = 50"), 2,
+        "R2 reverse reads carrying alt: 2");
+}
+
+/// For pairs where only R2 carries the alt (R2-only artefact pattern),
+/// fwd_alt_count must be 0 and rev_alt_count must equal the number of such pairs.
+/// Before the fix, rev_alt_count was always 0 because strand was attributed using
+/// R1's orientation for the whole fragment instead of each read's own is_reverse flag.
+#[test]
+fn collect_r2_only_artefact_visible_in_rev_alt_count() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 200);
+    // 2 R2-only alt pairs (R1=ref, R2=alt) + 8 both-ref pairs
+    let bam = write_paired_bam(
+        dir.path(), "r2only.bam", "sample1", 200,
+        vec![(50, b'T', 0, 8, 2)],
+        20,
+    );
+    let out = dir.path().join("r2only.parquet");
+
+    assert_geac_success(&[
+        "collect",
+        "--input",     bam.to_str().unwrap(),
+        "--reference", fa.to_str().unwrap(),
+        "--output",    out.to_str().unwrap(),
+        "--read-type", "raw",
+        "--pipeline",  "raw",
+    ]);
+
+    assert_eq!(parquet_query_i32(&out, "alt_count",     "pos = 50"), 2,
+        "fragment-level alt count: 2 R2-only alt pairs");
+    assert_eq!(parquet_query_i32(&out, "fwd_alt_count", "pos = 50"), 0,
+        "R1 forward reads do not carry alt: fwd_alt_count = 0");
+    assert_eq!(parquet_query_i32(&out, "rev_alt_count", "pos = 50"), 2,
+        "R2 reverse reads carry alt: rev_alt_count = 2");
 }

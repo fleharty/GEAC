@@ -17,6 +17,37 @@ time and flushes to disk as it goes (`src/writer/parquet_coverage.rs`). The sort
 also dropped — pileup order is already genomic order.
 **Lesson:** For genome-scale outputs, never buffer the full result set in memory.
 
+### `fwd_alt_count`/`rev_alt_count` always 0 for reverse-strand reads in standard paired-end data
+**Symptom:** `rev_alt_count` was always 0 for any paired-end BAM processed with the raw
+pipeline. `fwd_alt_count` matched `alt_count`, making strand-bias detection useless for
+overlapping-pair libraries.
+**Root cause:** In `tally_pileup` and `tally_indels`, the overlapping-pair branches derived
+a single `r1_is_rev` flag (from the biological R1's `is_reverse` bit) and used it to
+assign the *entire fragment* to either `fwd` or `rev`. For standard paired-end data (R1
+forward, R2 reverse), `r1_is_rev` is always `false`, so every overlapping pair went to
+`fwd_*` regardless of which read actually carried the alt allele.
+The design intent was: `alt_count`/`ref_count` are fragment-level (deduplicated molecules);
+`fwd_alt_count`/`rev_alt_count` are read-level (each read counted on its own strand). The
+implementation never matched this intent.
+**Fix:** In each overlapping-pair branch of `tally_pileup` (and symmetrically in
+`tally_indels`), replaced `r1_is_rev` with the per-read `is_reverse` flag:
+- N + informative: use `r2.is_reverse`
+- informative + N: use `r1.is_reverse`
+- both agree (alt or ref): **two** increments — one for `r1.is_reverse`, one for `r2.is_reverse`
+- b1=ref, b2=alt: use `r2.is_reverse` (R2 carries the alt)
+- b1=alt, b2=ref: use `r1.is_reverse` (R1 carries the alt)
+- two different alts: `r1.is_reverse` for t1, `r2.is_reverse` for t2
+After the fix, `fwd + rev ≠ total` for overlapping pairs is expected and correct — for
+"both agree alt", `fwd + rev = 2` while `total = 1`. The `r1_is_rev` variable is still
+retained for `fwd_depth`/`rev_depth`, which remain fragment-level.
+**Validation:** The R2-only artefact (`r2_artefact.bam`) is the most compelling check:
+before the fix it showed `fwd_alt_count=2, rev_alt_count=0`; after the fix it correctly
+shows `fwd_alt_count=0, rev_alt_count=2`, directly reflecting that only R2 reads carry
+the alt allele.
+**Lesson:** Fragment-level and read-level tallies require separate strand attribution logic.
+When both concepts live in the same tally function, verify that each increment site uses
+the per-read flag, not a single fragment-derived flag.
+
 ### `alt_reads` table missing all insertion and deletion records
 **Symptom:** Family size (and other per-read) filters in the Explorer had no visible
 effect on insertion and deletion VAF distributions. Debug output confirmed the

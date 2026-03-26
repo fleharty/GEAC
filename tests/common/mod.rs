@@ -239,6 +239,122 @@ pub fn write_bam(
     sorted
 }
 
+/// Per-locus specification for `write_paired_bam`.
+///
+/// Fields: `(alt_pos, alt_base, n_both_alt, n_both_ref, n_r2_only_alt)`
+/// - `n_both_alt`: pairs where both R1 (forward) and R2 (reverse) carry the alt base
+/// - `n_both_ref`: pairs where both reads carry the reference base
+/// - `n_r2_only_alt`: pairs where R1=ref and R2=alt (R2-only artefact pattern)
+pub type PairedLocus = (i64, u8, usize, usize, usize);
+
+/// Write overlapping paired-end reads for testing fwd/rev strand count logic.
+///
+/// Each pair is fully overlapping: R1 and R2 both start at `alt_pos - 10` covering
+/// the variant site. R1 is forward (flag 0x63), R2 is reverse (flag 0x93). Reads
+/// in the same pair share a QNAME so `tally_pileup` treats them as overlapping.
+pub fn write_paired_bam(
+    dir: &Path,
+    filename: &str,
+    sample_id: &str,
+    ref_len: usize,
+    loci: Vec<PairedLocus>,
+    read_len: usize,
+) -> PathBuf {
+    let bam_path = dir.join(filename);
+
+    let mut header = bam::header::Header::new();
+    let mut hd = bam::header::HeaderRecord::new(b"HD");
+    hd.push_tag(b"VN", "1.6");
+    hd.push_tag(b"SO", "coordinate");
+    header.push_record(&hd);
+
+    let mut sq = bam::header::HeaderRecord::new(b"SQ");
+    sq.push_tag(b"SN", "chr1");
+    sq.push_tag(b"LN", ref_len as i32);
+    header.push_record(&sq);
+
+    let mut rg = bam::header::HeaderRecord::new(b"RG");
+    rg.push_tag(b"ID", "rg1");
+    rg.push_tag(b"SM", sample_id);
+    header.push_record(&rg);
+
+    let mut writer = bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
+    let quals = vec![40u8; read_len];
+    let cigar = CigarString(vec![Cigar::Match(read_len as u32)]);
+
+    // R1: paired|proper|mate_rev|first = 0x63
+    // R2: paired|proper|rev|second    = 0x93
+    let r1_flags: u16 = 0x1 | 0x2 | 0x20 | 0x40;
+    let r2_flags: u16 = 0x1 | 0x2 | 0x10 | 0x80;
+
+    for (alt_pos, alt_base, n_both_alt, n_both_ref, n_r2_only_alt) in &loci {
+        let read_start = (alt_pos - 10).max(0);
+        let alt_offset = (alt_pos - read_start) as usize;
+
+        let mut alt_seq = vec![b'A'; read_len];
+        alt_seq[alt_offset] = *alt_base;
+        let ref_seq = vec![b'A'; read_len];
+
+        macro_rules! write_pair {
+            ($label:expr, $r1_seq:expr, $r2_seq:expr) => {{
+                let mut r1 = Record::new();
+                r1.set($label, Some(&cigar), $r1_seq, &quals);
+                r1.set_flags(r1_flags);
+                r1.set_tid(0);
+                r1.set_pos(read_start);
+                r1.set_mapq(60);
+                r1.set_mtid(0);
+                r1.set_mpos(read_start);
+                r1.set_insert_size(read_len as i64);
+                r1.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+                writer.write(&r1).unwrap();
+
+                let mut r2 = Record::new();
+                r2.set($label, Some(&cigar), $r2_seq, &quals);
+                r2.set_flags(r2_flags);
+                r2.set_tid(0);
+                r2.set_pos(read_start);
+                r2.set_mapq(60);
+                r2.set_mtid(0);
+                r2.set_mpos(read_start);
+                r2.set_insert_size(-(read_len as i64));
+                r2.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+                writer.write(&r2).unwrap();
+            }};
+        }
+
+        for i in 0..*n_both_alt {
+            let qname = format!("both_alt_{}_{i}", alt_pos);
+            write_pair!(qname.as_bytes(), &alt_seq, &alt_seq);
+        }
+        for i in 0..*n_both_ref {
+            let qname = format!("both_ref_{}_{i}", alt_pos);
+            write_pair!(qname.as_bytes(), &ref_seq, &ref_seq);
+        }
+        for i in 0..*n_r2_only_alt {
+            let qname = format!("r2_only_{}_{i}", alt_pos);
+            write_pair!(qname.as_bytes(), &ref_seq, &alt_seq);
+        }
+    }
+
+    drop(writer);
+
+    let sorted = dir.join(format!("{}.sorted.bam", filename));
+    let status = std::process::Command::new("samtools")
+        .args(["sort", "-o", sorted.to_str().unwrap(), bam_path.to_str().unwrap()])
+        .status()
+        .expect("samtools sort failed");
+    assert!(status.success(), "samtools sort failed");
+
+    let status = std::process::Command::new("samtools")
+        .args(["index", sorted.to_str().unwrap()])
+        .status()
+        .expect("samtools index failed");
+    assert!(status.success(), "samtools index failed");
+
+    sorted
+}
+
 /// Run `geac` with the given arguments and return the process output.
 pub fn run_geac(args: &[&str]) -> std::process::Output {
     std::process::Command::new(env!("CARGO_BIN_EXE_geac"))
