@@ -2590,8 +2590,8 @@ with tab_reads:
 
         # ── Row 1: Read position bias ──────────────────────────────────────────
         st.subheader("Read position bias")
-        _dfe_ctrl1, _dfe_ctrl2 = st.columns(2)
-        _dfe_color_options = ["All samples (aggregate)", "Sample", "R1/R2"]
+        _dfe_ctrl1, _dfe_ctrl2, _dfe_ctrl3 = st.columns([3, 2, 1])
+        _dfe_color_options = ["All samples (aggregate)", "Sample"]
         if _has_data("batch"):
             _dfe_color_options.append("Batch")
         _dfe_color_by = _dfe_ctrl1.radio(
@@ -2602,9 +2602,9 @@ with tab_reads:
             "Y axis", ["Fraction", "Count"],
             horizontal=True, key="dfe_y_mode",
         )
+        _dfe_by_read = _dfe_ctrl3.checkbox("Show R1/R2", value=False, key="dfe_show_r1r2")
         _dfe_by_sample = _dfe_color_by == "Sample"
         _dfe_by_batch  = _dfe_color_by == "Batch"
-        _dfe_by_read   = _dfe_color_by == "R1/R2"
         _dfe_normalize = _dfe_y_mode == "Fraction"
         _dfe_label_col = (
             "sample_id" if _dfe_by_sample else
@@ -2685,16 +2685,17 @@ with tab_reads:
 
         # ── Row 2: Base qual vs dist from read end scatter ────────────────────
         st.subheader("Mean base quality by cycle")
-        _bq_color_options = ["All samples (aggregate)", "Sample", "R1/R2"]
+        _bq_ctrl1, _bq_ctrl2 = st.columns([4, 1])
+        _bq_color_options = ["All samples (aggregate)", "Sample"]
         if _has_data("batch"):
             _bq_color_options.append("Batch")
-        _bq_color_by = st.radio(
+        _bq_color_by = _bq_ctrl1.radio(
             "Color by", _bq_color_options,
             horizontal=True, key="bq_color_by",
         )
+        _bq_by_read = _bq_ctrl2.checkbox("Show R1/R2", value=False, key="bq_show_r1r2")
         _bq_by_sample = _bq_color_by == "Sample"
         _bq_by_batch  = _bq_color_by == "Batch"
-        _bq_by_read   = _bq_color_by == "R1/R2"
         _bq_label_col = (
             "sample_id" if _bq_by_sample else
             "batch"     if _bq_by_batch  else
