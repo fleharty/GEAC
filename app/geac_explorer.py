@@ -1039,7 +1039,7 @@ _r_join = f"""
 """
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort", "Reads", "Duplex/Simplex", "Tumor/Normal", "Panel of Normals"])
+tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort", "Reads", "Duplex/Simplex", "Tumor/Normal", "Panel of Normals"], key="main_tabs")
 
 with tab1:
     for vtype, color in [
