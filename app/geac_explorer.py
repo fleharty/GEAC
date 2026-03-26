@@ -2602,30 +2602,45 @@ with tab_reads:
             "Y axis", ["Fraction", "Count"],
             horizontal=True, key="dfe_y_mode",
         )
-        _dfe_by_read = _dfe_ctrl3.checkbox("Show R1/R2", value=False, key="dfe_show_r1r2")
-        _dfe_by_sample = _dfe_color_by == "Sample" and not _dfe_by_read
-        _dfe_by_batch  = _dfe_color_by == "Batch" and not _dfe_by_read
+        _dfe_by_read   = _dfe_ctrl3.checkbox("Show R1/R2", value=False, key="dfe_show_r1r2")
+        _dfe_by_sample = _dfe_color_by == "Sample"
+        _dfe_by_batch  = _dfe_color_by == "Batch"
         _dfe_normalize = _dfe_y_mode == "Fraction"
-        _dfe_label_col = (
-            "sample_id" if _dfe_by_sample else
-            "batch"     if _dfe_by_batch  else
-            "read"      if _dfe_by_read   else
-            None
+        _DFE_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
+        _dfe_batch_src = (
+            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr}"
+            f" WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
         )
-        _dfe_source = (
-            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
-            if _dfe_by_batch else _r_join
-        )
-        _dfe_group_expr = (
-            "ab.batch, " if _dfe_by_batch else
-            "read, "     if _dfe_by_read  else
-            f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
-        )
-        _dfe_select_expr = (
-            "ab.batch AS batch, " if _dfe_by_batch else
-            "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END AS read, " if _dfe_by_read else
-            f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
-        )
+        if _dfe_by_batch and _dfe_by_read:
+            _dfe_source      = _dfe_batch_src
+            _dfe_select_expr = f"ab.batch || ' ' || {_DFE_READ_EXPR} AS label, "
+            _dfe_group_expr  = "label, "
+            _dfe_label_col   = "label"
+        elif _dfe_by_sample and _dfe_by_read:
+            _dfe_source      = _r_join
+            _dfe_select_expr = f"ar.sample_id || ' ' || {_DFE_READ_EXPR} AS label, "
+            _dfe_group_expr  = "label, "
+            _dfe_label_col   = "label"
+        elif _dfe_by_read:
+            _dfe_source      = _r_join
+            _dfe_select_expr = f"{_DFE_READ_EXPR} AS read, "
+            _dfe_group_expr  = "read, "
+            _dfe_label_col   = "read"
+        elif _dfe_by_batch:
+            _dfe_source      = _dfe_batch_src
+            _dfe_select_expr = "ab.batch AS batch, "
+            _dfe_group_expr  = "ab.batch, "
+            _dfe_label_col   = "batch"
+        elif _dfe_by_sample:
+            _dfe_source      = _r_join
+            _dfe_select_expr = "ar.sample_id, "
+            _dfe_group_expr  = "ar.sample_id, "
+            _dfe_label_col   = "sample_id"
+        else:
+            _dfe_source      = _r_join
+            _dfe_select_expr = ""
+            _dfe_group_expr  = ""
+            _dfe_label_col   = None
 
         _dfe_df = con.execute(f"""
             SELECT {_dfe_select_expr}ar.cycle, COUNT(*) AS n_reads
@@ -2693,29 +2708,44 @@ with tab_reads:
             "Color by", _bq_color_options,
             horizontal=True, key="bq_color_by",
         )
-        _bq_by_read = _bq_ctrl2.checkbox("Show R1/R2", value=False, key="bq_show_r1r2")
-        _bq_by_sample = _bq_color_by == "Sample" and not _bq_by_read
-        _bq_by_batch  = _bq_color_by == "Batch" and not _bq_by_read
-        _bq_label_col = (
-            "sample_id" if _bq_by_sample else
-            "batch"     if _bq_by_batch  else
-            "read"      if _bq_by_read   else
-            None
+        _bq_by_read   = _bq_ctrl2.checkbox("Show R1/R2", value=False, key="bq_show_r1r2")
+        _bq_by_sample = _bq_color_by == "Sample"
+        _bq_by_batch  = _bq_color_by == "Batch"
+        _BQ_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
+        _bq_batch_src = (
+            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr}"
+            f" WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
         )
-        _bq_source = (
-            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
-            if _bq_by_batch else _r_join
-        )
-        _bq_select_expr = (
-            "ab.batch AS batch, " if _bq_by_batch else
-            "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END AS read, " if _bq_by_read else
-            f"ar.{_bq_label_col}, " if _bq_label_col else ""
-        )
-        _bq_group_expr = (
-            "ab.batch, " if _bq_by_batch else
-            "read, "     if _bq_by_read  else
-            f"ar.{_bq_label_col}, " if _bq_label_col else ""
-        )
+        if _bq_by_batch and _bq_by_read:
+            _bq_source      = _bq_batch_src
+            _bq_select_expr = f"ab.batch || ' ' || {_BQ_READ_EXPR} AS label, "
+            _bq_group_expr  = "label, "
+            _bq_label_col   = "label"
+        elif _bq_by_sample and _bq_by_read:
+            _bq_source      = _r_join
+            _bq_select_expr = f"ar.sample_id || ' ' || {_BQ_READ_EXPR} AS label, "
+            _bq_group_expr  = "label, "
+            _bq_label_col   = "label"
+        elif _bq_by_read:
+            _bq_source      = _r_join
+            _bq_select_expr = f"{_BQ_READ_EXPR} AS read, "
+            _bq_group_expr  = "read, "
+            _bq_label_col   = "read"
+        elif _bq_by_batch:
+            _bq_source      = _bq_batch_src
+            _bq_select_expr = "ab.batch AS batch, "
+            _bq_group_expr  = "ab.batch, "
+            _bq_label_col   = "batch"
+        elif _bq_by_sample:
+            _bq_source      = _r_join
+            _bq_select_expr = "ar.sample_id, "
+            _bq_group_expr  = "ar.sample_id, "
+            _bq_label_col   = "sample_id"
+        else:
+            _bq_source      = _r_join
+            _bq_select_expr = ""
+            _bq_group_expr  = ""
+            _bq_label_col   = None
 
         _bq_df = con.execute(f"""
             SELECT
