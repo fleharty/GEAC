@@ -178,16 +178,35 @@ Creates a DuckDB database with:
 - `samples` — one-row-per-sample summary (n_alt_loci, total_alt_reads, n_positions, etc.)
 - Indices on `(chrom, pos)` and `sample_id` for fast queries
 
-Files are routed automatically by filename suffix — no extra flag is needed:
+**Parquet files** are routed automatically by filename suffix — no extra flag is needed:
 
 | Suffix | Table created |
 |---|---|
 | `.reads.parquet` | `alt_reads` — per-read detail records (from `--reads-output`) |
 | `.normal_evidence.parquet` | `normal_evidence` — per-locus normal pileup evidence (from `geac annotate-normal`) |
 | `.pon_evidence.parquet` | `pon_evidence` — per-locus PoN hit counts and VAFs (from `geac annotate-pon`) |
+| `.coverage.parquet` | `coverage` — per-position coverage records (from `geac coverage`) |
 | anything else | `alt_bases` — standard locus records |
 
 Indices are created on each optional table for efficient joins back to `alt_bases`.
+
+**DuckDB files** (`.duckdb`) can be passed directly alongside or instead of Parquet files.
+Each known data table (`alt_bases`, `alt_reads`, `normal_evidence`, `pon_evidence`,
+`coverage`) is copied from the source database into the output.  Inputs can be freely mixed:
+
+```bash
+# Combine two existing cohort databases
+geac merge --output combined.duckdb cohort_a.duckdb cohort_b.duckdb
+
+# Add new samples from Parquet into an existing database
+geac merge --output updated.duckdb existing_cohort.duckdb new_sample.parquet
+
+# Mix Parquet and DuckDB freely
+geac merge --output cohort.duckdb batch1.duckdb batch2/*.parquet
+```
+
+The `samples` summary table is always rebuilt from the merged `alt_bases` at the end —
+it is never copied from source DuckDB files so counts are always accurate.
 
 The output file must not already exist (use a new path or delete the old file first).
 
@@ -659,11 +678,14 @@ geac collect  →  per-sample .locus.parquet  [+ .reads.parquet with --reads-out
                                  →  .pon_evidence.parquet
 
 geac merge  →  cohort .duckdb
-    alt_bases         (locus Parquets)
-    samples           (one-row-per-sample summary)
+    alt_bases         (locus Parquets or existing .duckdb files)
+    samples           (one-row-per-sample summary, always rebuilt)
     alt_reads         (.reads.parquet files, optional)
     normal_evidence   (.normal_evidence.parquet files, optional)
     pon_evidence      (.pon_evidence.parquet files, optional)
+    coverage          (.coverage.parquet files, optional)
+
+    # inputs can be mixed: Parquet files, .duckdb files, or both
 
 geac-explorer  →  interactive alt base / cohort browser
 geac-coverage-explorer  →  interactive coverage browser
