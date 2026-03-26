@@ -7,7 +7,7 @@ import altair as alt
 import pandas as pd
 from scipy.optimize import nnls
 
-from igv_helpers import query_distinct_samples, per_read_warning_note
+from igv_helpers import query_distinct_samples, per_read_warning_note, insert_size_active_part
 import geac_config
 
 _IS_MIN, _IS_MAX = 20, 500  # insert size slider bounds
@@ -827,6 +827,9 @@ if _reads_active:
     if _mq_lo > 0 or _mq_hi < _mq_max:
         _mode = "excluding" if mq_exclude_mode else "including only"
         _active_parts.append(f"map qual: {_mode} {_mq_lo}–{_mq_hi}")
+    _is_part = insert_size_active_part(_is_lo, _is_hi, _IS_MIN, _IS_MAX)
+    if _is_has_data and _is_part is not None:
+        _active_parts.append(_is_part)
     st.warning(
         f"**Per-read filters active** ({'; '.join(_active_parts)}). "
         f"{per_read_warning_note(recompute_vaf)}"
@@ -3202,12 +3205,13 @@ with tab_duplex:
                 "reveal the true variant signal from the error process."
             )
 
+            _locus_fs_filter = f"AND {_reads_where}" if _reads_active else ""
             _fs_strat_raw = con.execute(f"""
                 WITH locus_fs AS (
                     SELECT sample_id, chrom, pos, alt_allele,
                            MEDIAN(family_size) AS median_fs
                     FROM alt_reads
-                    WHERE family_size IS NOT NULL
+                    WHERE family_size IS NOT NULL {_locus_fs_filter}
                     GROUP BY sample_id, chrom, pos, alt_allele
                 )
                 SELECT

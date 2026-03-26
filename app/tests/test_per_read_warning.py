@@ -18,7 +18,7 @@ import os
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from igv_helpers import per_read_warning_note
+from igv_helpers import per_read_warning_note, insert_size_active_part
 
 # The exact phrase that was always shown before the fix.
 _OLD_HARDCODED_PHRASE = "alt_count and VAF are re-aggregated from reads passing the filter"
@@ -65,3 +65,58 @@ class TestPerReadWarningNote:
     def test_two_modes_return_different_text(self):
         """The two modes must produce distinct messages."""
         assert per_read_warning_note(True) != per_read_warning_note(False)
+
+
+class TestInsertSizeActivePart:
+    """Tests for insert_size_active_part — bug #3 regression.
+
+    The bug: _active_parts in the warning banner never included insert size,
+    so activating only the insert size filter produced "Per-read filters active ()".
+    The fix adds insert_size_active_part() and appends its result when non-None.
+    """
+
+    _MIN, _MAX = 20, 500  # mirrors _IS_MIN, _IS_MAX in geac_explorer.py
+
+    def test_returns_none_at_defaults(self):
+        """At slider defaults no part is emitted — insert size filter is inactive."""
+        assert insert_size_active_part(self._MIN, self._MAX, self._MIN, self._MAX) is None
+
+    def test_returns_part_when_lo_raised(self):
+        """Raising the lower bound makes the filter active."""
+        part = insert_size_active_part(50, self._MAX, self._MIN, self._MAX)
+        assert part is not None
+        assert "insert size" in part
+
+    def test_returns_part_when_hi_lowered(self):
+        """Lowering the upper bound makes the filter active."""
+        part = insert_size_active_part(self._MIN, 400, self._MIN, self._MAX)
+        assert part is not None
+        assert "insert size" in part
+
+    def test_part_contains_bounds(self):
+        """The emitted string should contain the active lo and hi values."""
+        part = insert_size_active_part(50, 400, self._MIN, self._MAX)
+        assert "50" in part
+        assert "400" in part
+
+    def test_buggy_code_would_omit_insert_size_from_banner(self):
+        """Confirm the bug: before the fix, _active_parts never got an insert-size entry.
+
+        Simulate the old code path (no insert_size_active_part call) and the
+        new one side-by-side to document exactly what the fix adds.
+        """
+        # Old code: _active_parts built without any insert size logic
+        old_active_parts = []  # insert size was simply never appended
+
+        # New code: insert_size_active_part is called and appended when non-None
+        new_active_parts = []
+        part = insert_size_active_part(50, 400, self._MIN, self._MAX)
+        if part is not None:
+            new_active_parts.append(part)
+
+        assert not any("insert size" in p for p in old_active_parts), (
+            "Old code should have no insert-size entry (documents the bug)"
+        )
+        assert any("insert size" in p for p in new_active_parts), (
+            "New code must include insert-size entry when filter is active"
+        )

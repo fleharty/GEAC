@@ -144,10 +144,10 @@ Audit document: `docs/per-read-filter-audit.md`.
 - [x] **Warning banner text is wrong in locus-inclusion mode** (bug #2) — the warning always says
   "alt_count and VAF are re-aggregated from reads passing the filter" regardless of whether
   `recompute_vaf` is True or False. In the default locus-inclusion mode they are not re-aggregated.
-- [ ] **Insert size filter missing from warning banner** (bug #3) — `_active_parts` in the warning
+- [x] **Insert size filter missing from warning banner** (bug #3) — `_active_parts` in the warning
   construction omits insert size; activating only the insert size filter produces "Per-read filters
   active ()".
-- [ ] **Family-size stratified spectrum bypasses per-read filters** (bug #4) — the `locus_fs` CTE
+- [x] **Family-size stratified spectrum bypasses per-read filters** (bug #4) — the `locus_fs` CTE
   in the family-size stratified SBS96 spectrum queries `alt_reads` without `_reads_where`, so the
   singleton/multi classification ignores the active per-read filters.
 
