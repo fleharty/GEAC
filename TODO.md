@@ -75,7 +75,7 @@ Two output files per sample from `geac collect`:
 - [x] Step 6: Update WDL workflows to handle the optional reads Parquet output from `Collect` and pass it to `Merge`
 - [x] Step 7: Explorer — in the position drill-down, JOIN `alt_reads` on `(sample_id, chrom, pos, alt_allele)` to show per-read detail (dist from end, family size, base qual) when reads table is present
 - [x] Step 8: Explorer — sidebar filters for `family_size`, `dist_from_read_end`, and `map_qual` with include/exclude toggles; `alt_count` and `vaf` re-aggregated from reads when filters are active
-- [ ] **`alt_reads` schema v2: `is_read1` + `cycle` rename** — bundle two breaking schema changes
+- [x] **`alt_reads` schema v2: `is_read1` + `cycle` rename** — bundle two breaking schema changes
   into a single re-collect:
   - **Add `is_read1`** — `is_first_in_pair` (BAM flag 0x40) is tracked internally during pileup
     but never written to `AltRead`. Adding it as a boolean column enables R1/R2-stratified
@@ -160,7 +160,7 @@ Audit document: `docs/per-read-filter-audit.md`.
   singleton/multi classification ignores the active per-read filters.
 
 **Polish / labelling:**
-- [ ] **"Cycle number" label mismatch** (semantic #6) — bundled into the `alt_reads` schema v2
+- [x] **"Cycle number" label mismatch** (semantic #6) — bundled into the `alt_reads` schema v2
   item above (`is_read1` + `cycle` rename). Renaming `dist_from_read_start` → `cycle` and
   dropping `dist_from_read_end` resolves this at the schema level.
 - [x] **Insert size filter: add exclude mode and document NULL behaviour** (pitfall #11) —

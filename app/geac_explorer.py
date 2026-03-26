@@ -119,15 +119,15 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["table_limit_sel"]    = 500
     st.session_state["recompute_vaf"]      = False
     _r_fs_max  = st.session_state.get("_cached_fs_max", 0)
-    _r_dfe_max = st.session_state.get("_cached_dfe_max", 300)
-    _r_mq_max  = st.session_state.get("_cached_mq_max", 60)
-    st.session_state["family_size_range"]    = (0, _r_fs_max)
-    st.session_state["dist_from_end_range"]  = (0, _r_dfe_max)
-    st.session_state["map_qual_range"]       = (0, _r_mq_max)
+    _r_cycle_max = st.session_state.get("_cached_cycle_max", 300)
+    _r_mq_max    = st.session_state.get("_cached_mq_max", 60)
+    st.session_state["family_size_range"] = (0, _r_fs_max)
+    st.session_state["cycle_range"]       = (1, _r_cycle_max)
+    st.session_state["map_qual_range"]    = (0, _r_mq_max)
     st.session_state["insert_size_range"] = (_IS_MIN, _IS_MAX)
-    st.session_state["fs_exclude_mode"]  = False
-    st.session_state["dfe_exclude_mode"] = False
-    st.session_state["mq_exclude_mode"]  = False
+    st.session_state["fs_exclude_mode"]    = False
+    st.session_state["cycle_exclude_mode"] = False
+    st.session_state["mq_exclude_mode"]    = False
     st.rerun()
 
 chroms = con.execute(f"SELECT DISTINCT chrom FROM {table_expr} ORDER BY chrom").df()["chrom"].tolist()
@@ -212,17 +212,17 @@ if _has_alt_reads:
         _reads_maxes = con.execute("""
             SELECT
                 MAX(family_size),
-                COALESCE(MAX(dist_from_read_end), 300),
+                COALESCE(MAX(cycle), 300),
                 COALESCE(MAX(map_qual), 60),
                 COUNT(insert_size) > 0
             FROM alt_reads
         """).fetchone()
         st.session_state["_cached_fs_max"]     = _reads_maxes[0]   # None if all NULL
-        st.session_state["_cached_dfe_max"]    = int(_reads_maxes[1])
+        st.session_state["_cached_cycle_max"]   = int(_reads_maxes[1])
         st.session_state["_cached_mq_max"]     = int(_reads_maxes[2])
         st.session_state["_cached_is_has_data"] = bool(_reads_maxes[3])
     _fs_max_raw  = st.session_state["_cached_fs_max"]
-    _dfe_max     = st.session_state["_cached_dfe_max"]
+    _cycle_max   = st.session_state["_cached_cycle_max"]
     _mq_max      = st.session_state["_cached_mq_max"]
     _is_has_data = st.session_state["_cached_is_has_data"]
     _fs_has_data = _fs_max_raw is not None
@@ -263,21 +263,21 @@ if _has_alt_reads:
         fs_exclude_mode = False
         st.sidebar.caption("Family size unavailable — BAM has no fgbio cD tag.")
 
-    _dfe_slider_col, _dfe_toggle_col = st.sidebar.columns([3, 1])
-    with _dfe_slider_col:
-        dist_from_end_range = st.slider(
+    _cycle_slider_col, _cycle_toggle_col = st.sidebar.columns([3, 1])
+    with _cycle_slider_col:
+        cycle_range = st.slider(
             "Cycle number",
-            min_value=0, max_value=_dfe_max, value=(0, _dfe_max), step=1,
-            key="dist_from_end_range",
-            help="Filter alt-supporting reads by cycle number (distance from read end). "
-                 "Raise the lower bound to exclude variants clustered at read ends (a common artefact).",
+            min_value=1, max_value=_cycle_max, value=(1, _cycle_max), step=1,
+            key="cycle_range",
+            help="Filter alt-supporting reads by sequencing cycle (1-based position within the read). "
+                 "Lower the upper bound to exclude variants clustered at read ends (a common artefact).",
         )
-    with _dfe_toggle_col:
+    with _cycle_toggle_col:
         st.write("Mode")
-        dfe_exclude_mode = st.toggle(
+        cycle_exclude_mode = st.toggle(
             "Excl.",
-            key="dfe_exclude_mode",
-            help="Off = include only reads within this range. "
+            key="cycle_exclude_mode",
+            help="Off = include only reads within this cycle range. "
                  "On = exclude reads within this range (keep reads outside it).",
         )
 
@@ -337,7 +337,7 @@ if _has_alt_reads:
         is_exclude_mode = False
 
     _fs_lo, _fs_hi = family_size_range
-    _dfe_lo, _dfe_hi = dist_from_end_range
+    _cycle_lo, _cycle_hi = cycle_range
     _mq_lo, _mq_hi = map_qual_range
     _is_lo, _is_hi = insert_size_range
 
@@ -351,13 +351,13 @@ if _has_alt_reads:
             # Include mode: reads with unknown family_size fail (we can't confirm they're good)
             _reads_conditions.append(f"family_size BETWEEN {_fs_lo} AND {_fs_hi}")
 
-    if _dfe_lo > 0 or _dfe_hi < _dfe_max:
-        if dfe_exclude_mode:
+    if _cycle_lo > 1 or _cycle_hi < _cycle_max:
+        if cycle_exclude_mode:
             _reads_conditions.append(
-                f"(dist_from_read_end < {_dfe_lo} OR dist_from_read_end > {_dfe_hi})"
+                f"(cycle < {_cycle_lo} OR cycle > {_cycle_hi})"
             )
         else:
-            _reads_conditions.append(f"dist_from_read_end BETWEEN {_dfe_lo} AND {_dfe_hi}")
+            _reads_conditions.append(f"cycle BETWEEN {_cycle_lo} AND {_cycle_hi}")
 
     if _mq_lo > 0 or _mq_hi < _mq_max:
         if mq_exclude_mode:
@@ -390,14 +390,14 @@ if _has_alt_reads:
             )
 else:
     family_size_range = (0, 0)
-    dist_from_end_range = (0, 0)
+    cycle_range = (1, 1)
     map_qual_range = (0, 0)
     insert_size_range = (0, 0)
     fs_exclude_mode = False
-    dfe_exclude_mode = False
+    cycle_exclude_mode = False
     mq_exclude_mode = False
     is_exclude_mode = False
-    _fs_lo = _fs_hi = _dfe_lo = _dfe_hi = _mq_lo = _mq_hi = _is_lo = _is_hi = 0
+    _fs_lo = _fs_hi = _cycle_lo = _cycle_hi = _mq_lo = _mq_hi = _is_lo = _is_hi = 0
 
 # When per-read filters are active, redefine table_expr as a JOIN subquery.
 # Two modes controlled by the "Recompute alt count from filtered reads" checkbox:
@@ -846,9 +846,9 @@ if _reads_active:
     if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
         _mode = "excluding" if fs_exclude_mode else "including only"
         _active_parts.append(f"family size: {_mode} {_fs_lo}–{_fs_hi}")
-    if _dfe_lo > 0 or _dfe_hi < _dfe_max:
-        _mode = "excluding" if dfe_exclude_mode else "including only"
-        _active_parts.append(f"cycle number: {_mode} {_dfe_lo}–{_dfe_hi}")
+    if _cycle_lo > 1 or _cycle_hi < _cycle_max:
+        _mode = "excluding" if cycle_exclude_mode else "including only"
+        _active_parts.append(f"cycle number: {_mode} {_cycle_lo}–{_cycle_hi}")
     if _mq_lo > 0 or _mq_hi < _mq_max:
         _mode = "excluding" if mq_exclude_mode else "including only"
         _active_parts.append(f"map qual: {_mode} {_mq_lo}–{_mq_hi}")
@@ -966,9 +966,9 @@ if _selected_rows:
             SELECT
                 sample_id,
                 alt_allele,
-                dist_from_read_start,
-                dist_from_read_end,
+                cycle,
                 read_length,
+                is_read1,
                 ab_count,
                 ba_count,
                 family_size,
@@ -988,8 +988,8 @@ if _selected_rows:
                 _reads_df
                 .groupby(["sample_id", "alt_allele"])
                 .agg(
-                    n_reads=("dist_from_read_end", "count"),
-                    median_dist_from_end=("dist_from_read_end", "median"),
+                    n_reads=("cycle", "count"),
+                    median_cycle=("cycle", "median"),
                     median_family_size=("family_size", "median"),
                     min_family_size=("family_size", "min"),
                     max_family_size=("family_size", "max"),
@@ -2609,10 +2609,10 @@ with tab_reads:
         )
 
         _dfe_df = con.execute(f"""
-            SELECT {_dfe_select_expr}ar.dist_from_read_start, COUNT(*) AS n_reads
+            SELECT {_dfe_select_expr}ar.cycle, COUNT(*) AS n_reads
             FROM {_dfe_source}
-            GROUP BY {_dfe_group_expr}ar.dist_from_read_start
-            ORDER BY {_dfe_group_expr}ar.dist_from_read_start
+            GROUP BY {_dfe_group_expr}ar.cycle
+            ORDER BY {_dfe_group_expr}ar.cycle
         """).df()
 
         if _dfe_df.empty:
@@ -2635,11 +2635,11 @@ with tab_reads:
                 _dfe_y_fmt = "d"
 
             _dfe_enc = dict(
-                x=alt.X("dist_from_read_start:Q", title="Cycle (distance from read start)", bin=False),
+                x=alt.X("cycle:Q", title="Cycle (1-based)", bin=False),
                 y=alt.Y(_dfe_y_field, title=_dfe_y_title),
                 tooltip=[
                     *([f"{_dfe_label_col}:N"] if _dfe_label_col else []),
-                    alt.Tooltip("dist_from_read_start:Q", title="Cycle"),
+                    alt.Tooltip("cycle:Q", title="Cycle"),
                     alt.Tooltip(_dfe_y_field, format=_dfe_y_fmt, title=_dfe_y_title),
                 ],
             )
@@ -2695,24 +2695,24 @@ with tab_reads:
 
         _bq_df = con.execute(f"""
             SELECT
-                {_bq_select_expr}ar.dist_from_read_start,
+                {_bq_select_expr}ar.cycle,
                 ROUND(AVG(ar.base_qual), 2) AS mean_base_qual,
                 COUNT(*) AS n_reads
             FROM {_bq_source}
-            GROUP BY {_bq_group_expr}ar.dist_from_read_start
-            ORDER BY {_bq_group_expr}ar.dist_from_read_start
+            GROUP BY {_bq_group_expr}ar.cycle
+            ORDER BY {_bq_group_expr}ar.cycle
         """).df()
 
         if _bq_df.empty:
             st.info("No data.")
         else:
             _bq_enc = dict(
-                x=alt.X("dist_from_read_start:Q", title="Cycle (distance from read start)"),
+                x=alt.X("cycle:Q", title="Cycle (1-based)"),
                 y=alt.Y("mean_base_qual:Q", title="Mean base quality (Phred)",
                         scale=alt.Scale(zero=False)),
                 tooltip=[
                     *([f"{_bq_label_col}:N"] if _bq_label_col else []),
-                    alt.Tooltip("dist_from_read_start:Q", title="Cycle"),
+                    alt.Tooltip("cycle:Q", title="Cycle"),
                     alt.Tooltip("mean_base_qual:Q", format=".1f", title="Mean base qual"),
                     alt.Tooltip("n_reads:Q", title="Reads"),
                 ],

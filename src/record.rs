@@ -244,11 +244,11 @@ pub struct AltRead {
     /// 0-based position
     pub pos: i64,
     pub alt_allele: String,
-    /// 0-based index of the alt base within the read
-    pub dist_from_read_start: i32,
-    /// Distance from the alt base to the end of the read (read_length - dist_from_read_start - 1)
-    pub dist_from_read_end: i32,
+    /// 1-based sequencing cycle (= query position + 1)
+    pub cycle: i32,
     pub read_length: i32,
+    /// true if this read is R1 (BAM flag 0x40), false if R2 or unpaired
+    pub is_read1: bool,
     /// fgbio aD tag: AB (top-strand) raw read count; None if tag absent
     pub ab_count: Option<i32>,
     /// fgbio bD tag: BA (bottom-strand) raw read count; None if tag absent

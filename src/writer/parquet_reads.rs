@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use arrow::array::{ArrayRef, Int32Array, Int64Array, StringArray};
+use arrow::array::{ArrayRef, BooleanArray, Int32Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
@@ -37,10 +37,10 @@ fn alt_read_schema() -> Arc<Schema> {
         Field::new("sample_id",            DataType::Utf8,  false),
         Field::new("chrom",                DataType::Utf8,  false),
         Field::new("pos",                  DataType::Int64, false),
-        Field::new("alt_allele",           DataType::Utf8,  false),
-        Field::new("dist_from_read_start", DataType::Int32, false),
-        Field::new("dist_from_read_end",   DataType::Int32, false),
-        Field::new("read_length",          DataType::Int32, false),
+        Field::new("alt_allele",  DataType::Utf8,    false),
+        Field::new("cycle",       DataType::Int32,   false),
+        Field::new("read_length", DataType::Int32,   false),
+        Field::new("is_read1",    DataType::Boolean, false),
         Field::new("ab_count",             DataType::Int32, true),
         Field::new("ba_count",             DataType::Int32, true),
         Field::new("family_size",          DataType::Int32, true),
@@ -54,10 +54,10 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
     let sample_id: ArrayRef = Arc::new(StringArray::from_iter_values(records.iter().map(|r| r.sample_id.as_str())));
     let chrom:     ArrayRef = Arc::new(StringArray::from_iter_values(records.iter().map(|r| r.chrom.as_str())));
     let pos:       ArrayRef = Arc::new(Int64Array::from_iter_values(records.iter().map(|r| r.pos)));
-    let alt_allele: ArrayRef = Arc::new(StringArray::from_iter_values(records.iter().map(|r| r.alt_allele.as_str())));
-    let dist_from_read_start: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.dist_from_read_start)));
-    let dist_from_read_end:   ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.dist_from_read_end)));
-    let read_length:          ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.read_length)));
+    let alt_allele:  ArrayRef = Arc::new(StringArray::from_iter_values(records.iter().map(|r| r.alt_allele.as_str())));
+    let cycle:       ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.cycle)));
+    let read_length: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.read_length)));
+    let is_read1:    ArrayRef = Arc::new(BooleanArray::from(records.iter().map(|r| r.is_read1).collect::<Vec<_>>()));
     let ab_count:    ArrayRef = Arc::new(Int32Array::from(records.iter().map(|r| r.ab_count).collect::<Vec<_>>()));
     let ba_count:    ArrayRef = Arc::new(Int32Array::from(records.iter().map(|r| r.ba_count).collect::<Vec<_>>()));
     let family_size: ArrayRef = Arc::new(Int32Array::from(records.iter().map(|r| r.family_size).collect::<Vec<_>>()));
@@ -69,7 +69,7 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
         schema,
         vec![
             sample_id, chrom, pos, alt_allele,
-            dist_from_read_start, dist_from_read_end, read_length,
+            cycle, read_length, is_read1,
             ab_count, ba_count, family_size,
             base_qual, map_qual, insert_size,
         ],
