@@ -854,38 +854,7 @@ if total_count == 0:
     st.warning("No records match the current filters.")
     st.stop()
 
-# ── Sticky toolbar ────────────────────────────────────────────────────────────
-# Position: sticky keeps this bar at the top of the viewport as the user scrolls.
-# top: 2.875rem accounts for Streamlit's fixed header bar height.
-# The .sticky-toolbar marker div lets the CSS :has() selector target the correct
-# container wrapper without relying on positional indices.
-st.markdown("""
-<style>
-[data-testid="stVerticalBlockBorderWrapper"]:has(.sticky-toolbar) {
-    position: sticky;
-    top: 2.875rem;
-    z-index: 999;
-    background-color: var(--background-color);
-    border-bottom: 1px solid rgba(49, 51, 63, 0.1);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
-    padding-bottom: 0.25rem;
-}
-</style>
-""", unsafe_allow_html=True)
-
-with st.container():
-    st.markdown('<div class="sticky-toolbar"></div>', unsafe_allow_html=True)
-    _tb_left, _tb_right = st.columns([3, 1])
-    _tb_left.info(f"**{total_count:,}** records match the current filters.")
-    _tbl_limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
-    _tbl_limit_sel = _tb_right.selectbox(
-        "Table rows",
-        _tbl_limit_options,
-        index=1,
-        key="table_limit_sel",
-        help="Limits rows shown in the data table below. Has no effect on plots — they always use the full filtered dataset.",
-    )
-    _tbl_limit = None if _tbl_limit_sel == "All" else int(_tbl_limit_sel)
+st.info(f"**{total_count:,}** records match the current filters.")
 
 _reads_banner = st.empty()
 if _reads_active:
@@ -910,6 +879,15 @@ if _reads_active:
     )
 
 # ── Data table ────────────────────────────────────────────────────────────────
+_tbl_limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
+_tbl_limit_sel = st.selectbox(
+    "Table row limit",
+    _tbl_limit_options,
+    index=1,
+    key="table_limit_sel",
+    help="Limits rows shown in the data table below. Has no effect on plots — they always use the full filtered dataset.",
+)
+_tbl_limit = None if _tbl_limit_sel == "All" else int(_tbl_limit_sel)
 
 df = query_records(limit=_tbl_limit)
 
