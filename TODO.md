@@ -172,6 +172,42 @@ only the records visible in the main table.
   works identically so the root cause is unknown. Investigate when Altair/Streamlit version
   context is clearer.
 
+## Per-read filter fixes (from audit)
+
+Audit document: `docs/per-read-filter-audit.md`.
+
+**Bugs:**
+- [ ] **Re-aggregation COALESCE gives original count instead of 0** (bug #1) — in re-aggregation
+  mode (`recompute_vaf=True`), a SNV locus where ALL reads fail the filter has no row in the
+  `ar_agg` subquery; `COALESCE(NULL, ab.alt_count)` falls back to the original count instead of 0.
+  Fix: use `COUNT(*) FILTER (WHERE ...)` and `COUNT(*) AS has_reads` in a single pass so the code
+  can distinguish "no reads in alt_reads" (indels → preserve original count) from "reads exist but
+  none pass" (SNVs → show 0).
+- [ ] **Warning banner text is wrong in locus-inclusion mode** (bug #2) — the warning always says
+  "alt_count and VAF are re-aggregated from reads passing the filter" regardless of whether
+  `recompute_vaf` is True or False. In the default locus-inclusion mode they are not re-aggregated.
+- [ ] **Insert size filter missing from warning banner** (bug #3) — `_active_parts` in the warning
+  construction omits insert size; activating only the insert size filter produces "Per-read filters
+  active ()".
+- [ ] **Family-size stratified spectrum bypasses per-read filters** (bug #4) — the `locus_fs` CTE
+  in the family-size stratified SBS96 spectrum queries `alt_reads` without `_reads_where`, so the
+  singleton/multi classification ignores the active per-read filters.
+
+**Polish / labelling:**
+- [ ] **"Cycle number" label mismatch** (semantic #6) — the sidebar filter is labelled "Cycle
+  number" but filters `dist_from_read_end`; the Reads tab visualization uses `dist_from_read_start`
+  and is also labelled "cycle". Rename the sidebar filter to "Min distance from read end" to match
+  the artifact-filter intent and avoid confusion with the cycle-position plot.
+- [ ] **Insert size filter: add exclude mode and document NULL behaviour** (pitfall #11) —
+  `insert_size BETWEEN x AND y` silently drops all unpaired reads (`insert_size IS NULL`). Add an
+  exclude-mode toggle (consistent with family size / MAPQ) and add a sidebar caption noting that
+  activating the filter excludes unpaired reads.
+
+**Efficiency:**
+- [ ] **Cache slider bound MAX queries** (efficiency #8) — `_reads_maxes` is computed on every
+  Streamlit rerun from a full `alt_reads` scan. Gate behind a session_state check so it only runs
+  once per session (the database is read-only).
+
 ## Explorer (Streamlit)
 
 - [x] IGV session download — manifest-driven BAM tracks + BED positions zip, capped at 5 samples
