@@ -390,16 +390,26 @@ if _reads_active:
     if recompute_vaf:
         # LEFT JOIN so loci with no rows in alt_reads (e.g. indels) keep their
         # original alt_count rather than being dropped by an INNER JOIN.
+        # A single grouped subquery computes both the filtered count and a
+        # presence flag so we can distinguish two NULL cases:
+        #   ar_agg.has_reads IS NULL  → locus has no alt_reads rows at all (indels)
+        #                               → preserve original alt_count
+        #   ar_agg.has_reads IS TRUE  → locus has reads but none passed the filter
+        #                               → filtered_alt_count = 0
         table_expr = f"""(
             SELECT
                 ab.* EXCLUDE (alt_count),
-                COALESCE(ar_agg.filtered_alt_count, ab.alt_count) AS alt_count,
+                CASE
+                    WHEN ar_agg.has_reads IS NULL THEN ab.alt_count
+                    ELSE COALESCE(ar_agg.filtered_alt_count, 0)
+                END AS alt_count,
                 ROUND(ab.alt_count * 1.0 / ab.total_depth, 4) AS original_vaf
             FROM alt_bases ab
             LEFT JOIN (
-                SELECT sample_id, chrom, pos, alt_allele, COUNT(*) AS filtered_alt_count
+                SELECT sample_id, chrom, pos, alt_allele,
+                       COUNT(*) FILTER (WHERE {_reads_where}) AS filtered_alt_count,
+                       TRUE AS has_reads
                 FROM alt_reads
-                WHERE {_reads_where}
                 GROUP BY sample_id, chrom, pos, alt_allele
             ) ar_agg ON ab.sample_id = ar_agg.sample_id
                      AND ab.chrom = ar_agg.chrom

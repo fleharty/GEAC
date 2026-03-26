@@ -129,7 +129,7 @@ only the records visible in the main table.
 Audit document: `docs/per-read-filter-audit.md`.
 
 **Bugs:**
-- [ ] **Re-aggregation COALESCE gives original count instead of 0** (bug #1) — in re-aggregation
+- [x] **Re-aggregation COALESCE gives original count instead of 0** (bug #1) — in re-aggregation
   mode (`recompute_vaf=True`), a SNV locus where ALL reads fail the filter has no row in the
   `ar_agg` subquery; `COALESCE(NULL, ab.alt_count)` falls back to the original count instead of 0.
   Fix: use `COUNT(*) FILTER (WHERE ...)` and `COUNT(*) AS has_reads` in a single pass so the code
