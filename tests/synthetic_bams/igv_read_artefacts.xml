@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!-- Read artefacts: strand bias (r2_artefact) and end-of-read cycle bias (end_of_read).
      clean_snv is included as a baseline for comparison. -->
-<Session genome="bams/reference.fa" locus="chr1:135-364" version="8">
+<Session genome="bams/reference.fa" locus="chr1:136-365" version="8">
     <Resources>
         <Resource path="bams/clean_snv.bam" type="bam"/>
         <Resource path="bams/r2_artefact.bam" type="bam"/>
