@@ -856,6 +856,7 @@ if total_count == 0:
 
 st.info(f"**{total_count:,}** records match the current filters.")
 
+_reads_banner = st.empty()
 if _reads_active:
     _active_parts = []
     if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
@@ -872,7 +873,7 @@ if _reads_active:
         _active_parts.append(_is_part)
     if read_strand_sel != "All":
         _active_parts.append(read_strand_sel.lower())
-    st.warning(
+    _reads_banner.warning(
         f"**Per-read filters active** ({'; '.join(_active_parts)}). "
         f"{per_read_warning_note(recompute_vaf)}"
     )
