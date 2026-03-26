@@ -170,6 +170,31 @@ One line change.
 active `_reads_where` clause should also be applied. Missing it produces silently incorrect
 results with no error or warning.
 
+### R1/R2 + Sample combined grouping: `KeyError: 'sample_id'`
+**Symptom:** Checking "Show R1/R2" while "Color by = Sample" was selected raised
+`KeyError: 'sample_id'` in the normalization step of the Read position bias and
+Mean base quality by cycle plots.
+**Root cause:** Three separate variables — `_dfe_select_expr` (SQL SELECT), `_dfe_group_expr`
+(SQL GROUP BY), and `_dfe_label_col` (Python column name used for `groupby` and Altair
+color encoding) — were each derived from independent ternary chains that evaluated the
+grouping flags in different priority orders.  With the old "R1/R2 overrides Color by"
+logic, the chains were kept consistent by adding `and not _dfe_by_read` to `_dfe_by_sample`
+and `_dfe_by_batch`.  When that guard was removed to allow combined grouping, the chains
+diverged: `_dfe_label_col` resolved to `"sample_id"` (because `_dfe_by_sample` came first),
+but `_dfe_select_expr` and `_dfe_group_expr` resolved to the R1/R2 read expression (because
+`_dfe_by_read` came first in those chains).  The SQL query therefore returned a `read`
+column, not `sample_id`, and `_dfe_df.groupby("sample_id")` raised a KeyError.
+**Fix:** Replaced all three ternary chains with a single explicit `if/elif` block covering
+all six grouping combinations (batch+read, sample+read, read-only, batch-only, sample-only,
+aggregate).  For the combined cases, a `label` column is built in SQL using string
+concatenation (e.g. `ar.sample_id || ' ' || CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END AS label`)
+and grouped via DuckDB's alias GROUP BY.  All three derived variables are always assigned
+in the same branch, keeping them structurally consistent.
+**Lesson:** When multiple derived variables are computed from the same set of boolean flags
+via independent ternary chains, any change to one chain's priority order silently diverges
+from the others.  Replace parallel ternary chains with a single branching block so each
+case assigns all dependent variables together.
+
 ### Gene bar chart click-to-drill-down not working
 **Symptom:** Clicking a bar in the "Affected loci per gene" chart appeared to
 trigger a Streamlit rerun, but the detail table never appeared.
