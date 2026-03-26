@@ -501,50 +501,58 @@ fn tally_pileup(
                     // N + N: fragment counted in depth but no base tally.
                 } else if b1 == 'N' {
                     // N + informative: tally the informative base.
+                    // fwd/rev is read-level: count the informative read's strand.
                     let t = bases.entry(b2).or_default();
                     t.total += 1;
-                    if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
+                    if r2.is_reverse { t.rev += 1; } else { t.fwd += 1; }
                     push_detail!(b2, r2);
                 } else if b2 == 'N' {
                     // informative + N: tally the informative base.
+                    // fwd/rev is read-level: count the informative read's strand.
                     let t = bases.entry(b1).or_default();
                     t.total += 1;
-                    if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
+                    if r1.is_reverse { t.rev += 1; } else { t.fwd += 1; }
                     push_detail!(b1, r1);
                 } else if b1 == b2 {
                     // Both reads agree on the same base; use R1 for read details.
+                    // fwd/rev is read-level: count each read's strand independently,
+                    // so fwd + rev = 2 for a standard overlapping pair. total = 1.
                     let t = bases.entry(b1).or_default();
                     t.total += 1;
-                    if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
+                    if r1.is_reverse { t.rev += 1; } else { t.fwd += 1; }
+                    if r2.is_reverse { t.rev += 1; } else { t.fwd += 1; }
                     t.overlap_alt_agree += 1;
                     let det = if r1.is_first_in_pair { r1 } else { r2 };
                     push_detail!(b1, det);
                 } else if b1 == ref_base {
                     // b2 is alt, b1 is ref — alt wins; classify as alt.
+                    // fwd/rev is read-level: only the alt-carrying read (r2) counted.
                     let t = bases.entry(b2).or_default();
                     t.total += 1;
-                    if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
+                    if r2.is_reverse { t.rev += 1; } else { t.fwd += 1; }
                     t.overlap_alt_disagree += 1;
                     push_detail!(b2, r2);
                 } else if b2 == ref_base {
                     // b1 is alt, b2 is ref — alt wins; classify as alt.
+                    // fwd/rev is read-level: only the alt-carrying read (r1) counted.
                     let t = bases.entry(b1).or_default();
                     t.total += 1;
-                    if r1_is_rev { t.rev += 1; } else { t.fwd += 1; }
+                    if r1.is_reverse { t.rev += 1; } else { t.fwd += 1; }
                     t.overlap_alt_disagree += 1;
                     push_detail!(b1, r1);
                 } else {
                     // alt₁ + alt₂ — two different non-ref bases; tally both.
                     // Note: sum of base counts will exceed total_depth for this fragment.
+                    // fwd/rev is read-level: each read counted for its own base.
                     let t1 = bases.entry(b1).or_default();
                     t1.total += 1;
-                    if r1_is_rev { t1.rev += 1; } else { t1.fwd += 1; }
+                    if r1.is_reverse { t1.rev += 1; } else { t1.fwd += 1; }
                     t1.overlap_alt_disagree += 1;
                     push_detail!(b1, r1);
 
                     let t2 = bases.entry(b2).or_default();
                     t2.total += 1;
-                    if r1_is_rev { t2.rev += 1; } else { t2.fwd += 1; }
+                    if r2.is_reverse { t2.rev += 1; } else { t2.fwd += 1; }
                     t2.overlap_alt_disagree += 1;
                     push_detail!(b2, r2);
                 }
@@ -746,8 +754,7 @@ fn tally_indels(
 
             [(allele1, is_rev1, is_first1, detail1), (allele2, is_rev2, _is_first2, detail2)] => {
                 // Overlapping fragment — fragment-level counting.
-                // Strand is attributed using R1's orientation (BAM flag 0x40).
-                let r1_is_rev = if *is_first1 { *is_rev1 } else { *is_rev2 };
+                // fwd/rev uses per-read is_rev flags (read-level counts).
                 // For read detail, prefer R1 when both reads support the same indel.
                 let r1_detail = if *is_first1 { detail1 } else { detail2 };
 
@@ -757,13 +764,14 @@ fn tally_indels(
                     }
                     (Some((alt, ref_a, vt)), None) => {
                         // Indel only in read 1: alt wins; classify as indel with disagree.
+                        // fwd/rev is read-level: count the alt-carrying read's strand (read 1).
                         let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
                             ref_allele: ref_a.clone(), alt_allele: alt.clone(),
                             variant_type: *vt, total: 0, fwd: 0, rev: 0,
                             overlap_alt_agree: 0, overlap_alt_disagree: 0,
                         });
                         e.total += 1;
-                        if r1_is_rev { e.rev += 1; } else { e.fwd += 1; }
+                        if *is_rev1 { e.rev += 1; } else { e.fwd += 1; }
                         e.overlap_alt_disagree += 1;
                         if let Some(d) = detail1 {
                             indel_details.entry(alt.clone()).or_default().push(d.clone());
@@ -771,13 +779,14 @@ fn tally_indels(
                     }
                     (None, Some((alt, ref_a, vt))) => {
                         // Indel only in read 2: alt wins; classify as indel with disagree.
+                        // fwd/rev is read-level: count the alt-carrying read's strand (read 2).
                         let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
                             ref_allele: ref_a.clone(), alt_allele: alt.clone(),
                             variant_type: *vt, total: 0, fwd: 0, rev: 0,
                             overlap_alt_agree: 0, overlap_alt_disagree: 0,
                         });
                         e.total += 1;
-                        if r1_is_rev { e.rev += 1; } else { e.fwd += 1; }
+                        if *is_rev2 { e.rev += 1; } else { e.fwd += 1; }
                         e.overlap_alt_disagree += 1;
                         if let Some(d) = detail2 {
                             indel_details.entry(alt.clone()).or_default().push(d.clone());
@@ -786,6 +795,7 @@ fn tally_indels(
                     (Some((alt1, ref_a1, vt1)), Some((alt2, ref_a2, vt2))) => {
                         if indels_compatible(&alt1, &alt2) {
                             // Same indel (or N-masked equivalent): count once with agree.
+                            // fwd/rev is read-level: count each read's strand independently.
                             // Prefer the allele without N as the canonical key.
                             let (canon_alt, canon_ref, canon_vt) =
                                 if alt1.contains('N') && !alt2.contains('N') {
@@ -799,20 +809,22 @@ fn tally_indels(
                                 overlap_alt_agree: 0, overlap_alt_disagree: 0,
                             });
                             e.total += 1;
-                            if r1_is_rev { e.rev += 1; } else { e.fwd += 1; }
+                            if *is_rev1 { e.rev += 1; } else { e.fwd += 1; }
+                            if *is_rev2 { e.rev += 1; } else { e.fwd += 1; }
                             e.overlap_alt_agree += 1;
                             if let Some(d) = r1_detail {
                                 indel_details.entry(canon_alt.to_string()).or_default().push(d.clone());
                             }
                         } else {
                             // Different indels: tally both with disagree (edge case).
+                            // fwd/rev is read-level: each read counted for its own indel.
                             let e1 = indels.entry(alt1.clone()).or_insert_with(|| IndelCount {
                                 ref_allele: ref_a1.clone(), alt_allele: alt1.clone(),
                                 variant_type: *vt1, total: 0, fwd: 0, rev: 0,
                                 overlap_alt_agree: 0, overlap_alt_disagree: 0,
                             });
                             e1.total += 1;
-                            if r1_is_rev { e1.rev += 1; } else { e1.fwd += 1; }
+                            if *is_rev1 { e1.rev += 1; } else { e1.fwd += 1; }
                             e1.overlap_alt_disagree += 1;
                             if let Some(d) = detail1 {
                                 indel_details.entry(alt1.clone()).or_default().push(d.clone());
@@ -824,7 +836,7 @@ fn tally_indels(
                                 overlap_alt_agree: 0, overlap_alt_disagree: 0,
                             });
                             e2.total += 1;
-                            if r1_is_rev { e2.rev += 1; } else { e2.fwd += 1; }
+                            if *is_rev2 { e2.rev += 1; } else { e2.fwd += 1; }
                             e2.overlap_alt_disagree += 1;
                             if let Some(d) = detail2 {
                                 indel_details.entry(alt2.clone()).or_default().push(d.clone());
