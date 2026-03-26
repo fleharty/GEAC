@@ -128,6 +128,7 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["fs_exclude_mode"]    = False
     st.session_state["cycle_exclude_mode"] = False
     st.session_state["mq_exclude_mode"]    = False
+    st.session_state["read_strand_sel"]    = "All"
     st.rerun()
 
 chroms = con.execute(f"SELECT DISTINCT chrom FROM {table_expr} ORDER BY chrom").df()["chrom"].tolist()
@@ -336,6 +337,14 @@ if _has_alt_reads:
         insert_size_range = (_IS_MIN, _IS_MAX)
         is_exclude_mode = False
 
+    read_strand_sel = st.sidebar.radio(
+        "Read",
+        ["All", "R1 only", "R2 only"],
+        horizontal=True,
+        key="read_strand_sel",
+        help="Filter to R1 reads (BAM flag 0x40 set), R2 reads, or all reads.",
+    )
+
     _fs_lo, _fs_hi = family_size_range
     _cycle_lo, _cycle_hi = cycle_range
     _mq_lo, _mq_hi = map_qual_range
@@ -377,6 +386,11 @@ if _has_alt_reads:
             # Include mode: unpaired reads (insert_size IS NULL) are excluded
             _reads_conditions.append(f"insert_size BETWEEN {_is_lo} AND {_is_hi}")
 
+    if read_strand_sel == "R1 only":
+        _reads_conditions.append("is_read1 = true")
+    elif read_strand_sel == "R2 only":
+        _reads_conditions.append("is_read1 = false")
+
     if _reads_conditions:
         if recompute_vaf:
             st.sidebar.caption(
@@ -397,6 +411,7 @@ else:
     cycle_exclude_mode = False
     mq_exclude_mode = False
     is_exclude_mode = False
+    read_strand_sel = "All"
     _fs_lo = _fs_hi = _cycle_lo = _cycle_hi = _mq_lo = _mq_hi = _is_lo = _is_hi = 0
 
 # When per-read filters are active, redefine table_expr as a JOIN subquery.
@@ -855,6 +870,8 @@ if _reads_active:
     _is_part = insert_size_active_part(_is_lo, _is_hi, _IS_MIN, _IS_MAX, is_exclude_mode)
     if _is_has_data and _is_part is not None:
         _active_parts.append(_is_part)
+    if read_strand_sel != "All":
+        _active_parts.append(read_strand_sel.lower())
     st.warning(
         f"**Per-read filters active** ({'; '.join(_active_parts)}). "
         f"{per_read_warning_note(recompute_vaf)}"
@@ -2573,7 +2590,7 @@ with tab_reads:
         # ── Row 1: Read position bias ──────────────────────────────────────────
         st.subheader("Read position bias")
         _dfe_ctrl1, _dfe_ctrl2 = st.columns(2)
-        _dfe_color_options = ["All samples (aggregate)", "Sample"]
+        _dfe_color_options = ["All samples (aggregate)", "Sample", "R1/R2"]
         if _has_data("batch"):
             _dfe_color_options.append("Batch")
         _dfe_color_by = _dfe_ctrl1.radio(
@@ -2586,25 +2603,26 @@ with tab_reads:
         )
         _dfe_by_sample = _dfe_color_by == "Sample"
         _dfe_by_batch  = _dfe_color_by == "Batch"
+        _dfe_by_read   = _dfe_color_by == "R1/R2"
         _dfe_normalize = _dfe_y_mode == "Fraction"
         _dfe_label_col = (
             "sample_id" if _dfe_by_sample else
             "batch"     if _dfe_by_batch  else
+            "read"      if _dfe_by_read   else
             None
         )
-        _dfe_select = f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
-        _dfe_group  = f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
         _dfe_source = (
             f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
             if _dfe_by_batch else _r_join
         )
-        # For batch, group col is on the joined table
         _dfe_group_expr = (
             "ab.batch, " if _dfe_by_batch else
+            "read, "     if _dfe_by_read  else
             f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
         )
         _dfe_select_expr = (
             "ab.batch AS batch, " if _dfe_by_batch else
+            "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END AS read, " if _dfe_by_read else
             f"ar.{_dfe_label_col}, " if _dfe_label_col else ""
         )
 
@@ -2666,7 +2684,7 @@ with tab_reads:
 
         # ── Row 2: Base qual vs dist from read end scatter ────────────────────
         st.subheader("Mean base quality by cycle")
-        _bq_color_options = ["All samples (aggregate)", "Sample"]
+        _bq_color_options = ["All samples (aggregate)", "Sample", "R1/R2"]
         if _has_data("batch"):
             _bq_color_options.append("Batch")
         _bq_color_by = st.radio(
@@ -2675,9 +2693,11 @@ with tab_reads:
         )
         _bq_by_sample = _bq_color_by == "Sample"
         _bq_by_batch  = _bq_color_by == "Batch"
+        _bq_by_read   = _bq_color_by == "R1/R2"
         _bq_label_col = (
             "sample_id" if _bq_by_sample else
             "batch"     if _bq_by_batch  else
+            "read"      if _bq_by_read   else
             None
         )
         _bq_source = (
@@ -2686,10 +2706,12 @@ with tab_reads:
         )
         _bq_select_expr = (
             "ab.batch AS batch, " if _bq_by_batch else
+            "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END AS read, " if _bq_by_read else
             f"ar.{_bq_label_col}, " if _bq_label_col else ""
         )
         _bq_group_expr = (
             "ab.batch, " if _bq_by_batch else
+            "read, "     if _bq_by_read  else
             f"ar.{_bq_label_col}, " if _bq_label_col else ""
         )
 
