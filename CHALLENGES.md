@@ -51,6 +51,26 @@ the match non-unique.
 
 ---
 
+## DuckDB Query Engine
+
+### Internal assertion: `inequal types (BIGINT != VARCHAR)` on duplicate complex subquery
+**Symptom:** The "Cohort artefact vs rare variant: family size comparison" section threw
+a DuckDB `InternalException: INTERNAL Error: Failed to bind column reference "pos" …
+inequal types (BIGINT != VARCHAR)` at runtime, even though both `alt_bases.pos` and
+`alt_reads.pos` are declared `Int64` in the Parquet schema.
+**Root cause:** The same complex `table_expr` subquery (which itself contained an inner
+JOIN to `alt_reads`) was inlined verbatim twice in the same `WITH` block — once for
+`locus_counts` and once for the `_filt` inner join. DuckDB's binder failed to reconcile
+column types across the two independently expanded copies of the subquery, producing a
+spurious type-mismatch assertion.
+**Fix:** Materialized `table_expr` into a single leading CTE (`_base`) that is referenced
+by name in both `locus_counts` and `_filt`. Also added `CAST(pos AS BIGINT)` in `_base`
+to pin the join-key type unambiguously, regardless of what the source expression reports.
+**Lesson:** Never inline the same complex subquery expression more than once in a `WITH`
+block. Assign it a named CTE so the engine resolves types once and reuses.
+
+---
+
 ## Python / Streamlit Explorer
 
 ### Depth distribution overrepresented low-depth bins
@@ -119,6 +139,36 @@ Also fixed `_to_spec96_strat` and `_strat_sbs96_chart` being defined inside
 `if not raw.empty:` in the Error Spectrum tab, making them unavailable in the
 Reads tab. Moved both definitions above `_trinuc_available` so they are always
 defined.
+
+### Re-aggregation mode: COALESCE couldn't distinguish "no reads" from "no reads passing filter"
+**Symptom:** In `recompute_vaf=True` mode, loci where every read failed the per-read filter
+showed the original (unfiltered) `alt_count` instead of 0.
+**Root cause:** The LEFT JOIN to `alt_reads` used `COALESCE(filtered_alt_count, 0)` where
+`filtered_alt_count = COUNT(*) FILTER (WHERE <filter>)`. When all reads fail the filter,
+`filtered_alt_count` is 0 and the COALESCE correctly returns 0 — but when the locus has
+*no rows at all* in `alt_reads` (e.g. indels, which were not yet collected), the LEFT JOIN
+produces NULL for `filtered_alt_count` and the COALESCE also returns 0, which is wrong —
+the original `alt_count` should be preserved. The two cases were indistinguishable.
+**Fix:** Added a sentinel column `TRUE AS has_reads` to the `alt_reads` aggregate subquery.
+The outer CASE now branches on `ar_agg.has_reads IS NULL` (no rows → preserve original
+`alt_count`) vs `has_reads IS TRUE` (rows exist → use `COALESCE(filtered_alt_count, 0)`).
+**Lesson:** A LEFT JOIN that aggregates with `COUNT(*) FILTER` cannot distinguish "no rows
+joined" from "rows joined but none passed" via the count alone. A sentinel boolean column
+in the aggregate is needed to distinguish the two cases.
+
+### Family-size stratified spectrum silently bypassed per-read filters
+**Symptom:** The family-size stratified SBS96 spectrum (singleton vs multi-member) in the
+Reads tab classified loci using all reads regardless of the active per-read filter. Setting
+a family-size filter (e.g. `family_size >= 2`) did not change the singleton/multi
+classification even though it changed all other per-read plots.
+**Root cause:** The `locus_fs` CTE queried `alt_reads` with `WHERE family_size IS NOT NULL`
+but did not apply `_reads_where`. The per-read filter was threaded through every other
+query in the Reads tab but was missed in this CTE.
+**Fix:** Appended `AND {_reads_where}` to the `locus_fs` CTE when `_reads_active` is True.
+One line change.
+**Lesson:** When adding a new CTE that queries `alt_reads`, explicitly check whether the
+active `_reads_where` clause should also be applied. Missing it produces silently incorrect
+results with no error or warning.
 
 ### Gene bar chart click-to-drill-down not working
 **Symptom:** Clicking a bar in the "Affected loci per gene" chart appeared to
