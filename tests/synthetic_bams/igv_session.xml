@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<Session genome="bams/reference.fa" locus="chr1:136-364" version="8">
+    <Resources>
+        <Resource path="bams/clean_snv.bam" type="bam"/>
+        <Resource path="bams/germline_snv.bam" type="bam"/>
+        <Resource path="bams/r2_artefact.bam" type="bam"/>
+        <Resource path="bams/end_of_read.bam" type="bam"/>
+        <Resource path="bams/low_mapq.bam" type="bam"/>
+        <Resource path="bams/short_insert.bam" type="bam"/>
+        <Resource path="bams/singleton_family.bam" type="bam"/>
+    </Resources>
+    <Panel height="226" name="Panel_clean_snv" width="2301">
+        <Track attributeKey="clean_snv.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="clean_snv.bam_coverage" name="clean_snv.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="clean_snv.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="clean_snv.bam" name="clean_snv.bam" visible="true">
+            <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="226" name="Panel_germline_snv" width="2301">
+        <Track attributeKey="germline_snv.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="germline_snv.bam_coverage" name="germline_snv.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="40.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="germline_snv.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="germline_snv.bam" name="germline_snv.bam" visible="true">
+            <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="226" name="Panel_r2_artefact" width="2301">
+        <Track attributeKey="r2_artefact.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="r2_artefact.bam_coverage" name="r2_artefact.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="r2_artefact.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="r2_artefact.bam" name="r2_artefact.bam" visible="true">
+            <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="226" name="Panel_end_of_read" width="2301">
+        <Track attributeKey="end_of_read.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="end_of_read.bam_coverage" name="end_of_read.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="end_of_read.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="end_of_read.bam" name="end_of_read.bam" visible="true">
+            <RenderOptions viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="226" name="Panel_low_mapq" width="2301">
+        <Track attributeKey="low_mapq.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="low_mapq.bam_coverage" name="low_mapq.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="low_mapq.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="low_mapq.bam" name="low_mapq.bam" visible="true">
+            <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="226" name="Panel_short_insert" width="2301">
+        <Track attributeKey="short_insert.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="short_insert.bam_coverage" name="short_insert.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="short_insert.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="short_insert.bam" name="short_insert.bam" visible="true">
+            <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="226" name="Panel_singleton_family" width="2301">
+        <Track attributeKey="singleton_family.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="singleton_family.bam_coverage" name="singleton_family.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="singleton_family.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="singleton_family.bam" name="singleton_family.bam" visible="true">
+            <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="23" name="FeaturePanel" width="2301">
+        <Track attributeKey="Reference sequence" clazz="org.broad.igv.track.SequenceTrack" fontSize="10" id="Reference sequence" name="Reference sequence" sequenceTranslationStrandValue="POSITIVE" shouldShowTranslation="false" visible="true"/>
+    </Panel>
+    <HiddenAttributes>
+        <Attribute name="DATA FILE"/>
+        <Attribute name="DATA TYPE"/>
+        <Attribute name="NAME"/>
+    </HiddenAttributes>
+</Session>
