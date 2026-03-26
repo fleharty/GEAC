@@ -20,7 +20,7 @@ pub enum Command {
     /// Process a single BAM/CRAM file and write alt base records to Parquet
     Collect(CollectArgs),
 
-    /// Merge per-sample Parquet files into a cohort DuckDB database
+    /// Merge per-sample Parquet files or existing DuckDB databases into a cohort DuckDB
     Merge(MergeArgs),
 
     /// Print a per-sample QC summary from one or more Parquet files
@@ -187,7 +187,10 @@ pub struct CohortArgs {
 
 #[derive(Parser, Debug)]
 pub struct MergeArgs {
-    /// Input Parquet files or a glob pattern (e.g. "samples/*.parquet")
+    /// Input files: per-sample Parquet files and/or existing cohort.duckdb databases.
+    /// Parquet files are routed by suffix (.reads.parquet, .coverage.parquet, etc.).
+    /// DuckDB files (.duckdb) are attached and their data tables merged directly.
+    /// Mix and match freely: e.g. new_sample.parquet existing_cohort.duckdb
     #[arg(required = true)]
     pub inputs: Vec<PathBuf>,
 
