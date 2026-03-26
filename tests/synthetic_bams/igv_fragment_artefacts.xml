@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!-- Fragment artefacts: low MAPQ, short insert size, singleton molecule (cD=1).
      clean_snv is included as a baseline for comparison. -->
-<Session genome="bams/reference.fa" locus="chr1:136-364" version="8">
+<Session genome="bams/reference.fa" locus="chr1:135-364" version="8">
     <Resources>
         <Resource path="bams/clean_snv.bam" type="bam"/>
         <Resource path="bams/low_mapq.bam" type="bam"/>
         <Resource path="bams/short_insert.bam" type="bam"/>
         <Resource path="bams/singleton_family.bam" type="bam"/>
     </Resources>
-    <Panel height="226" name="Panel_clean_snv" width="2301">
+    <Panel height="237" name="Panel_clean_snv" width="2592">
         <Track attributeKey="clean_snv.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="clean_snv.bam_coverage" name="clean_snv.bam Coverage" snpThreshold="0.2" visible="true">
             <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
         </Track>
@@ -16,7 +16,7 @@
             <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
         </Track>
     </Panel>
-    <Panel height="226" name="Panel_low_mapq" width="2301">
+    <Panel height="237" name="Panel_low_mapq" width="2592">
         <Track attributeKey="low_mapq.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="low_mapq.bam_coverage" name="low_mapq.bam Coverage" snpThreshold="0.2" visible="true">
             <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
         </Track>
@@ -24,7 +24,7 @@
             <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
         </Track>
     </Panel>
-    <Panel height="226" name="Panel_short_insert" width="2301">
+    <Panel height="237" name="Panel_short_insert" width="2592">
         <Track attributeKey="short_insert.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="short_insert.bam_coverage" name="short_insert.bam Coverage" snpThreshold="0.2" visible="true">
             <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
         </Track>
@@ -32,7 +32,7 @@
             <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
         </Track>
     </Panel>
-    <Panel height="226" name="Panel_singleton_family" width="2301">
+    <Panel height="237" name="Panel_singleton_family" width="2592">
         <Track attributeKey="singleton_family.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="singleton_family.bam_coverage" name="singleton_family.bam Coverage" snpThreshold="0.2" visible="true">
             <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
         </Track>
@@ -40,9 +40,10 @@
             <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
         </Track>
     </Panel>
-    <Panel height="23" name="FeaturePanel" width="2301">
-        <Track attributeKey="Reference sequence" clazz="org.broad.igv.track.SequenceTrack" fontSize="10" id="Reference sequence" name="Reference sequence" sequenceTranslationStrandValue="POSITIVE" shouldShowTranslation="false" visible="true"/>
+    <Panel height="454" name="FeaturePanel" width="2592">
+        <Track attributeKey="Reference sequence" clazz="org.broad.igv.track.SequenceTrack" fontSize="10" id="Reference sequence" name="Reference sequence" sequenceTranslationStrandValue="POSITIVE" shouldShowTranslation="true" visible="true"/>
     </Panel>
+    <PanelLayout dividerFractions="0.006,0.1690,0.3381,0.5071,0.6762"/>
     <HiddenAttributes>
         <Attribute name="DATA FILE"/>
         <Attribute name="DATA TYPE"/>
