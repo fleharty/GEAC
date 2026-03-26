@@ -24,15 +24,15 @@ The per-read filter system spans three layers:
 
 ### Schema: `alt_reads` table
 
-| Column               | Type  | Nullable | Source                                |
-|----------------------|-------|----------|---------------------------------------|
-| sample_id            | Utf8  | no       | CLI `--sample-id`                     |
-| chrom                | Utf8  | no       | BAM pileup                            |
-| pos                  | Int64 | no       | BAM pileup (0-based)                  |
-| alt_allele           | Utf8  | no       | observed alt base/indel string        |
-| dist_from_read_start | Int32 | no       | `alignment.qpos()`                    |
-| dist_from_read_end   | Int32 | no       | `read_len - qpos - 1`                 |
-| read_length          | Int32 | no       | `record.seq_len()`                    |
+| Column               | Type    | Nullable | Source                                |
+|----------------------|---------|----------|---------------------------------------|
+| sample_id            | Utf8    | no       | CLI `--sample-id`                     |
+| chrom                | Utf8    | no       | BAM pileup                            |
+| pos                  | Int64   | no       | BAM pileup (0-based)                  |
+| alt_allele           | Utf8    | no       | observed alt base/indel string        |
+| cycle                | Int32   | no       | 1-based: `alignment.qpos() + 1`       |
+| read_length          | Int32   | no       | `record.seq_len()`                    |
+| is_read1             | Boolean | no       | BAM flag `0x40`                       |
 | ab_count             | Int32 | **yes**  | fgbio `aD` tag                        |
 | ba_count             | Int32 | **yes**  | fgbio `bD` tag                        |
 | family_size          | Int32 | **yes**  | fgbio `cD` tag                        |
@@ -42,9 +42,9 @@ The per-read filter system spans three layers:
 
 ---
 
-## Confirmed Bugs
+## Confirmed Bugs (all fixed as of v0.3.8)
 
-### 1. Re-aggregation mode fails to zero-out SNV loci where all reads fail the filter
+### 1. ✅ Re-aggregation mode fails to zero-out SNV loci where all reads fail the filter
 
 **Location:** `geac_explorer.py:390–408`
 
@@ -94,7 +94,7 @@ END AS alt_count
 
 ---
 
-### 2. Warning banner text always claims re-aggregation regardless of mode
+### 2. ✅ Warning banner text always claims re-aggregation regardless of mode
 
 **Location:** `geac_explorer.py:820–825`
 
@@ -108,7 +108,7 @@ The warning text should be conditional on `recompute_vaf`.
 
 ---
 
-### 3. Insert size filter missing from the warning banner
+### 3. ✅ Insert size filter missing from the warning banner
 
 **Location:** `geac_explorer.py:809–825`
 
@@ -122,7 +122,7 @@ The empty parentheses are confusing; the insert size filter status is invisible.
 
 ---
 
-### 4. Family-size stratified spectrum ignores per-read filters
+### 4. ✅ Family-size stratified spectrum ignores per-read filters
 
 **Location:** `geac_explorer.py:3197–3220`
 
@@ -146,26 +146,26 @@ classification comes from unfiltered data.
 
 ## Semantic / Accuracy Concerns
 
-### 5. Indel `dist_from_read_start` / `dist_from_read_end` / `base_qual` have different semantics than for SNVs
+### 5. Indel `cycle` / `base_qual` have different semantics than for SNVs
 
 For **SNVs**, these fields refer to the exact position of the mismatched base:
-- `dist_from_read_start = qpos` — where the alt base sits in the read
+- `cycle = qpos + 1` — 1-based sequencing cycle where the alt base sits
 - `base_qual` — quality score of the alt base itself
 
 For **indels**, the anchor base (the reference base immediately before the
 indel) is used:
-- `dist_from_read_start` = anchor position, not the midpoint of the indel
+- `cycle` = cycle of the anchor position, not the midpoint of the indel
 - `base_qual` = quality of the anchor base, which is a reference base — not
   directly informative about the indel call quality
 
 For **deletions**, `alignment.qpos()` at the pileup anchor position should
 return a valid value (the read does have a base here). The `unwrap_or(0)` at
 line 702 is a safety fallback that should rarely fire. But if it does, all
-affected deletion reads get `dist_from_read_start=0`, concentrating them at
-cycle position 0 in plots.
+affected deletion reads get `cycle=1`, concentrating them at the start of reads
+in plots.
 
 **Recommendations:**
-- Document that cycle-number and base-quality metrics are anchor-based for
+- Document that cycle and base-quality metrics are anchor-based for
   indels. Consider adding a note in the Reads tab when indels are included.
 - For insertions, `qpos` could reasonably be shifted by `ceil(len/2)` to
   represent the midpoint of the insertion, but this would diverge from the
@@ -173,21 +173,13 @@ cycle position 0 in plots.
 
 ---
 
-### 6. "Cycle number" label / filter vs visualization column mismatch
+### 6. ✅ "Cycle number" label / filter vs visualization column mismatch
 
-The sidebar filter is labeled **"Cycle number"** and filters on
-`dist_from_read_end`. The Reads tab visualization is labeled **"Cycle (distance
-from read start)"** and plots `dist_from_read_start`.
-
-These are complementary (`start + end + 1 = read_len`), not the same column.
-The filter removes reads where the alt base is close to the **end** of the read
-(a classic read-end artifact filter). The plot shows position from the
-**start** (classic cycle-number plot). This is logically consistent but the
-shared "Cycle number" label is misleading — the filter isn't directly controlling
-what the x-axis shows.
-
-**Recommendation:** Rename the sidebar filter to **"Min distance from read end"**
-or similar. Reserve "cycle number" for the `dist_from_read_start` axis.
+**Fixed in v0.3.9.** The `dist_from_read_start` and `dist_from_read_end` columns
+were replaced with a single `cycle` column (1-based: `qpos + 1`). The sidebar
+filter and the Reads tab visualization now both operate on `cycle`. The filter
+direction was inverted: instead of raising a minimum dist-from-end, the user
+lowers a maximum cycle to exclude end-of-read reads.
 
 ---
 
@@ -209,20 +201,12 @@ change.
 
 ---
 
-### 8. Slider bound queries run on every rerun
+### 8. ✅ Slider bound queries run on every rerun
 
-`_reads_maxes` (line 211) computes `MAX(family_size)`, `MAX(dist_from_read_end)`,
-`MAX(map_qual)`, and `COUNT(insert_size) > 0` from a full table scan of
-`alt_reads` on **every** Streamlit rerun. These values never change between
-reruns (the database is read-only). The results are stored in `session_state`
-but the query still runs.
-
-**Recommendation:** Gate the query behind a session_state check:
-```python
-if "_cached_fs_max" not in st.session_state:
-    _reads_maxes = con.execute(...).fetchone()
-    ...
-```
+**Fixed in v0.3.8.** The `_reads_maxes` query is now gated behind a
+`session_state` check (`if "_cached_fs_max" not in st.session_state`) so it
+runs once per session. Results are cached under `_cached_fs_max`,
+`_cached_cycle_max`, `_cached_mq_max`, and `_cached_is_has_data`.
 
 ---
 
@@ -302,18 +286,18 @@ exists from a previous merge, which could be misleading if the data is stale.
 
 ## Summary Table
 
-| # | Type       | Severity | Description                                                    |
-|---|------------|----------|----------------------------------------------------------------|
-| 1 | Bug        | Medium   | Re-aggregation COALESCE gives original count instead of 0      |
-| 2 | Bug        | Low      | Warning text wrong for locus-inclusion mode                    |
-| 3 | Bug        | Low      | Insert size filter missing from warning banner                 |
-| 4 | Bug        | Medium   | Family-size stratified spectrum bypasses per-read filters      |
-| 5 | Semantic   | Low      | Indel dist/base_qual use anchor position, not indel position   |
-| 6 | Semantic   | Low      | "Cycle number" label mismatch between filter and visualization |
-| 7 | Efficiency | Low      | Full alt_reads scan per filter change (acceptable)             |
-| 8 | Efficiency | Low      | Slider bound MAX queries re-run on every rerun                 |
-| 9 | Efficiency | Low      | `_r_join` re-executes locus subquery per plot                  |
-| 10 | Pitfall   | Medium   | VAF is lower bound in re-aggregation mode                     |
-| 11 | Pitfall   | Medium   | Insert size filter silently drops unpaired reads              |
-| 12 | Pitfall   | Low      | Locus-level VAF filter applies to filtered alt_count          |
-| 13 | Pitfall   | Low      | Stale or absent alt_reads → filters have no/partial effect    |
+| #  | Type       | Severity | Status        | Description                                                    |
+|----|------------|----------|---------------|----------------------------------------------------------------|
+| 1  | Bug        | Medium   | ✅ Fixed v0.3.8 | Re-aggregation COALESCE gives original count instead of 0    |
+| 2  | Bug        | Low      | ✅ Fixed v0.3.8 | Warning text wrong for locus-inclusion mode                  |
+| 3  | Bug        | Low      | ✅ Fixed v0.3.8 | Insert size filter missing from warning banner               |
+| 4  | Bug        | Medium   | ✅ Fixed v0.3.8 | Family-size stratified spectrum bypasses per-read filters    |
+| 5  | Semantic   | Low      | Open          | Indel cycle/base_qual use anchor position, not indel position  |
+| 6  | Semantic   | Low      | ✅ Fixed v0.3.9 | "Cycle number" label mismatch between filter and visualization |
+| 7  | Efficiency | Low      | Open (acceptable) | Full alt_reads scan per filter change                    |
+| 8  | Efficiency | Low      | ✅ Fixed v0.3.8 | Slider bound MAX queries re-run on every rerun               |
+| 9  | Efficiency | Low      | Open          | `_r_join` re-executes locus subquery per plot                  |
+| 10 | Pitfall    | Medium   | Open          | VAF is lower bound in re-aggregation mode                      |
+| 11 | Pitfall    | Medium   | ✅ Fixed v0.3.8 | Insert size filter silently drops unpaired reads             |
+| 12 | Pitfall    | Low      | Open          | Locus-level VAF filter applies to filtered alt_count           |
+| 13 | Pitfall    | Low      | Open          | Stale or absent alt_reads → filters have no/partial effect     |

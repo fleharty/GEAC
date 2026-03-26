@@ -103,7 +103,7 @@ For example, `--output SAMPLE_001.parquet --reads-output` produces:
 The reads table is linked to the locus table by `(sample_id, chrom, pos, alt_allele)`.
 
 **When to use:** filtering by family size (fgbio duplex reads), diagnosing end-of-read
-artefacts via `dist_from_read_end`, or read-level phasing (e.g. MNV detection).
+artefacts via cycle number, or read-level phasing (e.g. MNV detection).
 
 When `geac merge` is given a mix of `.locus.parquet` and `.reads.parquet` files, it routes
 them automatically: locus files → `alt_bases` table; reads files → `alt_reads` table.
@@ -344,18 +344,22 @@ Features:
     from the table entirely. This is the most useful filter for error-corrected data:
     a variant that disappears when singletons are excluded is almost certainly noise;
     one that holds up at family size ≥ 2 or 3 has stronger support.
-  - *Cycle number* — filter by distance of the alt base from the end of the read.
-    Variants clustered near read ends are a common alignment artefact; raising the
-    lower bound removes these reads.
+  - *Cycle number* — filter by 1-based sequencing cycle (position within the read).
+    Variants clustered at high cycle numbers (near the read end) are a common
+    alignment artefact; lowering the upper bound removes these reads.
   - *Mapping quality* — filter by per-read MAPQ. Excluding low-MAPQ reads removes
     potential multi-mapping artefacts at repetitive loci.
 
-  When any per-read filter is active, `alt_count` and `vaf` are re-aggregated from
-  the reads table using only reads that pass the filters. An `original_vaf` column
-  is shown alongside `vaf` so you can see the pre-filter allele frequency for
-  comparison. Note that `ref_count`, `total_depth`, and strand/overlap columns are
-  not recomputed — they always reflect the full pileup. Per-read filters are best
-  used as an exploratory tool: do variants hold up under quality thresholds?
+  Two filter modes are available (controlled by the "Recompute alt count" checkbox):
+  - **Locus-inclusion mode** (default) — loci where no reads pass the filter are
+    hidden entirely. `alt_count` and `vaf` are unchanged for loci that remain.
+  - **Re-aggregation mode** — `alt_count` is recomputed from reads passing the
+    filter; an `original_vaf` column is shown alongside `vaf` for comparison.
+    Loci where all reads fail show `alt_count = 0` but remain visible.
+
+  In both modes, `ref_count`, `total_depth`, and strand/overlap columns always
+  reflect the full pileup. Per-read filters are best used as an exploratory tool:
+  do variants hold up under quality thresholds?
 
 - **IGV integration** — provide a manifest TSV (`sample_id`, `bam_path`) in the sidebar
   to enable "Download IGV session" buttons throughout the app. Downloads a zip containing
@@ -437,9 +441,9 @@ fragment at a locus. Linked to the locus table by `(sample_id, chrom, pos, alt_a
 | `chrom` | string | Chromosome |
 | `pos` | int64 | 0-based position |
 | `alt_allele` | string | Alt allele (links to locus table) |
-| `dist_from_read_start` | int32 | 0-based index of the alt base within the read |
-| `dist_from_read_end` | int32 | Bases from the alt to the end of the read (`read_length - dist_from_read_start - 1`) |
+| `cycle` | int32 | 1-based sequencing cycle (= query position + 1) |
 | `read_length` | int32 | Total length of the read in bases |
+| `is_read1` | bool | `true` if R1 (BAM flag `0x40`), `false` if R2 or unpaired |
 | `ab_count` | int32? | fgbio `aD` tag: AB (top-strand) raw read count; null if tag absent |
 | `ba_count` | int32? | fgbio `bD` tag: BA (bottom-strand) raw read count; null if tag absent |
 | `family_size` | int32? | fgbio `cD` tag: total raw read count (`aD + bD` for duplex; sole count for simplex); null if tag absent |
@@ -500,7 +504,7 @@ ghcr.io/fleharty/geac:latest
 ```bash
 docker pull ghcr.io/fleharty/geac:latest
 # or a specific version:
-docker pull ghcr.io/fleharty/geac:0.3.7
+docker pull ghcr.io/fleharty/geac:0.3.9
 ```
 
 ### Running geac on Terra

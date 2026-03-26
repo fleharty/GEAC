@@ -319,7 +319,7 @@ Work through each item top to bottom. Check off items as verified, note failures
 - [ ] Family size filter slider works; section hidden with caption when `cD` tag absent
 - [ ] Family size include mode restricts reads to range (NULL rows excluded)
 - [ ] Family size exclude mode removes reads within range (NULL rows kept)
-- [ ] Dist from read end slider works in include and exclude modes
+- [ ] Cycle number slider works in include and exclude modes
 - [ ] Mapping quality (per-read) slider works in include and exclude modes
 - [ ] Insert size slider appears only when `insert_size` data present
 - [ ] At full range (20–500), caption reads "no filter active" and all reads pass through
@@ -356,8 +356,8 @@ Work through each item top to bottom. Check off items as verified, note failures
 ## Explorer — Reads plots
 
 - [ ] Family size distribution histogram renders
-- [ ] Read position bias plot renders
-- [ ] Dist from read end histogram renders
+- [ ] Read position bias (cycle number) plot renders
+- [ ] Cycle number distribution histogram renders
 - [ ] Base quality distribution renders
 - [ ] Insert size distribution renders; color-by Sample/Batch works
 - [ ] Insert size by AF class plot renders two lines (germline VAF > 30%, somatic VAF ≤ 30%)
