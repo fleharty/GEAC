@@ -156,7 +156,7 @@ Audit document: `docs/per-read-filter-audit.md`.
   number" but filters `dist_from_read_end`; the Reads tab visualization uses `dist_from_read_start`
   and is also labelled "cycle". Rename the sidebar filter to "Min distance from read end" to match
   the artifact-filter intent and avoid confusion with the cycle-position plot.
-- [ ] **Insert size filter: add exclude mode and document NULL behaviour** (pitfall #11) —
+- [x] **Insert size filter: add exclude mode and document NULL behaviour** (pitfall #11) —
   `insert_size BETWEEN x AND y` silently drops all unpaired reads (`insert_size IS NULL`). Add an
   exclude-mode toggle (consistent with family size / MAPQ) and add a sidebar caption noting that
   activating the filter excludes unpaired reads.

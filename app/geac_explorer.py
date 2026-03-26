@@ -297,27 +297,42 @@ if _has_alt_reads:
         )
 
     if _is_has_data:
-        insert_size_range = st.sidebar.slider(
-            "Insert size range",
-            min_value=_IS_MIN, max_value=_IS_MAX,
-            value=(_IS_MIN, _IS_MAX), step=1,
-            key="insert_size_range",
-            help="Filter alt-supporting reads by template insert size (|TLEN|).",
-        )
+        _is_slider_col, _is_toggle_col = st.sidebar.columns([3, 1])
+        with _is_slider_col:
+            insert_size_range = st.slider(
+                "Insert size range",
+                min_value=_IS_MIN, max_value=_IS_MAX,
+                value=(_IS_MIN, _IS_MAX), step=1,
+                key="insert_size_range",
+                help="Filter alt-supporting reads by template insert size (|TLEN|).",
+            )
+        with _is_toggle_col:
+            st.write("Mode")
+            is_exclude_mode = st.toggle(
+                "Excl.",
+                key="is_exclude_mode",
+                help="Off = include only reads within this range. "
+                     "On = exclude reads within this range (keep reads outside it).",
+            )
         _is_lo, _is_hi = insert_size_range
         if _is_lo == _IS_MIN and _is_hi == _IS_MAX:
             st.sidebar.caption(
                 "Insert size: no filter active — reads with any insert size "
-                "(including <20 and >500 bp) are accepted."
+                "(including unpaired reads with no insert size) are accepted."
+            )
+        elif is_exclude_mode:
+            st.sidebar.caption(
+                f"Insert size: excluding reads with insert size between {_is_lo} and {_is_hi} bp. "
+                "Unpaired reads (no insert size) are kept."
             )
         else:
             st.sidebar.caption(
-                f"Insert size: keeping only reads with insert size "
-                f"between {_is_lo} and {_is_hi} bp. "
-                "Reads with very small or very large inserts (and unpaired reads) are excluded."
+                f"Insert size: keeping only reads with insert size between {_is_lo} and {_is_hi} bp. "
+                "Unpaired reads (no insert size) are excluded."
             )
     else:
         insert_size_range = (_IS_MIN, _IS_MAX)
+        is_exclude_mode = False
 
     _fs_lo, _fs_hi = family_size_range
     _dfe_lo, _dfe_hi = dist_from_end_range
@@ -351,7 +366,14 @@ if _has_alt_reads:
             _reads_conditions.append(f"map_qual BETWEEN {_mq_lo} AND {_mq_hi}")
 
     if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
-        _reads_conditions.append(f"insert_size BETWEEN {_is_lo} AND {_is_hi}")
+        if is_exclude_mode:
+            # Exclude mode: unpaired reads (insert_size IS NULL) pass through
+            _reads_conditions.append(
+                f"(insert_size IS NULL OR insert_size < {_is_lo} OR insert_size > {_is_hi})"
+            )
+        else:
+            # Include mode: unpaired reads (insert_size IS NULL) are excluded
+            _reads_conditions.append(f"insert_size BETWEEN {_is_lo} AND {_is_hi}")
 
     if _reads_conditions:
         if recompute_vaf:
@@ -372,6 +394,7 @@ else:
     fs_exclude_mode = False
     dfe_exclude_mode = False
     mq_exclude_mode = False
+    is_exclude_mode = False
     _fs_lo = _fs_hi = _dfe_lo = _dfe_hi = _mq_lo = _mq_hi = _is_lo = _is_hi = 0
 
 # When per-read filters are active, redefine table_expr as a JOIN subquery.
@@ -827,7 +850,7 @@ if _reads_active:
     if _mq_lo > 0 or _mq_hi < _mq_max:
         _mode = "excluding" if mq_exclude_mode else "including only"
         _active_parts.append(f"map qual: {_mode} {_mq_lo}–{_mq_hi}")
-    _is_part = insert_size_active_part(_is_lo, _is_hi, _IS_MIN, _IS_MAX)
+    _is_part = insert_size_active_part(_is_lo, _is_hi, _IS_MIN, _IS_MAX, is_exclude_mode)
     if _is_has_data and _is_part is not None:
         _active_parts.append(_is_part)
     st.warning(

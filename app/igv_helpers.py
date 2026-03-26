@@ -9,14 +9,17 @@ from __future__ import annotations
 import duckdb
 
 
-def insert_size_active_part(is_lo: int, is_hi: int, is_min: int, is_max: int) -> str | None:
+def insert_size_active_part(
+    is_lo: int, is_hi: int, is_min: int, is_max: int, is_exclude_mode: bool = False
+) -> str | None:
     """Return the insert-size banner fragment when the filter is non-default, else None.
 
     Kept separate from geac_explorer.py so it can be unit-tested without
     importing Streamlit.
     """
     if is_lo > is_min or is_hi < is_max:
-        return f"insert size: {is_lo}–{is_hi}"
+        mode = "excluding" if is_exclude_mode else "including only"
+        return f"insert size: {mode} {is_lo}–{is_hi}"
     return None
 
 

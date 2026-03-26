@@ -68,7 +68,7 @@ class TestPerReadWarningNote:
 
 
 class TestInsertSizeActivePart:
-    """Tests for insert_size_active_part — bug #3 regression.
+    """Tests for insert_size_active_part — bug #3 regression + exclude mode.
 
     The bug: _active_parts in the warning banner never included insert size,
     so activating only the insert size filter produced "Per-read filters active ()".
@@ -98,6 +98,22 @@ class TestInsertSizeActivePart:
         part = insert_size_active_part(50, 400, self._MIN, self._MAX)
         assert "50" in part
         assert "400" in part
+
+    def test_include_mode_says_including(self):
+        """Include mode (default) should say 'including only'."""
+        part = insert_size_active_part(50, 400, self._MIN, self._MAX, is_exclude_mode=False)
+        assert "including only" in part
+
+    def test_exclude_mode_says_excluding(self):
+        """Exclude mode should say 'excluding'."""
+        part = insert_size_active_part(50, 400, self._MIN, self._MAX, is_exclude_mode=True)
+        assert "excluding" in part
+
+    def test_include_and_exclude_modes_differ(self):
+        """The two modes must produce distinct strings."""
+        inc = insert_size_active_part(50, 400, self._MIN, self._MAX, is_exclude_mode=False)
+        exc = insert_size_active_part(50, 400, self._MIN, self._MAX, is_exclude_mode=True)
+        assert inc != exc
 
     def test_buggy_code_would_omit_insert_size_from_banner(self):
         """Confirm the bug: before the fix, _active_parts never got an insert-size entry.
