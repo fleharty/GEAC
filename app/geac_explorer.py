@@ -3111,6 +3111,21 @@ with tab_duplex:
         if _fs_df.empty:
             st.info("No family size data (fgbio cD tag absent in this dataset).")
         else:
+            _fs_x_min = int(_fs_df["family_size"].min())
+            _fs_x_max = int(_fs_df["family_size"].max())
+            if _fs_x_min < _fs_x_max:
+                _fs_x_range = st.slider(
+                    "X-axis range (family size)",
+                    min_value=_fs_x_min,
+                    max_value=_fs_x_max,
+                    value=(_fs_x_min, _fs_x_max),
+                    key="fs_x_range",
+                )
+                _fs_df = _fs_df[
+                    (_fs_df["family_size"] >= _fs_x_range[0])
+                    & (_fs_df["family_size"] <= _fs_x_range[1])
+                ]
+
             _fs_label_col = (
                 "sample_id" if _fs_by_sample else
                 "batch"     if _fs_by_batch  else
@@ -3292,11 +3307,18 @@ with tab_duplex:
                 st.info("Need at least 2 samples for cohort artefact comparison.")
             else:
                 _cohort_fs_df = con.execute(f"""
-                    WITH locus_counts AS (
-                        SELECT chrom, pos, alt_allele,
-                               COUNT(DISTINCT sample_id) AS n_samples_with_alt
+                    WITH _base AS (
+                        SELECT sample_id,
+                               chrom,
+                               CAST(pos AS BIGINT) AS pos,
+                               alt_allele
                         FROM {table_expr}
                         WHERE {where}
+                    ),
+                    locus_counts AS (
+                        SELECT chrom, pos, alt_allele,
+                               COUNT(DISTINCT sample_id) AS n_samples_with_alt
+                        FROM _base
                         GROUP BY chrom, pos, alt_allele
                     ),
                     labeled AS (
@@ -3308,14 +3330,11 @@ with tab_duplex:
                             END AS cohort_freq,
                             ar.family_size
                         FROM alt_reads ar
-                        INNER JOIN (
-                            SELECT DISTINCT sample_id, chrom, pos, alt_allele
-                            FROM {table_expr}
-                            WHERE {where}
-                        ) _filt ON  ar.sample_id  = _filt.sample_id
-                                 AND ar.chrom      = _filt.chrom
-                                 AND ar.pos        = _filt.pos
-                                 AND ar.alt_allele = _filt.alt_allele
+                        INNER JOIN _base _filt
+                            ON  ar.sample_id  = _filt.sample_id
+                            AND ar.chrom      = _filt.chrom
+                            AND ar.pos        = _filt.pos
+                            AND ar.alt_allele = _filt.alt_allele
                         INNER JOIN locus_counts lc
                             ON  ar.chrom      = lc.chrom
                             AND ar.pos        = lc.pos
