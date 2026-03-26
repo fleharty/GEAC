@@ -7,7 +7,7 @@ import altair as alt
 import pandas as pd
 from scipy.optimize import nnls
 
-from igv_helpers import query_distinct_samples
+from igv_helpers import query_distinct_samples, per_read_warning_note
 import geac_config
 
 _IS_MIN, _IS_MAX = 20, 500  # insert size slider bounds
@@ -827,18 +827,10 @@ if _reads_active:
     if _mq_lo > 0 or _mq_hi < _mq_max:
         _mode = "excluding" if mq_exclude_mode else "including only"
         _active_parts.append(f"map qual: {_mode} {_mq_lo}–{_mq_hi}")
-    if recompute_vaf:
-        _reads_note = (
-            "alt_count is re-aggregated from reads passing the filter; "
-            "original_vaf shows the unfiltered VAF for comparison. "
-            "ref_count, total_depth, and strand/overlap columns still reflect unfiltered locus-level values."
-        )
-    else:
-        _reads_note = (
-            "Loci with no alt reads passing these filters are hidden. "
-            "alt_count and VAF reflect all reads."
-        )
-    st.warning(f"**Per-read filters active** ({'; '.join(_active_parts)}). {_reads_note}")
+    st.warning(
+        f"**Per-read filters active** ({'; '.join(_active_parts)}). "
+        f"{per_read_warning_note(recompute_vaf)}"
+    )
 
 # ── Data table ────────────────────────────────────────────────────────────────
 _tbl_limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]

@@ -9,6 +9,26 @@ from __future__ import annotations
 import duckdb
 
 
+def per_read_warning_note(recompute_vaf: bool) -> str:
+    """Return the mode-appropriate body text for the per-read filter warning banner.
+
+    Kept separate from geac_explorer.py so it can be unit-tested without
+    importing Streamlit.
+    """
+    if recompute_vaf:
+        return (
+            "alt_count is re-aggregated from reads passing the filter; "
+            "original_vaf shows the unfiltered VAF for comparison. "
+            "ref_count, total_depth, and strand/overlap columns still reflect "
+            "unfiltered locus-level values."
+        )
+    else:
+        return (
+            "Loci with no alt reads passing these filters are hidden. "
+            "alt_count and VAF reflect all reads."
+        )
+
+
 def query_distinct_samples(
     con: duckdb.DuckDBPyConnection,
     table_expr: str,
