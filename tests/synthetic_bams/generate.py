@@ -9,6 +9,15 @@ loaded in IGV alongside reference.fa for visual inspection.
 SNV locus: chr1:251 (1-based) = position 250 (0-based)
   REF = C   ALT = T
 
+Reference complexity features (0-based positions):
+  50– 57   poly-A homopolymer (8 bp)
+  110–118  poly-C homopolymer (9 bp)
+  160–173  AT dinucleotide repeat (14 bp)
+  220–228  poly-G homopolymer (9 bp)
+  300–314  CAG trinucleotide repeat (15 bp)
+  370–378  poly-T homopolymer (9 bp)
+  420–435  AC dinucleotide repeat (16 bp)
+
 Read layout (default scenario):
   Read length : 150 bp
   Insert size : 200 bp
@@ -45,16 +54,46 @@ SNV_POS     = 250   # 0-based; 1-based = 251
 REF_BASE    = "C"
 ALT_BASE    = "T"
 
+# Known complexity features embedded in the reference (0-based half-open intervals).
+# All features are placed ≥ 21 bp from SNV_POS=250 so they don't affect alt-base
+# detection even with --repeat-window 10.
+_REF_FEATURES = [
+    (50,  "AAAAAAAA"),           # poly-A homopolymer       8 bp
+    (110, "CCCCCCCCC"),          # poly-C homopolymer       9 bp
+    (160, "ATATATATATATAT"),     # AT dinucleotide repeat  14 bp
+    (220, "GGGGGGGGG"),          # poly-G homopolymer       9 bp
+    (300, "CAGCAGCAGCAGCAG"),    # CAG trinucleotide repeat 15 bp
+    (370, "TTTTTTTTT"),          # poly-T homopolymer       9 bp
+    (420, "ACACACACACACACAC"),   # AC dinucleotide repeat  16 bp
+]
+
+
 def _make_ref_seq() -> str:
-    """Deterministic, repeat-free 500 bp sequence with C at position 250."""
-    # Use a simple LCG so the sequence is reproducible without numpy/random dependency
+    """
+    Deterministic 500 bp reference with known complexity features.
+
+    LCG filler provides varied non-repeat background; named windows are
+    overwritten with homopolymers and STRs at documented positions:
+
+      50– 57   poly-A homopolymer (8 bp)
+      110–118  poly-C homopolymer (9 bp)
+      160–173  AT dinucleotide repeat (14 bp)
+      220–228  poly-G homopolymer (9 bp)
+      250      SNV site  REF=C
+      300–314  CAG trinucleotide repeat (15 bp)
+      370–378  poly-T homopolymer (9 bp)
+      420–435  AC dinucleotide repeat (16 bp)
+    """
     bases = "ACGT"
     h = 0xDEADBEEF
     seq = []
-    for i in range(REF_LEN):
+    for _ in range(REF_LEN):
         h = (h * 1664525 + 1013904223) & 0xFFFFFFFF
         seq.append(bases[h % 4])
-    seq[SNV_POS] = REF_BASE
+    for start, motif in _REF_FEATURES:
+        for i, base in enumerate(motif):
+            seq[start + i] = base
+    seq[SNV_POS] = REF_BASE   # always last — SNV site is never clobbered by a feature
     return "".join(seq)
 
 REF_SEQ = _make_ref_seq()
