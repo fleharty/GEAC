@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Read properties: insert size spectrum, cycle position spectrum, overlap vs non-overlap.
+     clean_snv is included as a baseline for comparison. -->
+<Session genome="bams/reference.fa" locus="chr1:136-365" version="8">
+    <Resources>
+        <Resource path="bams/clean_snv.bam" type="bam"/>
+        <Resource path="bams/insert_variation.bam" type="bam"/>
+        <Resource path="bams/cycle_variation.bam" type="bam"/>
+        <Resource path="bams/overlap_variation.bam" type="bam"/>
+    </Resources>
+    <Panel height="237" name="Panel_clean_snv" width="2592">
+        <Track attributeKey="clean_snv.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="clean_snv.bam_coverage" name="clean_snv.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="clean_snv.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="clean_snv.bam" name="clean_snv.bam" visible="true">
+            <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="237" name="Panel_insert_variation" width="2592">
+        <Track attributeKey="insert_variation.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="insert_variation.bam_coverage" name="insert_variation.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="insert_variation.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="insert_variation.bam" name="insert_variation.bam" visible="true">
+            <RenderOptions sortOption="INSERT_SIZE" viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="237" name="Panel_cycle_variation" width="2592">
+        <Track attributeKey="cycle_variation.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="cycle_variation.bam_coverage" name="cycle_variation.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="cycle_variation.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="cycle_variation.bam" name="cycle_variation.bam" visible="true">
+            <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="237" name="Panel_overlap_variation" width="2592">
+        <Track attributeKey="overlap_variation.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="overlap_variation.bam_coverage" name="overlap_variation.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="overlap_variation.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="overlap_variation.bam" name="overlap_variation.bam" visible="true">
+            <RenderOptions sortOption="INSERT_SIZE" viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="454" name="FeaturePanel" width="2592">
+        <Track attributeKey="Reference sequence" clazz="org.broad.igv.track.SequenceTrack" fontSize="10" id="Reference sequence" name="Reference sequence" sequenceTranslationStrandValue="POSITIVE" shouldShowTranslation="true" visible="true"/>
+    </Panel>
+    <PanelLayout dividerFractions="0.006,0.1690,0.3381,0.5071,0.6762"/>
+    <HiddenAttributes>
+        <Attribute name="DATA FILE"/>
+        <Attribute name="DATA TYPE"/>
+        <Attribute name="NAME"/>
+    </HiddenAttributes>
+</Session>

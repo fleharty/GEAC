@@ -36,6 +36,9 @@ Outputs:
     short_insert.bam                  — alt reads have insert=80 bp; ref reads insert=200 bp
     singleton_family.bam              — alt reads have cD=1; ref reads have cD=3
     germline_snv.bam                  — VAF≈0.50, 40 reads, no artefact properties
+    insert_variation.bam              — alt reads at insert=170 (tight) and insert=260 (loose)
+    cycle_variation.bam               — alt reads at R1 cycles 10, 76, and 140
+    overlap_variation.bam             — overlapping (insert=160) vs non-overlapping (insert=320) pairs
 """
 
 import argparse
@@ -392,6 +395,111 @@ def scenario_singleton_family(outdir: Path, header: pysam.AlignmentHeader) -> No
     _print_scenario("singleton_family", frags)
 
 
+def scenario_insert_variation(outdir: Path, header: pysam.AlignmentHeader) -> None:
+    """
+    Alt reads span two insert sizes to test insert-size filter sensitivity.
+
+    With r1_start=175 and READ_LEN=150, R2 covers the SNV only when insert ≤ 225
+    (r2_start = r1_start + insert - READ_LEN ≤ 250).
+
+    Group A — 2 alt pairs, insert=170 (tight overlap):
+      R1 qpos=75 cycle=76, R2 qpos=65 cycle=66.  Both strands carry the alt.
+    Group B — 2 alt pairs, insert=260 (loose, R2 starts after SNV):
+      R1 qpos=75 cycle=76 carries alt; R2 at pos 285 misses the SNV entirely.
+    Ref — 6 pairs at insert=200 (standard).
+
+    Filter: insert ≤ 180 → only Group A alt reads remain.
+    Filter: insert ≥ 240 → only Group B alt reads remain (R1 only).
+    """
+    frags = []
+    for i, (is_alt, insert) in enumerate([
+        (True,  170), (True,  170),   # Group A: tight overlap
+        (True,  260), (True,  260),   # Group B: loose, R1-only SNV coverage
+        (False, 200), (False, 200),   # ref
+        (False, 200), (False, 200),
+        (False, 200), (False, 200),
+    ]):
+        frags.append(make_fragment(
+            frag_id=i, is_alt=is_alt, r1_start=DEFAULT_R1_START,
+            insert_size=insert, mapq=60, tags=[], header=header,
+        ))
+    write_bam(outdir / "insert_variation.bam", frags, header)
+    _print_scenario("insert_variation", frags)
+
+
+def scenario_cycle_variation(outdir: Path, header: pysam.AlignmentHeader) -> None:
+    """
+    Alt reads appear at three different R1 cycles to test cycle-position filtering.
+
+    Early  (1 alt pair): r1_start=241 → SNV at R1 qpos  9 → cycle  10.
+      R2 starts at 291, past the SNV → only R1 carries the alt.
+    Mid    (1 alt pair): r1_start=175 → SNV at R1 qpos 75 → cycle  76.
+      R2 starts at 225 → both R1 (cycle 76) and R2 (cycle 26) carry the alt.
+    Late   (1 alt pair): r1_start=111 → SNV at R1 qpos139 → cycle 140.
+      R2 starts at 161 → both R1 (cycle 140) and R2 (cycle 90) carry the alt.
+    Ref — 7 pairs at default layout (cycle 76 / 26).
+
+    Filter: cycle ≤ 20    → only Early alt reads survive.
+    Filter: cycle 60–80   → only Mid alt reads survive (R1 side).
+    Filter: cycle ≥ 130   → only Late alt reads survive (R1 side).
+    """
+    alt_configs = [
+        SNV_POS - 9,    # cycle 10  (early)
+        DEFAULT_R1_START,   # cycle 76  (mid)
+        SNV_POS - 139,  # cycle 140 (late)
+    ]
+    frags = []
+    frag_id = 0
+    for r1_start in alt_configs:
+        frags.append(make_fragment(
+            frag_id=frag_id, is_alt=True, r1_start=r1_start,
+            insert_size=DEFAULT_INSERT, mapq=60, tags=[], header=header,
+        ))
+        frag_id += 1
+    for _ in range(7):
+        frags.append(make_fragment(
+            frag_id=frag_id, is_alt=False, r1_start=DEFAULT_R1_START,
+            insert_size=DEFAULT_INSERT, mapq=60, tags=[], header=header,
+        ))
+        frag_id += 1
+    write_bam(outdir / "cycle_variation.bam", frags, header)
+    _print_scenario("cycle_variation", frags)
+
+
+def scenario_overlap_variation(outdir: Path, header: pysam.AlignmentHeader) -> None:
+    """
+    Mix of overlapping and non-overlapping read pairs at the SNV locus.
+
+    Overlapping (4 pairs, insert=160):
+      R1: pos 175–324  R2: pos 185–334  overlap region: 185–324 (140 bp).
+      Both R1 and R2 cover the SNV.  2 alt pairs + 2 ref pairs.
+
+    Non-overlapping (4 pairs, insert=320):
+      R1: pos 175–324  R2: pos 345–494  gap: 325–344 (20 bp gap).
+      Only R1 covers the SNV; R2 lands entirely to the right of it.
+      2 alt pairs + 2 ref pairs.
+
+    Filter: R2-only → alt VAF drops to 0 for the non-overlapping group.
+    In geac: overlapping alt reads appear in both is_read1=True and False;
+    non-overlapping alt reads appear only in is_read1=True.
+    """
+    configs = [
+        # (is_alt, insert)
+        (True,  160), (True,  160),   # alt overlapping
+        (False, 160), (False, 160),   # ref overlapping
+        (True,  320), (True,  320),   # alt non-overlapping (R1-only SNV)
+        (False, 320), (False, 320),   # ref non-overlapping
+    ]
+    frags = []
+    for i, (is_alt, insert) in enumerate(configs):
+        frags.append(make_fragment(
+            frag_id=i, is_alt=is_alt, r1_start=DEFAULT_R1_START,
+            insert_size=insert, mapq=60, tags=[], header=header,
+        ))
+    write_bam(outdir / "overlap_variation.bam", frags, header)
+    _print_scenario("overlap_variation", frags)
+
+
 def scenario_germline_snv(outdir: Path, header: pysam.AlignmentHeader) -> None:
     """
     VAF ≈ 0.50: 40 reads (20 pairs), 10 alt pairs (20 alt reads).
@@ -456,6 +564,9 @@ def main() -> None:
     scenario_short_insert(outdir, header)
     scenario_singleton_family(outdir, header)
     scenario_germline_snv(outdir, header)
+    scenario_insert_variation(outdir, header)
+    scenario_cycle_variation(outdir, header)
+    scenario_overlap_variation(outdir, header)
 
     print()
     print("Done.  Load reference.fa + any .bam in IGV to inspect.")
