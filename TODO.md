@@ -141,7 +141,7 @@ Audit document: `docs/per-read-filter-audit.md`.
   Fix: use `COUNT(*) FILTER (WHERE ...)` and `COUNT(*) AS has_reads` in a single pass so the code
   can distinguish "no reads in alt_reads" (indels → preserve original count) from "reads exist but
   none pass" (SNVs → show 0).
-- [ ] **Warning banner text is wrong in locus-inclusion mode** (bug #2) — the warning always says
+- [x] **Warning banner text is wrong in locus-inclusion mode** (bug #2) — the warning always says
   "alt_count and VAF are re-aggregated from reads passing the filter" regardless of whether
   `recompute_vaf` is True or False. In the default locus-inclusion mode they are not re-aggregated.
 - [ ] **Insert size filter missing from warning banner** (bug #3) — `_active_parts` in the warning
