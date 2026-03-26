@@ -208,23 +208,25 @@ max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, v
 # ── Per-read filters (only when alt_reads table is present) ───────────────────
 _reads_conditions = []
 if _has_alt_reads:
-    _reads_maxes = con.execute("""
-        SELECT
-            MAX(family_size),
-            COALESCE(MAX(dist_from_read_end), 300),
-            COALESCE(MAX(map_qual), 60),
-            COUNT(insert_size) > 0
-        FROM alt_reads
-    """).fetchone()
-    _fs_max_raw = _reads_maxes[0]   # None if all NULL
-    _dfe_max    = int(_reads_maxes[1])
-    _mq_max     = int(_reads_maxes[2])
+    if "_cached_fs_max" not in st.session_state:
+        _reads_maxes = con.execute("""
+            SELECT
+                MAX(family_size),
+                COALESCE(MAX(dist_from_read_end), 300),
+                COALESCE(MAX(map_qual), 60),
+                COUNT(insert_size) > 0
+            FROM alt_reads
+        """).fetchone()
+        st.session_state["_cached_fs_max"]     = _reads_maxes[0]   # None if all NULL
+        st.session_state["_cached_dfe_max"]    = int(_reads_maxes[1])
+        st.session_state["_cached_mq_max"]     = int(_reads_maxes[2])
+        st.session_state["_cached_is_has_data"] = bool(_reads_maxes[3])
+    _fs_max_raw  = st.session_state["_cached_fs_max"]
+    _dfe_max     = st.session_state["_cached_dfe_max"]
+    _mq_max      = st.session_state["_cached_mq_max"]
+    _is_has_data = st.session_state["_cached_is_has_data"]
     _fs_has_data = _fs_max_raw is not None
     _fs_max = int(_fs_max_raw) if _fs_has_data else 0
-    _is_has_data = bool(_reads_maxes[3])
-    st.session_state["_cached_fs_max"]  = _fs_max
-    st.session_state["_cached_dfe_max"] = _dfe_max
-    st.session_state["_cached_mq_max"]  = _mq_max
 
     st.sidebar.divider()
     st.sidebar.subheader("Per-read filters")

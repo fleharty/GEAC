@@ -162,7 +162,7 @@ Audit document: `docs/per-read-filter-audit.md`.
   activating the filter excludes unpaired reads.
 
 **Efficiency:**
-- [ ] **Cache slider bound MAX queries** (efficiency #8) — `_reads_maxes` is computed on every
+- [x] **Cache slider bound MAX queries** (efficiency #8) — `_reads_maxes` is computed on every
   Streamlit rerun from a full `alt_reads` scan. Gate behind a session_state check so it only runs
   once per session (the database is read-only).
 
