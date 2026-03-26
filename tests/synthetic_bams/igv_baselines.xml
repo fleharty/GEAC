@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Baseline SNV scenarios: somatic-like (VAF=0.20) vs germline (VAF=0.50) -->
+<Session genome="bams/reference.fa" locus="chr1:136-364" version="8">
+    <Resources>
+        <Resource path="bams/clean_snv.bam" type="bam"/>
+        <Resource path="bams/germline_snv.bam" type="bam"/>
+    </Resources>
+    <Panel height="226" name="Panel_clean_snv" width="2301">
+        <Track attributeKey="clean_snv.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="clean_snv.bam_coverage" name="clean_snv.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="20.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="clean_snv.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="clean_snv.bam" name="clean_snv.bam" visible="true">
+            <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="366" name="Panel_germline_snv" width="2301">
+        <Track attributeKey="germline_snv.bam Coverage" autoScale="true" clazz="org.broad.igv.sam.CoverageTrack" fontSize="10" id="germline_snv.bam_coverage" name="germline_snv.bam Coverage" snpThreshold="0.2" visible="true">
+            <DataRange baseline="0.0" drawBaseline="true" flipAxis="false" maximum="40.0" minimum="0.0" type="LINEAR"/>
+        </Track>
+        <Track attributeKey="germline_snv.bam" clazz="org.broad.igv.sam.AlignmentTrack" color="185,185,185" displayMode="EXPANDED" experimentType="OTHER" fontSize="10" id="germline_snv.bam" name="germline_snv.bam" visible="true">
+            <RenderOptions sortOption="NUCLEOTIDE" viewPairs="true"/>
+        </Track>
+    </Panel>
+    <Panel height="23" name="FeaturePanel" width="2301">
+        <Track attributeKey="Reference sequence" clazz="org.broad.igv.track.SequenceTrack" fontSize="10" id="Reference sequence" name="Reference sequence" sequenceTranslationStrandValue="POSITIVE" shouldShowTranslation="false" visible="true"/>
+    </Panel>
+    <HiddenAttributes>
+        <Attribute name="DATA FILE"/>
+        <Attribute name="DATA TYPE"/>
+        <Attribute name="NAME"/>
+    </HiddenAttributes>
+</Session>
