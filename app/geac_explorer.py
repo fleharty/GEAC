@@ -16,6 +16,7 @@ _IS_MIN, _IS_MAX = 20, 500  # insert size slider bounds
 st.set_page_config(page_title="GEAC Explorer", layout="wide")
 
 _LOGO = Path(__file__).parent.parent / "docs" / "geac-logo.svg"
+_LOGO_COMPACT = Path(__file__).parent.parent / "docs" / "geac-logo-compact.svg"
 if _LOGO.exists():
     st.image(str(_LOGO), use_container_width=True)
 else:
@@ -100,8 +101,9 @@ _FILTER_KEYS = [
     "table_limit_sel", "recompute_vaf",
 ]
 
-if _LOGO.exists():
-    st.sidebar.image(str(_LOGO), use_container_width=True)
+_sidebar_logo = _LOGO_COMPACT if _LOGO_COMPACT.exists() else _LOGO
+if _sidebar_logo.exists():
+    st.sidebar.image(str(_sidebar_logo), use_container_width=True)
 
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
 _hdr_col.header("Filters")
@@ -3628,21 +3630,27 @@ with tab_duplex:
                 _ab_sel = alt.selection_point(
                     name="ab_ba_click", fields=["ab_count", "ba_count"], on="click"
                 )
+                _ab_base = alt.Chart(_ab_heat_df)
+                _ab_rect = _ab_base.mark_rect().encode(
+                    alt.X("ab_count:O", title="AB strand count (aD tag)"),
+                    alt.Y("ba_count:O", title="BA strand count (bD tag)"),
+                    alt.Color("n_reads:Q", title="Alt-supporting reads",
+                              scale=alt.Scale(scheme="blues")),
+                    opacity=alt.condition(_ab_sel, alt.value(1.0), alt.value(0.4)),
+                    tooltip=[
+                        alt.Tooltip("ab_count:O", title="AB count"),
+                        alt.Tooltip("ba_count:O", title="BA count"),
+                        alt.Tooltip("n_reads:Q", title="Reads"),
+                    ],
+                )
+                # Invisible point layer: mark_rect doesn't propagate selection_point
+                # data back to Streamlit's on_select handler; mark_point does.
+                _ab_points = _ab_base.mark_point(opacity=0, size=500).encode(
+                    alt.X("ab_count:O"),
+                    alt.Y("ba_count:O"),
+                )
                 _ab_heat_chart = (
-                    alt.Chart(_ab_heat_df)
-                    .mark_rect()
-                    .encode(
-                        alt.X("ab_count:O", title="AB strand count (aD tag)"),
-                        alt.Y("ba_count:O", title="BA strand count (bD tag)"),
-                        alt.Color("n_reads:Q", title="Alt-supporting reads",
-                                  scale=alt.Scale(scheme="blues")),
-                        opacity=alt.condition(_ab_sel, alt.value(1.0), alt.value(0.4)),
-                        tooltip=[
-                            alt.Tooltip("ab_count:Q", title="AB count"),
-                            alt.Tooltip("ba_count:Q", title="BA count"),
-                            alt.Tooltip("n_reads:Q", title="Reads"),
-                        ],
-                    )
+                    (_ab_rect + _ab_points)
                     .add_params(_ab_sel)
                     .properties(height=400)
                 )
