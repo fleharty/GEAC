@@ -3627,24 +3627,18 @@ with tab_duplex:
             if _ab_heat_df.empty:
                 st.info("No AB/BA data in current selection.")
             else:
-                # mark_rect does not propagate selection_point data through
-                # Streamlit's on_select handler (visual highlight works client-side
-                # but the datum is never sent back to Python).  A bubble chart with
-                # mark_circle encodes the same information and selection works reliably.
                 _ab_sel = alt.selection_point(
                     name="ab_ba_click", fields=["ab_count", "ba_count"], on="click"
                 )
                 _ab_heat_chart = (
                     alt.Chart(_ab_heat_df)
-                    .mark_circle(stroke="white", strokeWidth=0.5)
+                    .mark_rect()
                     .encode(
                         alt.X("ab_count:O", title="AB strand count (aD tag)"),
                         alt.Y("ba_count:O", title="BA strand count (bD tag)"),
-                        alt.Size("n_reads:Q", title="Alt-supporting reads",
-                                 scale=alt.Scale(range=[40, 1200])),
                         alt.Color("n_reads:Q", title="Alt-supporting reads",
                                   scale=alt.Scale(scheme="blues")),
-                        opacity=alt.condition(_ab_sel, alt.value(0.95), alt.value(0.25)),
+                        opacity=alt.condition(_ab_sel, alt.value(1.0), alt.value(0.4)),
                         tooltip=[
                             alt.Tooltip("ab_count:O", title="AB count"),
                             alt.Tooltip("ba_count:O", title="BA count"),
@@ -3654,7 +3648,12 @@ with tab_duplex:
                     .add_params(_ab_sel)
                     .properties(height=400)
                 )
-                _ev_ab = st.altair_chart(_ab_heat_chart, width="stretch", on_select="rerun")
+                # key= is required: without a stable key Streamlit cannot
+                # associate the selection state with the widget across reruns.
+                _ev_ab = st.altair_chart(
+                    _ab_heat_chart, width="stretch", on_select="rerun",
+                    key="ab_ba_heatmap",
+                )
                 st.caption(
                     "Colour intensity = number of alt-supporting reads with each (ab_count, ba_count) combination. "
                     "Reads on the diagonal have balanced strand support; reads on the axes came from one strand only. "
@@ -3662,30 +3661,30 @@ with tab_duplex:
                 )
 
                 _pts_ab = (_ev_ab.selection or {}).get("ab_ba_click", [])
+                _valid_ab = [p for p in _pts_ab if "ab_count" in p and "ba_count" in p]
+
                 if _pts_ab:
-                    _valid_ab = [p for p in _pts_ab if "ab_count" in p and "ba_count" in p]
-                    if _valid_ab:
-                        _ab_or = " OR ".join(
-                            f"(ab_count = {int(p['ab_count'])} AND ba_count = {int(p['ba_count'])})"
-                            for p in _valid_ab
-                        )
-                        _ab_cond = (
-                            f"(sample_id, chrom, pos, alt_allele) IN ("
-                            f"SELECT sample_id, chrom, pos, alt_allele "
-                            f"FROM alt_reads WHERE {_ab_or})"
-                        )
-                        _ab_sel_df = query_records([_ab_cond])
-                        _pairs_str = ", ".join(
-                            f"({int(p['ab_count'])},{int(p['ba_count'])})"
-                            for p in _valid_ab
-                        )
-                        st.caption(f"{len(_ab_sel_df):,} loci · selected (AB, BA): {_pairs_str}")
-                        st.dataframe(_ab_sel_df[_table_cols], width="stretch")
-                        _ab_key = "ab_ba_" + "_".join(
-                            f"{int(p['ab_count'])}x{int(p['ba_count'])}"
-                            for p in _valid_ab
-                        )
-                        igv_buttons([_ab_cond], _ab_sel_df, key=_ab_key)
+                    _ab_or = " OR ".join(
+                        f"(ab_count = {int(p['ab_count'])} AND ba_count = {int(p['ba_count'])})"
+                        for p in _pts_ab
+                    )
+                    _ab_cond = (
+                        f"(sample_id, chrom, pos, alt_allele) IN ("
+                        f"SELECT sample_id, chrom, pos, alt_allele "
+                        f"FROM alt_reads WHERE {_ab_or})"
+                    )
+                    _ab_sel_df = query_records([_ab_cond])
+                    _pairs_str = ", ".join(
+                        f"({int(p['ab_count'])},{int(p['ba_count'])})"
+                        for p in _pts_ab
+                    )
+                    st.caption(f"{len(_ab_sel_df):,} loci · selected (AB, BA): {_pairs_str}")
+                    st.dataframe(_ab_sel_df[_table_cols], width="stretch")
+                    _ab_key = "ab_ba_" + "_".join(
+                        f"{int(p['ab_count'])}x{int(p['ba_count'])}"
+                        for p in _pts_ab
+                    )
+                    igv_buttons([_ab_cond], _ab_sel_df, key=_ab_key)
 
 # ── Tumor/Normal tab ──────────────────────────────────────────────────────────
 with tab_tn:

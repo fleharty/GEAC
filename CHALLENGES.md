@@ -238,6 +238,52 @@ reliably.
 **Status:** Unresolved — tracked as a known issue for 0.4.0. The exact structure
 of Altair point-selection events in Streamlit's `on_select="rerun"` API is
 unclear; needs further investigation.
+**See also:** The general `on_select="rerun"` debugging recipe below.
+
+### `st.altair_chart(on_select="rerun")` selection returns `{}` instead of datum
+**Symptom:** Clicking a chart cell or bar triggers a Streamlit rerun and the
+correct Altair selection name key is present in `event.selection`, but its value
+is an empty dict `{}` rather than a list of selected datums. The visual selection
+highlight (opacity change) works correctly client-side. No error is raised.
+
+**Root causes and fixes (in order of likelihood):**
+
+1. **Missing `key=` on `st.altair_chart`** *(most common — fixed the AB vs BA heatmap)*
+   Without a stable `key`, Streamlit generates an auto-key based on render-tree
+   position. Inside conditional blocks or tabs, the auto-key can differ between
+   the initial render and the post-click rerun, so Streamlit cannot match the
+   incoming selection event to the widget and returns `{}`.
+   **Fix:** Add `key="some_unique_string"` to every `st.altair_chart` that uses
+   `on_select="rerun"`.
+
+2. **`mark_rect` with `fields=` in `selection_point`** *(obscure Vega-Lite behaviour)*
+   `mark_rect` with `fields=["x_field", "y_field"]` sends the event but not the
+   field values on some Streamlit/Altair version combinations. Without `fields=`
+   (index-based selection) the datum is also not sent.
+   **Fix:** Adding `key=` (point 1) resolved this entirely — `mark_rect` +
+   `fields=` works correctly once the widget has a stable key.
+
+3. **Multiple charts with the same Vega-Lite selection name**
+   Two `st.altair_chart` calls in the same render pass sharing the same Altair
+   `selection_point(name=...)` string can collide, causing both to return `{}`.
+   **Fix:** Use unique `name=` values per chart (e.g. `"sel_r1_click"`,
+   `"sel_r2_click"`).
+
+**Debugging recipe:**
+```python
+ev = st.altair_chart(chart, on_select="rerun", key="my_chart")
+st.warning(f"DEBUG sel: {ev.selection!r}")          # show raw state in UI
+import sys; print(ev.selection, file=sys.stderr)    # also to terminal
+```
+The debug box shows:
+- `{}` — `on_select` never fired (no click yet, or `key=` problem → fix point 1)
+- `{'my_sel': {}}` — event fired but datum empty → try `fields=` / mark type (point 2)
+- `{'my_sel': [{'field': value, ...}]}` — working correctly
+
+**Confirmed working combinations (Streamlit 1.55.0, Altair 6.0.0):**
+- `mark_rect` + `fields=["ab_count", "ba_count"]` + `key=` ✓
+- `mark_point(shape="square")` + `fields=` + `key=` ✓
+- `mark_bar` + `fields=["sbs_label"]` + `key=` ✓
 
 ---
 
