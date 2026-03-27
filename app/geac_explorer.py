@@ -98,6 +98,7 @@ _FILTER_KEYS = [
     "min_alt", "min_fwd_alt", "min_rev_alt",
     "min_overlap_agree", "min_overlap_disagree",
     "variant_called_sel", "variant_filter_sel", "on_target_sel",
+    "gnomad_af_range", "gnomad_include_null",
     "homopolymer_range", "str_len_range", "min_depth", "max_depth",
     "table_limit_sel", "recompute_vaf",
 ]
@@ -127,6 +128,8 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["variant_called_sel"]  = "All"
     st.session_state["variant_filter_sel"] = []
     st.session_state["on_target_sel"]      = "All"
+    st.session_state["gnomad_af_range"]    = ("0", "1.0")
+    st.session_state["gnomad_include_null"] = True
     st.session_state["homopolymer_range"]  = (0, 20)
     st.session_state["str_len_range"]      = (0, 50)
     st.session_state["min_depth"]          = 0
@@ -232,6 +235,28 @@ else:
     variant_filter_sel = []
     st.sidebar.caption("Variant filter unavailable — run geac collect with --vcf or --variants-tsv to enable.")
 on_target_sel = st.sidebar.selectbox("Target bases", ["All", "On target", "Off target"], key="on_target_sel")
+
+_GNOMAD_AF_STEPS = ["0", "1e-6", "1e-5", "1e-4", "1e-3", "0.01", "0.1", "1.0"]
+if _has_data("gnomad_af"):
+    if "gnomad_af_range" not in st.session_state:
+        st.session_state["gnomad_af_range"] = ("0", "1.0")
+    if "gnomad_include_null" not in st.session_state:
+        st.session_state["gnomad_include_null"] = True
+    gnomad_af_range = st.sidebar.select_slider(
+        "gnomAD AF (log scale)",
+        options=_GNOMAD_AF_STEPS,
+        value=("0", "1.0"),
+        key="gnomad_af_range",
+        help="Filter by gnomAD allele frequency. Steps are logarithmic.",
+    )
+    gnomad_include_null = st.sidebar.checkbox(
+        "Include sites absent from gnomAD",
+        value=True,
+        key="gnomad_include_null",
+    )
+else:
+    gnomad_af_range    = ("0", "1.0")
+    gnomad_include_null = True
 
 _repeat_cols_present = _has_data("homopolymer_len")
 if _repeat_cols_present:
@@ -848,6 +873,16 @@ if "on_target" in _schema_cols:
         conditions.append("on_target = true")
     elif on_target_sel == "Off target":
         conditions.append("on_target = false")
+if "gnomad_af" in _schema_cols:
+    _af_lo = float(gnomad_af_range[0])
+    _af_hi = float(gnomad_af_range[1])
+    _af_filtered = not (_af_lo == 0.0 and _af_hi == 1.0)
+    if _af_filtered and gnomad_include_null:
+        conditions.append(f"(gnomad_af BETWEEN {_af_lo} AND {_af_hi} OR gnomad_af IS NULL)")
+    elif _af_filtered:
+        conditions.append(f"gnomad_af BETWEEN {_af_lo} AND {_af_hi}")
+    elif not gnomad_include_null:
+        conditions.append("gnomad_af IS NOT NULL")
 if gene_text.strip() and "gene" in _schema_cols:
     _gene_escaped = gene_text.strip().replace("'", "''")
     conditions.append(f"gene = '{_gene_escaped}'")
