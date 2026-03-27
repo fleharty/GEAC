@@ -1918,6 +1918,70 @@ with tab2:
                 else:
                     st.info("No somatic SNVs in current selection.")
 
+            # ── R1 / R2 stratified spectrum ────────────────────────────────────
+            st.divider()
+            st.subheader("R1 / R2 Stratified Spectrum")
+            st.caption(
+                "Trinucleotide spectra for Read 1 vs Read 2. "
+                "Differences between the two profiles indicate read-level artefacts "
+                "or strand-specific damage patterns (e.g. oxidative damage on R2)."
+            )
+            if not _has_alt_reads:
+                st.info("R1/R2 spectrum requires the alt_reads table (DuckDB mode only).")
+            else:
+                _locus_snv = f"""
+                    SELECT sample_id, chrom, pos, alt_allele,
+                           trinuc_context, ref_allele
+                    FROM {table_expr}
+                    WHERE {where} AND variant_type = 'SNV'
+                      AND trinuc_context IS NOT NULL AND length(trinuc_context) = 3
+                """
+                _r1_raw = con.execute(f"""
+                    SELECT ab.trinuc_context, ab.ref_allele, ab.alt_allele,
+                           COUNT(*) AS count
+                    FROM (SELECT * FROM alt_reads {_r_reads_filter}) ar
+                    INNER JOIN ({_locus_snv}) ab
+                    ON  ar.sample_id  = ab.sample_id
+                    AND ar.chrom      = ab.chrom
+                    AND ar.pos        = ab.pos
+                    AND ar.alt_allele = ab.alt_allele
+                    WHERE ar.is_read1 = TRUE
+                    GROUP BY ab.trinuc_context, ab.ref_allele, ab.alt_allele
+                """).df()
+                _r2_raw = con.execute(f"""
+                    SELECT ab.trinuc_context, ab.ref_allele, ab.alt_allele,
+                           COUNT(*) AS count
+                    FROM (SELECT * FROM alt_reads {_r_reads_filter}) ar
+                    INNER JOIN ({_locus_snv}) ab
+                    ON  ar.sample_id  = ab.sample_id
+                    AND ar.chrom      = ab.chrom
+                    AND ar.pos        = ab.pos
+                    AND ar.alt_allele = ab.alt_allele
+                    WHERE ar.is_read1 = FALSE
+                    GROUP BY ab.trinuc_context, ab.ref_allele, ab.alt_allele
+                """).df()
+
+                _r1_s96, _n_r1 = _to_spec96_strat(_r1_raw)
+                _r2_s96, _n_r2 = _to_spec96_strat(_r2_raw)
+
+                _rc1, _rc2 = st.columns(2)
+                with _rc1:
+                    if _r1_s96 is not None:
+                        st.altair_chart(
+                            _strat_sbs96_chart(_r1_s96, f"Read 1 (n={_n_r1:,})"),
+                            width="stretch",
+                        )
+                    else:
+                        st.info("No R1 SNVs in current selection.")
+                with _rc2:
+                    if _r2_s96 is not None:
+                        st.altair_chart(
+                            _strat_sbs96_chart(_r2_s96, f"Read 2 (n={_n_r2:,})"),
+                            width="stretch",
+                        )
+                    else:
+                        st.info("No R2 SNVs in current selection.")
+
     else:
         # Fallback: simple ref>alt spectrum for older Parquet files
         spec = con.execute(f"""
