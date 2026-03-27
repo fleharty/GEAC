@@ -37,7 +37,7 @@ path = st.text_input(
 )
 
 if not path or not path.strip():
-    st.info("Enter a Parquet or DuckDB file path above to begin.")
+    st.info("Enter a Parquet or DuckDB file path above to begin.", icon="🗂️")
     st.stop()
 
 path = path.strip()
@@ -108,7 +108,7 @@ if _sidebar_logo.exists():
     st.sidebar.image(str(_sidebar_logo), use_container_width=True)
 
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
-_hdr_col.header("Filters")
+_hdr_col.header("🔧 Filters")
 if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["chrom_sel"]          = "All"
     st.session_state["sample_sel"]         = []
@@ -544,7 +544,7 @@ if _reads_active:
 
 # ── IGV integration (sidebar) ─────────────────────────────────────────────────
 st.sidebar.divider()
-st.sidebar.header("IGV Integration")
+st.sidebar.header("🧭 IGV Integration")
 auto_launch_igv = st.sidebar.checkbox(
     "Auto-launch IGV",
     value=_cfg.get("auto_launch_igv", False),
@@ -721,7 +721,7 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
     key              — unique widget key prefix
     """
     if not manifest:
-        st.caption("Add a manifest in the sidebar to enable IGV session download.")
+        st.caption("🧭 Add a manifest in the sidebar to enable IGV session download.")
         return
 
     _extra_w = " AND ".join(conditions + extra_conditions)
@@ -913,7 +913,7 @@ fn_annotated = int(fstats["n_annotated"][0])
 fn_called    = int(fstats["n_called"][0])
 fpct_called  = f"{100 * fn_called / fn_annotated:.1f}%" if fn_annotated > 0 else "N/A"
 
-st.caption("Overall")
+st.caption("🌐 Overall")
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Alt records",      f"{int(stats['n_records'][0]):,}")
 c2.metric("Samples",          f"{int(stats['n_samples'][0]):,}")
@@ -922,7 +922,7 @@ c4.metric("Mean VAF",         str(stats["mean_vaf"][0]))
 c5.metric("Mean depth",       str(stats["mean_depth"][0]))
 c6.metric("% variant called", pct_called)
 
-st.caption("Filtered")
+st.caption("🔽 Filtered")
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Alt records",      f"{int(fstats['n_records'][0]):,}")
 c2.metric("Samples",          f"{int(fstats['n_samples'][0]):,}")
@@ -945,10 +945,10 @@ def query_records(extra: list[str] = [], limit: int | None = None) -> pd.DataFra
 total_count = con.execute(f"SELECT COUNT(*) FROM {table_expr} WHERE {where}").fetchone()[0]
 
 if total_count == 0:
-    st.warning("No records match the current filters.")
+    st.warning("No records match the current filters.", icon="🔎")
     st.stop()
 
-st.info(f"**{total_count:,}** records match the current filters.")
+st.info(f"**{total_count:,}** records match the current filters.", icon="✅")
 
 _reads_banner = st.empty()
 if _reads_active:
@@ -1050,7 +1050,7 @@ if _selected_rows:
         LIMIT 1
     """).df()
 
-    st.subheader(f"Position drill-down: {_chrom}:{_pos}")
+    st.subheader(f"🔍 Position drill-down: {_chrom}:{_pos}")
 
     # Locus-level info as metrics
     _info_cols = st.columns(6)
@@ -1113,7 +1113,7 @@ if _selected_rows:
             st.caption("Summary by sample / allele")
             st.dataframe(_reads_summary, width="stretch", hide_index=True)
 
-            with st.expander("Individual reads"):
+            with st.expander("📖 Individual reads"):
                 st.dataframe(_reads_df, width="stretch", hide_index=True)
 
 # ── Shared alt_reads join subquery (used by Duplex/Simplex and Reads tabs) ────
@@ -1134,7 +1134,7 @@ _r_join = f"""
 """
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon = st.tabs(["VAF distribution", "Error spectrum", "Strand bias", "Overlap agreement", "Cohort", "Reads", "Duplex/Simplex", "Tumor/Normal", "Panel of Normals"], key="main_tabs")
+tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon = st.tabs(["📊 VAF distribution", "🧬 Error spectrum", "↕️ Strand bias", "🤝 Overlap agreement", "👥 Cohort", "📖 Reads", "🔁 Duplex/Simplex", "🔬 Tumor/Normal", "🛡️ Panel of Normals"], key="main_tabs")
 
 with tab1:
     for vtype, color in [
@@ -1592,7 +1592,7 @@ with tab2:
             # ── COSMIC results (below chart) ───────────────────────────────────
             if cos_sim is not None:
                 st.divider()
-                st.subheader("COSMIC Signature Decomposition")
+                st.subheader("🌌 COSMIC Signature Decomposition")
                 fit_col1, fit_col2 = st.columns(2)
                 fit_col1.metric(
                     "Cosine similarity",
@@ -2562,7 +2562,7 @@ with tab_cohort:
         """).df()
 
         if _cohort_stats.empty:
-            st.warning("No records match the current filters.")
+            st.warning("No records match the current filters.", icon="🔎")
         else:
             _cohort_event = st.dataframe(
                 _cohort_stats,
