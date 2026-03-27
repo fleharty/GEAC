@@ -74,8 +74,14 @@ Optional flags:
 | Flag | Default | Description |
 |---|---|---|
 | `--sample-id` | from SM tag | Override the sample identifier |
+| `--batch` | — | Batch/group label stored as a `batch` column (e.g. processing run name) |
+| `--label1` | — | Free-text sample label 1 stored as `label1` column (e.g. tissue type) |
+| `--label2` | — | Free-text sample label 2 stored as `label2` column (e.g. library prep method) |
+| `--label3` | — | Free-text sample label 3 stored as `label3` column (e.g. sequencer type) |
 | `--vcf` | — | Annotate loci with variant calling status from a VCF/BCF. Mutually exclusive with `--variants-tsv` |
 | `--variants-tsv` | — | TSV variant list (columns: chrom, pos_start, pos_end, ref, var; 0-based). Alternative to `--vcf` |
+| `--gnomad` | — | bgzip+tabix-indexed gnomAD VCF/BCF; adds `gnomad_af` float column (null = not in gnomAD) |
+| `--gnomad-af-field` | `AF` | INFO field to use as allele frequency from the gnomAD VCF (e.g. `AF_joint`) |
 | `--targets` | — | BED or Picard interval list of target regions; adds `on_target` bool column |
 | `--gene-annotations` | — | GFF3, GTF, or UCSC genePred file; adds `gene` string column |
 | `--repeat-window` | 10 | Bases on each side of locus to scan for homopolymers and STRs |
@@ -84,7 +90,6 @@ Optional flags:
 | `--include-duplicates` | off | Count PCR/optical duplicate reads (FLAG 0x400) |
 | `--include-secondary` | off | Count secondary alignments (FLAG 0x100) |
 | `--include-supplementary` | off | Count supplementary alignments (FLAG 0x800) |
-| `--batch` | — | Optional batch label stored in the output Parquet (use to tag processing groups) |
 | `--region` | whole genome | Restrict to a genomic region (e.g. `chr1:1-1000000`) |
 | `--progress-interval` | 30 | Seconds between progress reports to stderr |
 | `--reads-output` | off | Also write per-read detail Parquet (see below) |
@@ -126,6 +131,45 @@ When `--vcf` is provided, each alt allele record is annotated with:
 
 SNVs are matched exactly by chrom/pos/alt allele. Indels are matched by position only,
 since VCF left-aligned representation differs from GEAC's `+seq`/`-seq` notation.
+
+#### gnomAD allele frequency annotation
+
+When `--gnomad` is provided, each alt allele record is annotated with:
+- `gnomad_af` — the allele frequency from the gnomAD VCF's INFO/AF field (`null` if the
+  exact allele is absent from gnomAD)
+
+The file must be bgzip-compressed with a `.tbi` or `.csi` tabix index alongside it —
+exactly the format gnomAD distributes. Chr-prefix mismatches between the BAM and the
+gnomAD VCF (e.g. BAM uses `1`, gnomAD uses `chr1`) are handled automatically.
+
+```bash
+geac collect \
+  --input sample.bam \
+  --reference hg38.fa \
+  --output SAMPLE_001.parquet \
+  --gnomad gnomad.genomes.v4.vcf.gz
+```
+
+Use `--gnomad-af-field AF_joint` (or any other INFO key) to override the default `AF` field.
+
+#### Sample labels
+
+Three generic label columns (`label1`, `label2`, `label3`) let you attach free-text
+metadata to every record at collection time:
+
+```bash
+geac collect \
+  --input sample.bam \
+  --reference hg38.fa \
+  --output SAMPLE_001.parquet \
+  --label1 "lung" \
+  --label2 "KAPA HyperPrep" \
+  --label3 "NovaSeq X"
+```
+
+Labels are stored as nullable strings alongside the existing `batch` column. They are
+completely user-defined — use them for tissue type, library prep, sequencer, timepoint,
+or any other per-sample dimension you want to filter or group by in the Explorer.
 
 #### Multi-nucleotide variants (MNVs)
 

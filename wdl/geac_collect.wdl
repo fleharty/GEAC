@@ -15,10 +15,16 @@ version 1.0
 ##   pipeline             - fgbio | dragen | raw
 ##   sample_id            - (optional) override sample ID; defaults to BAM SM tag
 ##   batch                - (optional) batch/group label stored as a column in the output
+##   label1               - (optional) free-text sample label 1 (e.g. tissue type)
+##   label2               - (optional) free-text sample label 2 (e.g. library prep method)
+##   label3               - (optional) free-text sample label 3 (e.g. sequencer type)
 ##   vcf                  - (optional) VCF/BCF for variant call annotation
 ##   vcf_index            - (optional) Corresponding .tbi / .csi index
 ##   variants_tsv         - (optional) TSV variant list (chrom/pos_start/pos_end/ref/var, 0-based)
 ##                          Alternative to vcf; mutually exclusive.
+##   gnomad               - (optional) bgzip+tabix-indexed gnomAD VCF/BCF for AF annotation
+##   gnomad_index         - (optional) Corresponding .tbi / .csi index
+##   gnomad_af_field      - INFO field to use as allele frequency (default "AF")
 ##   targets              - (optional) BED or Picard interval list; annotates on_target column
 ##   gene_annotations     - (optional) GFF3, GTF, or UCSC genePred; annotates gene column
 ##   region               - (optional) restrict to a region, e.g. chr1:1-1000000
@@ -52,9 +58,15 @@ workflow GeacCollect {
 
         String? sample_id
         String? batch
+        String? label1
+        String? label2
+        String? label3
         File?   vcf
         File?   vcf_index
         File?   variants_tsv
+        File?   gnomad
+        File?   gnomad_index
+        String  gnomad_af_field = "AF"
         File?   targets
         File?   gene_annotations
         String? region
@@ -84,9 +96,15 @@ workflow GeacCollect {
             pipeline              = pipeline,
             sample_id             = sample_id,
             batch                 = batch,
+            label1                = label1,
+            label2                = label2,
+            label3                = label3,
             vcf                   = vcf,
             vcf_index             = vcf_index,
             variants_tsv          = variants_tsv,
+            gnomad                = gnomad,
+            gnomad_index          = gnomad_index,
+            gnomad_af_field       = gnomad_af_field,
             targets               = targets,
             gene_annotations      = gene_annotations,
             region                = region,
@@ -122,9 +140,15 @@ task Collect {
 
         String? sample_id
         String? batch
+        String? label1
+        String? label2
+        String? label3
         File?   vcf
         File?   vcf_index
         File?   variants_tsv
+        File?   gnomad
+        File?   gnomad_index
+        String  gnomad_af_field
         File?   targets
         File?   gene_annotations
         String? region
@@ -163,8 +187,13 @@ task Collect {
             --min-map-qual     ~{min_map_qual} \
             ~{"--sample-id "        + sample_id} \
             ~{"--batch "            + batch} \
+            ~{"--label1 "           + label1} \
+            ~{"--label2 "           + label2} \
+            ~{"--label3 "           + label3} \
             ~{"--vcf "              + vcf} \
             ~{"--variants-tsv "     + variants_tsv} \
+            ~{"--gnomad "           + gnomad} \
+            ~{if defined(gnomad) then "--gnomad-af-field " + gnomad_af_field else ""} \
             ~{"--targets "          + targets} \
             ~{"--gene-annotations " + gene_annotations} \
             ~{"--region "           + region} \
