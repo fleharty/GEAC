@@ -1419,9 +1419,9 @@ with tab2:
 
             # ── Unified SBS96 chart: bars (observed) + optional dots (reconstruction) ──
             _chart_title = (
-                f"SNV Trinucleotide Spectrum — bars = observed, dots = reconstruction (top {top_n_sig} sigs)"
+                f"SNV Trinucleotide Spectrum — bars = observed, dots = reconstruction (top {top_n_sig} sigs)  (n={_total_snvs:,})"
                 if recon_df is not None else
-                "SNV Trinucleotide Spectrum (SBS96)"
+                f"SNV Trinucleotide Spectrum (SBS96)  (n={_total_snvs:,})"
             )
             sel_param = alt.selection_point(name="bar_click", fields=["sbs_label"], on="click")
 
@@ -1756,7 +1756,7 @@ with tab2:
                         alt.concat(*_mirror_sub, columns=3)
                         .resolve_scale(y="shared")
                         .properties(title=alt.TitleParams(
-                            "Called vs Uncalled — mirrored trinucleotide spectrum",
+                            f"Called vs Uncalled — mirrored trinucleotide spectrum  ·  {_called_label} / {_uncalled_label}",
                             fontSize=13,
                         )),
                         width="stretch",
