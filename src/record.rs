@@ -121,6 +121,11 @@ pub struct AltBase {
     // Trinucleotide context for SNVs (5'-base, ref-base, 3'-base from reference).
     // Null for indels or when the locus is at a chromosome boundary.
     pub trinuc_context: Option<String>,
+
+    // gnomAD allele frequency annotation (None if --gnomad not provided or allele absent).
+    /// Allele frequency from gnomAD INFO/AF field. Null when --gnomad is not supplied
+    /// or when this exact allele is not present in the gnomAD VCF.
+    pub gnomad_af: Option<f32>,
 }
 
 /// Cross-annotation of tumor alt-base loci against a paired normal sample.

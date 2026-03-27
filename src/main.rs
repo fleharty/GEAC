@@ -3,6 +3,7 @@ mod cli;
 mod cohort;
 mod coverage;
 mod gene_annotations;
+mod gnomad;
 mod merge;
 mod normal;
 mod pon;
@@ -91,11 +92,21 @@ fn main() -> Result<()> {
                 info!(n_genes = ga.n_genes(), "gene annotations loaded");
             }
 
+            let mut gnomad_index = args
+                .gnomad
+                .as_ref()
+                .map(|p| {
+                    info!(gnomad = %p.display(), af_field = %args.gnomad_af_field, "loading gnomAD VCF");
+                    gnomad::GnomadIndex::open(p, Some(&args.gnomad_af_field))
+                })
+                .transpose()?;
+
             let (records, read_records) = bam::collect_alt_bases(
                 &args,
                 annotator,
                 target_intervals.as_ref().map(|t| t as &_),
                 gene_annots.as_ref(),
+                gnomad_index.as_mut(),
             )?;
 
             let (locus_output, reads_output_path) = if args.reads_output {

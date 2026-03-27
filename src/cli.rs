@@ -100,6 +100,18 @@ pub struct CollectArgs {
     #[arg(long)]
     pub gene_annotations: Option<PathBuf>,
 
+    /// Optional gnomAD VCF/BCF for allele-frequency annotation.
+    /// The file must be bgzip-compressed and tabix/CSI-indexed.
+    /// Each locus record gains a `gnomad_af` column with the INFO/AF value
+    /// for the matching allele, or null if the allele is absent from gnomAD.
+    #[arg(long)]
+    pub gnomad: Option<PathBuf>,
+
+    /// INFO field to use as the allele frequency from the gnomAD VCF.
+    /// Defaults to "AF". Ignored when --gnomad is not set.
+    #[arg(long, default_value = "AF")]
+    pub gnomad_af_field: String,
+
     /// Optional BED file or Picard interval list of target regions.
     /// When provided, each record is annotated with `on_target = true/false`.
     /// If omitted, `on_target` is null in the output Parquet.

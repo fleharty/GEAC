@@ -10,6 +10,7 @@ use rust_htslib::faidx;
 
 use crate::cli::CollectArgs;
 use crate::gene_annotations::GeneAnnotations;
+use crate::gnomad::GnomadIndex;
 use crate::progress::ProgressReporter;
 use crate::record::{AltBase, AltRead, VariantType};
 use crate::repeat::compute_repeat_metrics;
@@ -21,7 +22,7 @@ use crate::vcf::VariantAnnotator;
 /// When `args.reads_output` is true, the second element of the returned tuple contains one
 /// `AltRead` record per read (fragment) that supports an alt base. When false, the second
 /// element is always empty.
-pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnotator>, target_intervals: Option<&TargetIntervals>, gene_annots: Option<&GeneAnnotations>) -> Result<(Vec<AltBase>, Vec<AltRead>)> {
+pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnotator>, target_intervals: Option<&TargetIntervals>, gene_annots: Option<&GeneAnnotations>, mut gnomad: Option<&mut GnomadIndex>) -> Result<(Vec<AltBase>, Vec<AltRead>)> {
     let mut bam = open_bam(&args.input, &args.reference)?;
     let mut ref_cache = RefCache::new(&args.reference)?;
 
@@ -153,6 +154,12 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
             let (variant_called, variant_filter) =
                 vcf_annotation(annotator, &chrom, pos, &alt_allele);
 
+            let gnomad_af = if let Some(ref mut g) = gnomad {
+                g.get(&chrom, pos, &ref_base.to_string(), &alt_allele)?
+            } else {
+                None
+            };
+
             records.push(AltBase {
                 sample_id: sample_id.clone(),
                 chrom: chrom.clone(),
@@ -184,6 +191,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                 str_period:      repeat.str_period,
                 str_len:         repeat.str_len,
                 trinuc_context:  trinuc_context.clone(),
+                gnomad_af,
             });
 
             if collect_reads {
@@ -231,6 +239,12 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
             let (variant_called, variant_filter) =
                 vcf_annotation(annotator, &chrom, pos, &indel.alt_allele);
 
+            let gnomad_af = if let Some(ref mut g) = gnomad {
+                g.get(&chrom, pos, &indel.ref_allele, &indel.alt_allele)?
+            } else {
+                None
+            };
+
             records.push(AltBase {
                 sample_id: sample_id.clone(),
                 chrom: chrom.clone(),
@@ -262,6 +276,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                 str_period:      repeat.str_period,
                 str_len:         repeat.str_len,
                 trinuc_context:  None,
+                gnomad_af,
             });
         }
 
