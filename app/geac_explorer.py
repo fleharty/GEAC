@@ -1505,9 +1505,9 @@ with tab2:
 
             # ── Unified SBS96 chart: bars (observed) + optional dots (reconstruction) ──
             _chart_title = (
-                f"SNV Trinucleotide Spectrum — bars = observed, dots = reconstruction (top {top_n_sig} sigs)  (n={_total_snvs:,})"
+                f"SNV Trinucleotide Spectrum — bars = observed, dots = reconstruction (top {top_n_sig} sigs)"
                 if recon_df is not None else
-                f"SNV Trinucleotide Spectrum (SBS96)  (n={_total_snvs:,})"
+                "SNV Trinucleotide Spectrum (SBS96)"
             )
             sel_param = alt.selection_point(name="bar_click", fields=["sbs_label"], on="click")
 
@@ -1564,12 +1564,14 @@ with tab2:
 
             if recon_df is not None:
                 st.caption(
+                    f"{_total_snvs:,} SNV alt-allele loci. "
                     f"Black dots = COSMIC reconstruction refit to top {top_n_sig} signatures. "
                     "Click bars to drill down. "
                     "Contexts where dots deviate from bars are poorly explained by the selected signatures."
                 )
             else:
                 st.caption(
+                    f"{_total_snvs:,} SNV alt-allele loci. "
                     "Click one or more bars to drill down and open in IGV. "
                     "Enter a COSMIC matrix path above to overlay the reconstruction."
                 )
