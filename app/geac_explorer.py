@@ -3625,6 +3625,9 @@ with tab_duplex:
             if _ab_heat_df.empty:
                 st.info("No AB/BA data in current selection.")
             else:
+                _ab_sel = alt.selection_point(
+                    name="ab_ba_click", fields=["ab_count", "ba_count"], on="click"
+                )
                 _ab_heat_chart = (
                     alt.Chart(_ab_heat_df)
                     .mark_rect()
@@ -3633,19 +3636,48 @@ with tab_duplex:
                         alt.Y("ba_count:O", title="BA strand count (bD tag)"),
                         alt.Color("n_reads:Q", title="Alt-supporting reads",
                                   scale=alt.Scale(scheme="blues")),
+                        opacity=alt.condition(_ab_sel, alt.value(1.0), alt.value(0.4)),
                         tooltip=[
                             alt.Tooltip("ab_count:Q", title="AB count"),
                             alt.Tooltip("ba_count:Q", title="BA count"),
                             alt.Tooltip("n_reads:Q", title="Reads"),
                         ],
                     )
+                    .add_params(_ab_sel)
                     .properties(height=400)
                 )
-                st.altair_chart(_ab_heat_chart, width="stretch")
+                _ev_ab = st.altair_chart(_ab_heat_chart, width="stretch", on_select="rerun")
                 st.caption(
                     "Colour intensity = number of alt-supporting reads with each (ab_count, ba_count) combination. "
-                    "Reads on the diagonal have balanced strand support; reads on the axes came from one strand only."
+                    "Reads on the diagonal have balanced strand support; reads on the axes came from one strand only. "
+                    "Click a cell to drill down."
                 )
+
+                _pts_ab = (_ev_ab.selection or {}).get("ab_ba_click", [])
+                if _pts_ab:
+                    _valid_ab = [p for p in _pts_ab if "ab_count" in p and "ba_count" in p]
+                    if _valid_ab:
+                        _ab_or = " OR ".join(
+                            f"(ab_count = {int(p['ab_count'])} AND ba_count = {int(p['ba_count'])})"
+                            for p in _valid_ab
+                        )
+                        _ab_cond = (
+                            f"(sample_id, chrom, pos, alt_allele) IN ("
+                            f"SELECT sample_id, chrom, pos, alt_allele "
+                            f"FROM alt_reads WHERE {_ab_or})"
+                        )
+                        _ab_sel_df = query_records([_ab_cond])
+                        _pairs_str = ", ".join(
+                            f"({int(p['ab_count'])},{int(p['ba_count'])})"
+                            for p in _valid_ab
+                        )
+                        st.caption(f"{len(_ab_sel_df):,} loci · selected (AB, BA): {_pairs_str}")
+                        st.dataframe(_ab_sel_df[_table_cols], width="stretch")
+                        _ab_key = "ab_ba_" + "_".join(
+                            f"{int(p['ab_count'])}x{int(p['ba_count'])}"
+                            for p in _valid_ab
+                        )
+                        igv_buttons([_ab_cond], _ab_sel_df, key=_ab_key)
 
 # ── Tumor/Normal tab ──────────────────────────────────────────────────────────
 with tab_tn:
