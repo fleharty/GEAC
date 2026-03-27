@@ -61,6 +61,21 @@ pub struct CollectArgs {
     #[arg(long)]
     pub batch: Option<String>,
 
+    /// Optional free-text label 1 for this sample (e.g. tissue type).
+    /// Stored as a nullable string column `label1` in the output Parquet.
+    #[arg(long)]
+    pub label1: Option<String>,
+
+    /// Optional free-text label 2 for this sample (e.g. library prep method).
+    /// Stored as a nullable string column `label2` in the output Parquet.
+    #[arg(long)]
+    pub label2: Option<String>,
+
+    /// Optional free-text label 3 for this sample (e.g. sequencer type).
+    /// Stored as a nullable string column `label3` in the output Parquet.
+    #[arg(long)]
+    pub label3: Option<String>,
+
     /// Output Parquet file path.
     /// When --reads-output is also set, this path is used as a stem:
     /// e.g. "sample.parquet" → "sample.locus.parquet" + "sample.reads.parquet".

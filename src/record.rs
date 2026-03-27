@@ -96,6 +96,12 @@ pub struct AltBase {
     pub read_type: ReadType,
     pub pipeline: Pipeline,
     pub batch: Option<String>,
+    /// Generic sample label 1 (user-defined; e.g. tissue type).
+    pub label1: Option<String>,
+    /// Generic sample label 2 (user-defined; e.g. library prep method).
+    pub label2: Option<String>,
+    /// Generic sample label 3 (user-defined; e.g. sequencer type).
+    pub label3: Option<String>,
 
     // Variant calling annotation (None if no VCF was provided)
     pub variant_called: Option<bool>,

@@ -57,7 +57,10 @@ fn alt_base_schema() -> Arc<Schema> {
         Field::new("overlap_ref_agree", DataType::Int32, false),
         Field::new("read_type", DataType::Utf8, false),
         Field::new("pipeline", DataType::Utf8, false),
-        Field::new("batch", DataType::Utf8, true),
+        Field::new("batch",  DataType::Utf8, true),
+        Field::new("label1", DataType::Utf8, true),
+        Field::new("label2", DataType::Utf8, true),
+        Field::new("label3", DataType::Utf8, true),
         Field::new("variant_called", DataType::Boolean, true),
         Field::new("variant_filter", DataType::Utf8, true),
         Field::new("on_target", DataType::Boolean, true),
@@ -95,6 +98,15 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
     let batch: ArrayRef = Arc::new(StringArray::from(
         records.iter().map(|r| r.batch.as_deref()).collect::<Vec<_>>(),
     ));
+    let label1: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.label1.as_deref()).collect::<Vec<_>>(),
+    ));
+    let label2: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.label2.as_deref()).collect::<Vec<_>>(),
+    ));
+    let label3: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.label3.as_deref()).collect::<Vec<_>>(),
+    ));
     let variant_called: ArrayRef = Arc::new(BooleanArray::from(
         records.iter().map(|r| r.variant_called).collect::<Vec<_>>(),
     ));
@@ -124,7 +136,7 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
             total_depth, alt_count, ref_count,
             fwd_depth, rev_depth, fwd_alt_count, rev_alt_count, fwd_ref_count, rev_ref_count,
             overlap_depth, overlap_alt_agree, overlap_alt_disagree, overlap_ref_agree,
-            read_type, pipeline, batch, variant_called, variant_filter, on_target, gene,
+            read_type, pipeline, batch, label1, label2, label3, variant_called, variant_filter, on_target, gene,
             homopolymer_len, str_period, str_len, trinuc_context, gnomad_af,
         ],
     )
