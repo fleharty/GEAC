@@ -1258,7 +1258,8 @@ with tab2:
         s96["fraction"] = s96["count"] / total if total > 0 else 0.0
         return s96, total
 
-    def _strat_sbs96_chart(spec_df, title):
+    def _strat_sbs96_chart(spec_df, title, y_max=None):
+        _y_scale = alt.Scale(domain=[0, y_max]) if y_max is not None else alt.Undefined
         panels = []
         for _mt in _SBS_MUT_TYPES:
             _s = spec_df[spec_df["mut_type"] == _mt]
@@ -1270,7 +1271,7 @@ with tab2:
                     alt.X("sbs_label:N", sort=_order, title=None,
                           axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
                     alt.Y("fraction:Q", title="Fraction",
-                          axis=alt.Axis(format=".3f")),
+                          scale=_y_scale, axis=alt.Axis(format=".3f")),
                     tooltip=["sbs_label:N",
                              alt.Tooltip("fraction:Q", format=".3f", title="Fraction")],
                 )
@@ -1964,11 +1965,15 @@ with tab2:
                 _r1_s96, _n_r1 = _to_spec96_strat(_r1_raw)
                 _r2_s96, _n_r2 = _to_spec96_strat(_r2_raw)
 
+                _r12_y_max = None
+                if _r1_s96 is not None and _r2_s96 is not None:
+                    _r12_y_max = max(_r1_s96["fraction"].max(), _r2_s96["fraction"].max())
+
                 _rc1, _rc2 = st.columns(2)
                 with _rc1:
                     if _r1_s96 is not None:
                         st.altair_chart(
-                            _strat_sbs96_chart(_r1_s96, f"Read 1 (n={_n_r1:,})"),
+                            _strat_sbs96_chart(_r1_s96, f"Read 1 (n={_n_r1:,})", _r12_y_max),
                             width="stretch",
                         )
                     else:
@@ -1976,7 +1981,7 @@ with tab2:
                 with _rc2:
                     if _r2_s96 is not None:
                         st.altair_chart(
-                            _strat_sbs96_chart(_r2_s96, f"Read 2 (n={_n_r2:,})"),
+                            _strat_sbs96_chart(_r2_s96, f"Read 2 (n={_n_r2:,})", _r12_y_max),
                             width="stretch",
                         )
                     else:
