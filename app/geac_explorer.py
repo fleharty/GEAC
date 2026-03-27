@@ -1258,24 +1258,31 @@ with tab2:
         s96["fraction"] = s96["count"] / total if total > 0 else 0.0
         return s96, total
 
-    def _strat_sbs96_chart(spec_df, title, y_max=None):
+    def _strat_sbs96_chart(spec_df, title, y_max=None, sel_name=None):
         _y_scale = alt.Scale(domain=[0, y_max]) if y_max is not None else alt.Undefined
+        _sel = (
+            alt.selection_point(name=sel_name, fields=["sbs_label"], on="click")
+            if sel_name else None
+        )
         panels = []
         for _mt in _SBS_MUT_TYPES:
             _s = spec_df[spec_df["mut_type"] == _mt]
             _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+            _enc = dict(
+                x=alt.X("sbs_label:N", sort=_order, title=None,
+                         axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
+                y=alt.Y("fraction:Q", title="Fraction",
+                         scale=_y_scale, axis=alt.Axis(format=".3f")),
+                tooltip=["sbs_label:N",
+                         alt.Tooltip("fraction:Q", format=".3f", title="Fraction")],
+            )
+            if _sel is not None:
+                _enc["opacity"] = alt.condition(_sel, alt.value(1.0), alt.value(0.4))
+            _c = alt.Chart(_s).mark_bar(color=_SBS_COLORS[_mt]).encode(**_enc)
+            if _sel is not None:
+                _c = _c.add_params(_sel)
             panels.append(
-                alt.Chart(_s)
-                .mark_bar(color=_SBS_COLORS[_mt])
-                .encode(
-                    alt.X("sbs_label:N", sort=_order, title=None,
-                          axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
-                    alt.Y("fraction:Q", title="Fraction",
-                          scale=_y_scale, axis=alt.Axis(format=".3f")),
-                    tooltip=["sbs_label:N",
-                             alt.Tooltip("fraction:Q", format=".3f", title="Fraction")],
-                )
-                .properties(
+                _c.properties(
                     title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt],
                                           fontSize=11, fontWeight="bold"),
                     width=120, height=110,
@@ -1962,6 +1969,14 @@ with tab2:
                     GROUP BY ab.trinuc_context, ab.ref_allele, ab.alt_allele
                 """).df()
 
+                # Annotate raw dfs with sbs_label for drill-down
+                for _rdf in [_r1_raw, _r2_raw]:
+                    if not _rdf.empty:
+                        _rdf["sbs_label"] = _rdf.apply(
+                            lambda r: _sbs_label(r["trinuc_context"], r["ref_allele"], r["alt_allele"]),
+                            axis=1,
+                        )
+
                 _r1_s96, _n_r1 = _to_spec96_strat(_r1_raw)
                 _r2_s96, _n_r2 = _to_spec96_strat(_r2_raw)
 
@@ -1969,23 +1984,58 @@ with tab2:
                 if _r1_s96 is not None and _r2_s96 is not None:
                     _r12_y_max = max(_r1_s96["fraction"].max(), _r2_s96["fraction"].max())
 
+                _ev_r1 = _ev_r2 = None
                 _rc1, _rc2 = st.columns(2)
                 with _rc1:
                     if _r1_s96 is not None:
-                        st.altair_chart(
-                            _strat_sbs96_chart(_r1_s96, f"Read 1 (n={_n_r1:,})", _r12_y_max),
+                        _ev_r1 = st.altair_chart(
+                            _strat_sbs96_chart(_r1_s96, f"Read 1 (n={_n_r1:,})", _r12_y_max, sel_name="r1_click"),
                             width="stretch",
+                            on_select="rerun",
                         )
                     else:
                         st.info("No R1 SNVs in current selection.")
                 with _rc2:
                     if _r2_s96 is not None:
-                        st.altair_chart(
-                            _strat_sbs96_chart(_r2_s96, f"Read 2 (n={_n_r2:,})", _r12_y_max),
+                        _ev_r2 = st.altair_chart(
+                            _strat_sbs96_chart(_r2_s96, f"Read 2 (n={_n_r2:,})", _r12_y_max, sel_name="r2_click"),
                             width="stretch",
+                            on_select="rerun",
                         )
                     else:
                         st.info("No R2 SNVs in current selection.")
+
+                st.caption("Click a bar to drill down to matching loci and open in IGV.")
+
+                def _r12_drilldown(event, raw_df, read_label, sel_key_prefix):
+                    if event is None:
+                        return
+                    pts = (event.selection or {}).get(f"{sel_key_prefix}_click", [])
+                    if not pts:
+                        return
+                    clicked = [p.get("sbs_label") for p in pts if p.get("sbs_label")]
+                    if not clicked or raw_df.empty:
+                        return
+                    matching = (
+                        raw_df[raw_df["sbs_label"].isin(clicked)]
+                        [["trinuc_context", "ref_allele", "alt_allele"]]
+                        .drop_duplicates()
+                    )
+                    if matching.empty:
+                        return
+                    or_clauses = " OR ".join(
+                        f"(trinuc_context = '{r.trinuc_context}' AND ref_allele = '{r.ref_allele}' AND alt_allele = '{r.alt_allele}')"
+                        for r in matching.itertuples(index=False)
+                    )
+                    extra_cond = f"variant_type = 'SNV' AND ({or_clauses})"
+                    sel = query_records([extra_cond])
+                    label_str = ", ".join(clicked)
+                    st.caption(f"**{read_label}** — {len(sel):,} loci · context(s): {label_str}")
+                    st.dataframe(sel[_table_cols], width="stretch")
+                    igv_buttons([extra_cond], sel, key=f"{sel_key_prefix}_sbs_{'_'.join(clicked)}")
+
+                _r12_drilldown(_ev_r1, _r1_raw, "Read 1", "r1")
+                _r12_drilldown(_ev_r2, _r2_raw, "Read 2", "r2")
 
     else:
         # Fallback: simple ref>alt spectrum for older Parquet files
