@@ -93,7 +93,8 @@ pct_called  = f"{100 * n_called / n_annotated:.1f}%" if n_annotated > 0 else "N/
 
 # ── Filters (sidebar) ─────────────────────────────────────────────────────────
 _FILTER_KEYS = [
-    "chrom_sel", "sample_sel", "batch_sel", "gene_text", "variant_sel", "vaf_range",
+    "chrom_sel", "sample_sel", "batch_sel", "label1_sel", "label2_sel", "label3_sel",
+    "gene_text", "variant_sel", "vaf_range",
     "min_alt", "min_fwd_alt", "min_rev_alt",
     "min_overlap_agree", "min_overlap_disagree",
     "variant_called_sel", "variant_filter_sel", "on_target_sel",
@@ -111,6 +112,9 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["chrom_sel"]          = "All"
     st.session_state["sample_sel"]         = []
     st.session_state["batch_sel"]          = []
+    st.session_state["label1_sel"]         = []
+    st.session_state["label2_sel"]         = []
+    st.session_state["label3_sel"]         = []
     st.session_state["gene_text"]          = ""
     st.session_state["variant_sel"]        = ["SNV", "insertion", "deletion"]
     st.session_state["vaf_range"]          = (0.0, 1.0)
@@ -165,6 +169,30 @@ if _has_data("batch"):
     batch_sel = st.sidebar.multiselect("Batch (blank = all)", _batches, key="batch_sel")
 else:
     batch_sel = []
+
+if _has_data("label1"):
+    _label1_vals = con.execute(f"SELECT DISTINCT label1 FROM {table_expr} WHERE label1 IS NOT NULL ORDER BY label1").df()["label1"].tolist()
+    if "label1_sel" not in st.session_state:
+        st.session_state["label1_sel"] = []
+    label1_sel = st.sidebar.multiselect("Label 1 (blank = all)", _label1_vals, key="label1_sel")
+else:
+    label1_sel = []
+
+if _has_data("label2"):
+    _label2_vals = con.execute(f"SELECT DISTINCT label2 FROM {table_expr} WHERE label2 IS NOT NULL ORDER BY label2").df()["label2"].tolist()
+    if "label2_sel" not in st.session_state:
+        st.session_state["label2_sel"] = []
+    label2_sel = st.sidebar.multiselect("Label 2 (blank = all)", _label2_vals, key="label2_sel")
+else:
+    label2_sel = []
+
+if _has_data("label3"):
+    _label3_vals = con.execute(f"SELECT DISTINCT label3 FROM {table_expr} WHERE label3 IS NOT NULL ORDER BY label3").df()["label3"].tolist()
+    if "label3_sel" not in st.session_state:
+        st.session_state["label3_sel"] = []
+    label3_sel = st.sidebar.multiselect("Label 3 (blank = all)", _label3_vals, key="label3_sel")
+else:
+    label3_sel = []
 
 _genes_available = _has_data("gene")
 if _genes_available:
@@ -782,6 +810,15 @@ if sample_sel:
 if batch_sel:
     b_list = ", ".join(f"'{b}'" for b in batch_sel)
     conditions.append(f"batch IN ({b_list})")
+if label1_sel:
+    l_list = ", ".join(f"'{v}'" for v in label1_sel)
+    conditions.append(f"label1 IN ({l_list})")
+if label2_sel:
+    l_list = ", ".join(f"'{v}'" for v in label2_sel)
+    conditions.append(f"label2 IN ({l_list})")
+if label3_sel:
+    l_list = ", ".join(f"'{v}'" for v in label3_sel)
+    conditions.append(f"label3 IN ({l_list})")
 if variant_sel:
     t_list = ", ".join(f"'{t}'" for t in variant_sel)
     conditions.append(f"variant_type IN ({t_list})")
