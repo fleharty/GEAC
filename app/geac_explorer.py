@@ -990,7 +990,7 @@ _table_cols = [
         "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
         "variant_type", "vaf", *( ["original_vaf"] if _reads_active else []), "alt_count", "ref_count", "total_depth",
         "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
-        "overlap_alt_disagree", "variant_called", "variant_filter", "on_target", "gene",
+        "overlap_alt_disagree", "variant_called", "variant_filter", "on_target", "gene", "gnomad_af",
     ]
     if c in df.columns
 ]
