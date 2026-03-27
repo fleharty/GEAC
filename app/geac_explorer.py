@@ -1,5 +1,6 @@
 import io
 import zipfile
+from pathlib import Path
 import numpy as np
 import streamlit as st
 import duckdb
@@ -13,11 +14,16 @@ import geac_config
 _IS_MIN, _IS_MAX = 20, 500  # insert size slider bounds
 
 st.set_page_config(page_title="GEAC Explorer", layout="wide")
-st.title("GEAC Explorer")
-st.markdown(
-    "**Genomic Evidence Atlas of Cohorts** — inspect alt base metrics from "
-    "per-sample Parquet files or a merged cohort DuckDB database."
-)
+
+_LOGO = Path(__file__).parent.parent / "docs" / "geac-logo.svg"
+if _LOGO.exists():
+    st.image(str(_LOGO), use_container_width=True)
+else:
+    st.title("GEAC Explorer")
+    st.markdown(
+        "**Genomic Evidence Atlas of Cohorts** — inspect alt base metrics from "
+        "per-sample Parquet files or a merged cohort DuckDB database."
+    )
 
 # ── Project config (geac.toml or --config flag) ───────────────────────────────
 _cfg = geac_config.load()
@@ -93,6 +99,9 @@ _FILTER_KEYS = [
     "homopolymer_range", "str_len_range", "min_depth", "max_depth",
     "table_limit_sel", "recompute_vaf",
 ]
+
+if _LOGO.exists():
+    st.sidebar.image(str(_LOGO), use_container_width=True)
 
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
 _hdr_col.header("Filters")
