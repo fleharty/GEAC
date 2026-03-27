@@ -3627,30 +3627,30 @@ with tab_duplex:
             if _ab_heat_df.empty:
                 st.info("No AB/BA data in current selection.")
             else:
+                # mark_rect does not propagate selection_point data through
+                # Streamlit's on_select handler (visual highlight works client-side
+                # but the datum is never sent back to Python).  A bubble chart with
+                # mark_circle encodes the same information and selection works reliably.
                 _ab_sel = alt.selection_point(
                     name="ab_ba_click", fields=["ab_count", "ba_count"], on="click"
                 )
-                _ab_base = alt.Chart(_ab_heat_df)
-                _ab_rect = _ab_base.mark_rect().encode(
-                    alt.X("ab_count:O", title="AB strand count (aD tag)"),
-                    alt.Y("ba_count:O", title="BA strand count (bD tag)"),
-                    alt.Color("n_reads:Q", title="Alt-supporting reads",
-                              scale=alt.Scale(scheme="blues")),
-                    opacity=alt.condition(_ab_sel, alt.value(1.0), alt.value(0.4)),
-                    tooltip=[
-                        alt.Tooltip("ab_count:O", title="AB count"),
-                        alt.Tooltip("ba_count:O", title="BA count"),
-                        alt.Tooltip("n_reads:Q", title="Reads"),
-                    ],
-                )
-                # Invisible point layer: mark_rect doesn't propagate selection_point
-                # data back to Streamlit's on_select handler; mark_point does.
-                _ab_points = _ab_base.mark_point(opacity=0, size=500).encode(
-                    alt.X("ab_count:O"),
-                    alt.Y("ba_count:O"),
-                )
                 _ab_heat_chart = (
-                    (_ab_rect + _ab_points)
+                    alt.Chart(_ab_heat_df)
+                    .mark_circle(stroke="white", strokeWidth=0.5)
+                    .encode(
+                        alt.X("ab_count:O", title="AB strand count (aD tag)"),
+                        alt.Y("ba_count:O", title="BA strand count (bD tag)"),
+                        alt.Size("n_reads:Q", title="Alt-supporting reads",
+                                 scale=alt.Scale(range=[40, 1200])),
+                        alt.Color("n_reads:Q", title="Alt-supporting reads",
+                                  scale=alt.Scale(scheme="blues")),
+                        opacity=alt.condition(_ab_sel, alt.value(0.95), alt.value(0.25)),
+                        tooltip=[
+                            alt.Tooltip("ab_count:O", title="AB count"),
+                            alt.Tooltip("ba_count:O", title="BA count"),
+                            alt.Tooltip("n_reads:Q", title="Reads"),
+                        ],
+                    )
                     .add_params(_ab_sel)
                     .properties(height=400)
                 )
