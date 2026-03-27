@@ -22,6 +22,12 @@ version 1.0
 ##   read_types            - (optional) per-sample array of duplex|simplex|raw; defaults to "duplex" for all
 ##   pipelines             - (optional) per-sample array of fgbio|dragen|raw; defaults to "fgbio" for all
 ##   batches               - (optional) per-sample batch/group label stored as a column in each Parquet
+##   labels1               - (optional) per-sample free-text label 1 (e.g. tissue type)
+##   labels2               - (optional) per-sample free-text label 2 (e.g. library prep method)
+##   labels3               - (optional) per-sample free-text label 3 (e.g. sequencer type)
+##   gnomad                - (optional) bgzip+tabix-indexed gnomAD VCF/BCF for AF annotation
+##   gnomad_index          - (optional) Corresponding .tbi / .csi index
+##   gnomad_af_field       - INFO field to use as allele frequency (default "AF")
 ##   targets               - (optional) BED or Picard interval list
 ##   gene_annotations      - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
 ##   region                - (optional) restrict all samples to a genomic region
@@ -55,6 +61,13 @@ workflow GeacCohort {
         Array[String]? read_types      # optional; if provided must be same length as input_bams
         Array[String]? pipelines       # optional; if provided must be same length as input_bams
         Array[String]? batches         # optional; per-sample batch/group label stored as a column
+        Array[String]? labels1         # optional; per-sample free-text label 1
+        Array[String]? labels2         # optional; per-sample free-text label 2
+        Array[String]? labels3         # optional; per-sample free-text label 3
+
+        File?   gnomad
+        File?   gnomad_index
+        String  gnomad_af_field = "AF"
 
         File?   targets
         File?   gene_annotations
@@ -100,7 +113,16 @@ workflow GeacCohort {
         String this_read_type = if defined(read_types) then select_first([read_types])[i] else "duplex"
         String this_pipeline  = if defined(pipelines)  then select_first([pipelines])[i]  else "fgbio"
         if (defined(batches)) {
-            String this_batch = select_first([batches])[i]
+            String this_batch  = select_first([batches])[i]
+        }
+        if (defined(labels1)) {
+            String this_label1 = select_first([labels1])[i]
+        }
+        if (defined(labels2)) {
+            String this_label2 = select_first([labels2])[i]
+        }
+        if (defined(labels3)) {
+            String this_label3 = select_first([labels3])[i]
         }
 
         call Collect {
@@ -112,10 +134,16 @@ workflow GeacCohort {
                 read_type             = this_read_type,
                 pipeline              = this_pipeline,
                 batch                 = this_batch,
+                label1                = this_label1,
+                label2                = this_label2,
+                label3                = this_label3,
                 sample_id             = this_sample_id,
                 variants_tsv          = this_variants_tsv,
                 vcf                   = this_vcf,
                 vcf_index             = this_vcf_index,
+                gnomad                = gnomad,
+                gnomad_index          = gnomad_index,
+                gnomad_af_field       = gnomad_af_field,
                 targets               = targets,
                 gene_annotations      = gene_annotations,
                 region                = region,
@@ -169,9 +197,15 @@ task Collect {
 
         String? sample_id
         String? batch
+        String? label1
+        String? label2
+        String? label3
         File?   variants_tsv
         File?   vcf
         File?   vcf_index
+        File?   gnomad
+        File?   gnomad_index
+        String  gnomad_af_field
         File?   targets
         File?   gene_annotations
         String? region
@@ -208,8 +242,13 @@ task Collect {
             --min-map-qual     ~{min_map_qual} \
             ~{"--sample-id "        + sample_id} \
             ~{"--batch "            + batch} \
+            ~{"--label1 "           + label1} \
+            ~{"--label2 "           + label2} \
+            ~{"--label3 "           + label3} \
             ~{"--vcf "              + vcf} \
             ~{"--variants-tsv "     + variants_tsv} \
+            ~{"--gnomad "           + gnomad} \
+            ~{if defined(gnomad) then "--gnomad-af-field " + gnomad_af_field else ""} \
             ~{"--targets "          + targets} \
             ~{"--gene-annotations " + gene_annotations} \
             ~{"--region "           + region} \
