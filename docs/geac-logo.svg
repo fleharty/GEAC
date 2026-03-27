@@ -59,11 +59,11 @@
   </g>
 
   <g fill="#0E3A52">
-    <rect x="432" y="71" width="720" height="278" rx="38" fill="#F7F4EA"/>
+    <rect x="432" y="71" width="860" height="278" rx="38" fill="#F7F4EA"/>
   </g>
 
   <text x="475" y="190" fill="#0E3A52" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="130" font-weight="800" letter-spacing="7">GEAC</text>
   <text x="479" y="246" fill="#2E6671" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="30" font-weight="600" letter-spacing="3.6">GENOMIC EVIDENCE ATLAS OF COHORTS</text>
   <path d="M481 279H1113" stroke="#D9E8E3" stroke-width="4" stroke-linecap="round"/>
-  <text x="479" y="319" fill="#4E6B6B" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="26" font-weight="500" letter-spacing="1.4">Cohort-scale sequencing evidence, mapped clearly.</text>
+  <text x="479" y="319" fill="#4E6B6B" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="26" font-weight="500" letter-spacing="1.4">An atlas for rare signal across cohorts.</text>
 </svg>
