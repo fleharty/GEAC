@@ -1182,7 +1182,12 @@ with tab1:
                 .add_params(sel_param)
                 .properties(title=f"{vtype} VAF Distribution", height=300)
             )
+            _vtype_count = int(counts["count"].sum())
             event = st.altair_chart(chart, width="stretch", on_select="rerun")
+            st.caption(
+                f"{_vtype_count:,} alt-allele records (one per unique alt allele observed "
+                f"at a locus in a sample). Click a bar to drill down."
+            )
 
             pts = (event.selection or {}).get(_sel_name, [])
             if pts:
