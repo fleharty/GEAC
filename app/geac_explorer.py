@@ -174,6 +174,21 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["cycle_exclude_mode"] = False
     st.session_state["mq_exclude_mode"]    = False
     st.session_state["read_strand_sel"]    = "All"
+    # Preserve in-tab UI state (plot controls, not sidebar filters).
+    # Explicitly re-writing these into session state before st.rerun() prevents
+    # Streamlit from resetting them to widget defaults on the forced rerun.
+    _TAB_UI_KEYS = [
+        "sb_scale", "sb_color_by", "sb_show_all",
+        "dfe_color_by", "dfe_y_mode", "dfe_show_r1r2",
+        "bq_color_by", "bq_show_r1r2",
+        "ins_color_by", "ins_y_mode",
+        "af_ins_color_by", "af_ins_y_mode",
+        "fs_color_by", "fs_y_mode", "fs_x_range",
+        "sbs_y_mode", "top_n_sig", "cmp_top_n",
+    ]
+    for _k in _TAB_UI_KEYS:
+        if _k in st.session_state:
+            st.session_state[_k] = st.session_state[_k]
     st.rerun()
 
 chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + chroms, key="chrom_sel")
@@ -2275,6 +2290,9 @@ with tab2:
                     .reindex(_all_combos, fill_value=0)
                     .reset_index()
                 )
+                _n_hm_samples = _hm_agg["sample_label"].nunique()
+                _n_hm_loci    = int(_hm_agg["n"].sum())
+
                 _hm_full["mut_type"] = _hm_full["sbs_label"].str.extract(r'\[([A-Z]>[A-Z])\]')[0]
 
                 _hm_chart = (
@@ -2286,7 +2304,12 @@ with tab2:
                         alt.Y("sample_label:N", title="Sample"),
                         alt.Color("fraction:Q", title="Fraction of SNVs",
                                   scale=alt.Scale(scheme="blues")),
-                        alt.Tooltip(["sample_label:N", "sbs_label:N", "n:Q", "fraction:Q"]),
+                        tooltip=[
+                            alt.Tooltip("sample_label:N", title="Sample"),
+                            alt.Tooltip("sbs_label:N",    title="Context"),
+                            alt.Tooltip("n:Q",            title="Alt loci"),
+                            alt.Tooltip("fraction:Q",     title="Fraction"),
+                        ],
                     )
                     .properties(
                         height=max(200, 20 * _hm_full["sample_label"].nunique()),
@@ -2320,6 +2343,7 @@ with tab2:
                     width="stretch",
                 )
                 st.caption(
+                    f"{_n_hm_samples:,} samples · {_n_hm_loci:,} alt loci. "
                     "Color = fraction of that sample's SNVs falling in each trinucleotide context. "
                     "Contexts ordered by mutation type (C>A, C>G, C>T, T>A, T>C, T>G) then flanking bases."
                 )
@@ -2335,6 +2359,12 @@ with tab3:
     _color_options = ["Variant type", "Sample"]
     if _has_data("batch"):
         _color_options.append("Batch")
+    if _has_data("label1"):
+        _color_options.append("Label 1")
+    if _has_data("label2"):
+        _color_options.append("Label 2")
+    if _has_data("label3"):
+        _color_options.append("Label 3")
     if _has_data("on_target"):
         _color_options.append("On target")
     if _has_data("variant_called"):
@@ -2345,6 +2375,9 @@ with tab3:
 
     _sb_opt_cols = ", ".join(filter(None, [
         "batch"          if _has_data("batch")          else None,
+        "label1"         if _has_data("label1")         else None,
+        "label2"         if _has_data("label2")         else None,
+        "label3"         if _has_data("label3")         else None,
         "on_target"      if _has_data("on_target")      else None,
         "variant_called" if _has_data("variant_called") else None,
         "gene"           if _genes_available             else None,
@@ -2446,9 +2479,9 @@ with tab3:
     )
     _sb_n_pts = len(sample_df)
     _sb_title = (
-        f"Strand Bias (log1p scale) — solid: perfect balance; dashed: 95% CI under Binomial(n, 0.5) — showing {_sb_n_pts:,} points"
+        f"Strand Bias (log1p scale) — solid: perfect balance; dashed: 95% CI under Binomial(n, 0.5) — showing {_sb_n_pts:,} alt loci"
         if _use_log1p else
-        f"Strand Bias — solid: perfect balance; dashed: 95% CI under Binomial(n, 0.5) — showing {_sb_n_pts:,} points"
+        f"Strand Bias — solid: perfect balance; dashed: 95% CI under Binomial(n, 0.5) — showing {_sb_n_pts:,} alt loci"
     )
 
     if _use_log1p:
@@ -2473,6 +2506,9 @@ with tab3:
         "Variant type":   ("variant_type:N",  "Variant type",   alt.Scale()),
         "Sample":         ("sample_id:N",      "Sample",         alt.Scale()),
         "Batch":          ("batch:N",          "Batch",          alt.Scale()),
+        "Label 1":        ("label1:N",         "Label 1",        alt.Scale()),
+        "Label 2":        ("label2:N",         "Label 2",        alt.Scale()),
+        "Label 3":        ("label3:N",         "Label 3",        alt.Scale()),
         "On target":      ("on_target:N",      "On target",
                            alt.Scale(domain=[True, False], range=["#2ca02c", "#d62728"])),
         "Called variant": ("variant_called:N", "Called variant",
@@ -2572,15 +2608,25 @@ with tab4:
             .mark_bar(opacity=0.8)
             .encode(
                 alt.X("agree_frac:Q", bin=alt.Bin(maxbins=20), title="Overlap agreement fraction"),
-                alt.Y("n:Q", title="Count"),
+                alt.Y("n:Q", title="Alt loci"),
                 tooltip=[
                     alt.Tooltip("agree_frac:Q", format=".3f", title="Agreement fraction"),
-                    alt.Tooltip("n:Q", title="Count"),
+                    alt.Tooltip("n:Q", title="Alt loci"),
                 ],
             )
             .properties(title="Overlap Agreement Fraction", height=350)
         )
         st.altair_chart(chart, width="stretch")
+        st.caption(
+            "For alt loci where both reads of a pair overlap the variant site, the agreement "
+            "fraction is the proportion of overlapping pairs where R1 and R2 both support the "
+            "same alt base (agree / (agree + disagree)). A value of 1.0 means every overlapping "
+            "pair agreed on the alt; lower values indicate that one read in the pair called ref "
+            "or a different base. True somatic variants typically cluster near 1.0; strand "
+            "artefacts — where only one read of a pair carries the alt — tend to show lower "
+            "agreement or are absent from this plot entirely (they contribute to overlap_alt_disagree "
+            "but not overlap_alt_agree)."
+        )
 
 with tab_cohort:
     if not path.endswith(".duckdb"):
@@ -2662,55 +2708,9 @@ with tab_cohort:
                     st.session_state["sample_sel"] = [_focused_sample]
                     st.rerun()
 
-            # ── Step 2: VAF distribution overlay ──────────────────────────────
-            st.divider()
-            st.subheader("VAF distribution by sample")
-
-            _vaf_raw = con.execute(f"""
-                SELECT {_cohort_id_sql} AS sample_label,
-                       ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
-                FROM {table_expr}
-                WHERE {_cohort_where} AND variant_type = 'SNV'
-            """).df()
-
-            if _vaf_raw.empty:
-                st.info("No SNVs in current selection.")
-            else:
-                _vaf_yscale = st.radio(
-                    "Y-axis scale", ["Linear", "Symlog"], horizontal=True,
-                    key="vaf_yscale",
-                )
-                _vaf_chart = (
-                    alt.Chart(_vaf_raw)
-                    .transform_density(
-                        density="vaf",
-                        groupby=["sample_label"],
-                        extent=[0, 1],
-                        steps=200,
-                    )
-                    .mark_line(opacity=0.8)
-                    .encode(
-                        alt.X("value:Q", title="VAF"),
-                        alt.Y("density:Q", title="Density",
-                              scale=alt.Scale(type="symlog" if _vaf_yscale == "Symlog" else "linear")),
-                        alt.Color("sample_label:N", title="Sample"),
-                        tooltip=["sample_label:N",
-                                 alt.Tooltip("value:Q", format=".3f", title="VAF")],
-                    )
-                    .properties(
-                        title="SNV VAF Distribution (all samples)",
-                        height=350,
-                    )
-                )
-                st.altair_chart(_vaf_chart, width="stretch")
-
-            # ── Step 3: Strand balance scatter ────────────────────────────────
+            # ── Step 2: Strand balance scatter ────────────────────────────────
             st.divider()
             st.subheader("Strand balance by sample")
-            st.caption(
-                "Each dot is one sample. x = mean strand balance (0.5 = perfect), "
-                "y = mean VAF. Outliers in either axis may indicate a problematic sample."
-            )
 
             _strand_stats = con.execute(f"""
                 SELECT
@@ -2766,15 +2766,14 @@ with tab_cohort:
                     (_strand_chart + _ref_line).properties(height=350),
                     width="stretch",
                 )
+                st.caption(
+                    "Each dot is one sample. x = mean strand balance (0.5 = perfect), "
+                    "y = mean VAF. Outliers in either axis may indicate a problematic sample."
+                )
 
             # ── Step 4: Alt loci count vs mean base quality ───────────────────
             st.divider()
             st.subheader("Alt loci count vs mean base quality (per sample)")
-            st.caption(
-                "Each dot is one sample. x = number of distinct alt loci, "
-                "y = mean base quality across all alt-supporting reads. "
-                "Samples with many loci but low base quality may be artefact-driven."
-            )
             _bq_label_sql  = "ab.sample_id || ' / ' || ab.batch" if _has_batch else "ab.sample_id"
             _bq_group_sql  = "ab.sample_id, ab.batch"            if _has_batch else "ab.sample_id"
             _bq_batch_sel  = "batch,"                            if _has_batch else ""
@@ -2822,6 +2821,11 @@ with tab_cohort:
                     .properties(height=350, title="Alt loci count vs mean base quality (per sample)")
                 )
                 st.altair_chart(_bq_loci_chart, width="stretch")
+                st.caption(
+                    "Each dot is one sample. x = number of distinct alt loci, "
+                    "y = mean base quality across all alt-supporting reads. "
+                    "Samples with many loci but low base quality may be artefact-driven."
+                )
 
             # ── Step 5: SNV count bar chart stacked by SBS6 substitution ──────
             st.subheader("SNV Count by Sample (SBS6 breakdown)")
@@ -2864,7 +2868,16 @@ with tab_cohort:
                     )
                     .properties(height=350, title="SNV count per sample colored by SBS6 substitution type")
                 )
+                _sbs6_total = int(_sbs6_df["n_snv"].sum())
                 st.altair_chart(_sbs6_chart, width="stretch")
+                st.caption(
+                    f"{_sbs6_total:,} SNVs across {_sbs6_df['sample_label'].nunique():,} samples. "
+                    "Each bar shows the total SNV count for one sample, stacked by the six SBS "
+                    "substitution classes (C>A, C>G, C>T, T>A, T>C, T>G). Samples are sorted by "
+                    "total SNV count. A dominant C>T signal can indicate UV or FFPE damage; elevated "
+                    "C>A is associated with oxidative damage or smoking; a relatively flat distribution "
+                    "is typical of background noise."
+                )
 
 with tab_reads:
     if not _has_alt_reads:
@@ -2884,6 +2897,12 @@ with tab_reads:
         _dfe_color_options = ["All samples (aggregate)", "Sample"]
         if _has_data("batch"):
             _dfe_color_options.append("Batch")
+        if _has_data("label1"):
+            _dfe_color_options.append("Label 1")
+        if _has_data("label2"):
+            _dfe_color_options.append("Label 2")
+        if _has_data("label3"):
+            _dfe_color_options.append("Label 3")
         _dfe_color_by = _dfe_ctrl1.radio(
             "Color by", _dfe_color_options,
             horizontal=True, key="dfe_color_by",
@@ -2895,15 +2914,26 @@ with tab_reads:
         _dfe_by_read   = _dfe_ctrl3.checkbox("Show R1/R2", value=False, key="dfe_show_r1r2")
         _dfe_by_sample = _dfe_color_by == "Sample"
         _dfe_by_batch  = _dfe_color_by == "Batch"
+        _dfe_by_label  = _dfe_color_by in ("Label 1", "Label 2", "Label 3")
+        _dfe_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_dfe_color_by)
         _dfe_normalize = _dfe_y_mode == "Fraction"
         _DFE_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
         _dfe_batch_src = (
             f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr}"
             f" WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
         )
+        _dfe_label_src = (
+            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, {_dfe_lbl_col} FROM {table_expr}"
+            f" WHERE {_dfe_lbl_col} IS NOT NULL) _lbl ON ar.sample_id = _lbl.sample_id"
+        ) if _dfe_by_label else _r_join
         if _dfe_by_batch and _dfe_by_read:
             _dfe_source      = _dfe_batch_src
             _dfe_select_expr = f"ab.batch || ' ' || {_DFE_READ_EXPR} AS label, "
+            _dfe_group_expr  = "label, "
+            _dfe_label_col   = "label"
+        elif _dfe_by_label and _dfe_by_read:
+            _dfe_source      = _dfe_label_src
+            _dfe_select_expr = f"_lbl.{_dfe_lbl_col} || ' ' || {_DFE_READ_EXPR} AS label, "
             _dfe_group_expr  = "label, "
             _dfe_label_col   = "label"
         elif _dfe_by_sample and _dfe_by_read:
@@ -2921,6 +2951,11 @@ with tab_reads:
             _dfe_select_expr = "ab.batch AS batch, "
             _dfe_group_expr  = "ab.batch, "
             _dfe_label_col   = "batch"
+        elif _dfe_by_label:
+            _dfe_source      = _dfe_label_src
+            _dfe_select_expr = f"_lbl.{_dfe_lbl_col} AS {_dfe_lbl_col}, "
+            _dfe_group_expr  = f"_lbl.{_dfe_lbl_col}, "
+            _dfe_label_col   = _dfe_lbl_col
         elif _dfe_by_sample:
             _dfe_source      = _r_join
             _dfe_select_expr = "ar.sample_id, "
@@ -2994,6 +3029,12 @@ with tab_reads:
         _bq_color_options = ["All samples (aggregate)", "Sample"]
         if _has_data("batch"):
             _bq_color_options.append("Batch")
+        if _has_data("label1"):
+            _bq_color_options.append("Label 1")
+        if _has_data("label2"):
+            _bq_color_options.append("Label 2")
+        if _has_data("label3"):
+            _bq_color_options.append("Label 3")
         _bq_color_by = _bq_ctrl1.radio(
             "Color by", _bq_color_options,
             horizontal=True, key="bq_color_by",
@@ -3001,14 +3042,25 @@ with tab_reads:
         _bq_by_read   = _bq_ctrl2.checkbox("Show R1/R2", value=False, key="bq_show_r1r2")
         _bq_by_sample = _bq_color_by == "Sample"
         _bq_by_batch  = _bq_color_by == "Batch"
+        _bq_by_label  = _bq_color_by in ("Label 1", "Label 2", "Label 3")
+        _bq_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_bq_color_by)
         _BQ_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
         _bq_batch_src = (
             f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr}"
             f" WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
         )
+        _bq_label_src = (
+            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, {_bq_lbl_col} FROM {table_expr}"
+            f" WHERE {_bq_lbl_col} IS NOT NULL) _lbl ON ar.sample_id = _lbl.sample_id"
+        ) if _bq_by_label else _r_join
         if _bq_by_batch and _bq_by_read:
             _bq_source      = _bq_batch_src
             _bq_select_expr = f"ab.batch || ' ' || {_BQ_READ_EXPR} AS label, "
+            _bq_group_expr  = "label, "
+            _bq_label_col   = "label"
+        elif _bq_by_label and _bq_by_read:
+            _bq_source      = _bq_label_src
+            _bq_select_expr = f"_lbl.{_bq_lbl_col} || ' ' || {_BQ_READ_EXPR} AS label, "
             _bq_group_expr  = "label, "
             _bq_label_col   = "label"
         elif _bq_by_sample and _bq_by_read:
@@ -3026,6 +3078,11 @@ with tab_reads:
             _bq_select_expr = "ab.batch AS batch, "
             _bq_group_expr  = "ab.batch, "
             _bq_label_col   = "batch"
+        elif _bq_by_label:
+            _bq_source      = _bq_label_src
+            _bq_select_expr = f"_lbl.{_bq_lbl_col} AS {_bq_lbl_col}, "
+            _bq_group_expr  = f"_lbl.{_bq_lbl_col}, "
+            _bq_label_col   = _bq_lbl_col
         elif _bq_by_sample:
             _bq_source      = _r_join
             _bq_select_expr = "ar.sample_id, "
@@ -3094,40 +3151,53 @@ with tab_reads:
 
             if _gap_threshold > 0:
                 st.info(
-                    f"**Gap correction** (default): for paired-end reads of length {int(_read_len_median)} bp, "
+                    f"**Gap correction**: for paired-end reads of length {int(_read_len_median)} bp, "
                     f"fragments longer than {int(_gap_threshold)} bp have a gap between R1 and R2 where neither "
-                    "read covers the position. Longer fragments are therefore underrepresented in the raw "
-                    "distribution, producing a kink at that threshold. Gap-corrected divides each bin by its "
-                    "capture probability \u2014 min(1, 2R\u2009/\u2009L) \u2014 to recover the unbiased fragment size distribution. "
-                    "Switch to **Frequency** to see the raw (uncorrected) distribution."
+                    "read covers the position. Longer fragments are therefore underrepresented in the raw count, "
+                    "producing a kink at that threshold. **Frequency** mode divides each bin by its capture "
+                    "probability \u2014 min(1, 2R\u2009/\u2009L) \u2014 to recover the unbiased fragment size distribution. "
+                    "Switch to **Count** to see the raw read counts."
                 )
 
             st.subheader("Insert size distribution")
             _ins_color_options = ["All samples (aggregate)", "Sample"]
             if _has_data("batch"):
                 _ins_color_options.append("Batch")
+            if _has_data("label1"):
+                _ins_color_options.append("Label 1")
+            if _has_data("label2"):
+                _ins_color_options.append("Label 2")
+            if _has_data("label3"):
+                _ins_color_options.append("Label 3")
             _ins_color_by = st.radio(
                 "Color by", _ins_color_options,
                 horizontal=True, key="ins_color_by",
             )
             _ins_by_sample = _ins_color_by == "Sample"
             _ins_by_batch  = _ins_color_by == "Batch"
+            _ins_by_label  = _ins_color_by in ("Label 1", "Label 2", "Label 3")
+            _ins_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_ins_color_by)
             _ins_label_col = (
-                "sample_id" if _ins_by_sample else
-                "batch"     if _ins_by_batch  else
+                "sample_id"   if _ins_by_sample else
+                "batch"       if _ins_by_batch  else
+                _ins_lbl_col  if _ins_by_label  else
                 None
             )
             _ins_source = (
                 f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
-                if _ins_by_batch else _r_join
+                if _ins_by_batch else
+                f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, {_ins_lbl_col} FROM {table_expr} WHERE {_ins_lbl_col} IS NOT NULL) _lbl ON ar.sample_id = _lbl.sample_id"
+                if _ins_by_label else _r_join
             )
             _ins_select_expr = (
-                "ab.batch AS batch, " if _ins_by_batch else
-                f"ar.{_ins_label_col}, " if _ins_label_col else ""
+                "ab.batch AS batch, "                        if _ins_by_batch  else
+                f"_lbl.{_ins_lbl_col} AS {_ins_lbl_col}, "  if _ins_by_label  else
+                f"ar.{_ins_label_col}, "                     if _ins_label_col else ""
             )
             _ins_group_expr = (
-                "ab.batch, " if _ins_by_batch else
-                f"ar.{_ins_label_col}, " if _ins_label_col else ""
+                "ab.batch, "                  if _ins_by_batch  else
+                f"_lbl.{_ins_lbl_col}, "      if _ins_by_label  else
+                f"ar.{_ins_label_col}, "      if _ins_label_col else ""
             )
 
             _ins_df = con.execute(f"""
@@ -3143,12 +3213,11 @@ with tab_reads:
             if not _ins_df.empty:
                 _ins_y_mode = st.radio(
                     "Y axis",
-                    ["Gap-corrected", "Frequency", "Count"],
+                    ["Frequency", "Count"],
                     horizontal=True,
                     key="ins_y_mode",
                 )
-                _ins_use_freq    = _ins_y_mode == "Frequency"
-                _ins_use_corrected = _ins_y_mode == "Gap-corrected"
+                _ins_use_corrected = _ins_y_mode == "Frequency"
 
                 # Apply gap correction: weight = min(1, 2R/L); corrected = raw / weight
                 if _ins_use_corrected and _read_len_median > 0:
@@ -3158,29 +3227,25 @@ with tab_reads:
                 else:
                     _ins_df["n_eff"] = _ins_df["n_reads"].astype(float)
 
-                if _ins_use_freq or _ins_use_corrected:
+                if _ins_use_corrected:
                     if _ins_label_col:
                         _ins_totals = _ins_df.groupby(_ins_label_col)["n_eff"].transform("sum")
                     else:
                         _ins_totals = _ins_df["n_eff"].sum()
                     _ins_df["frequency"] = _ins_df["n_eff"] / _ins_totals
 
-                _ins_y_field = "frequency" if (_ins_use_freq or _ins_use_corrected) else "n_reads"
-                _ins_y_title = (
-                    "Gap-corrected frequency" if _ins_use_corrected else
-                    "Frequency"               if _ins_use_freq      else
-                    "Alt-supporting reads"
-                )
+                _ins_y_field = "frequency" if _ins_use_corrected else "n_reads"
+                _ins_y_title = "Frequency" if _ins_use_corrected else "Alt-supporting reads"
                 _ins_enc = dict(
                     x=alt.X("insert_size:Q", title="Insert size (bp)"),
                     y=alt.Y(f"{_ins_y_field}:Q", title=_ins_y_title,
-                            **({"axis": alt.Axis(format=".3f")} if (_ins_use_freq or _ins_use_corrected) else {})),
+                            **({"axis": alt.Axis(format=".3f")} if _ins_use_corrected else {})),
                     tooltip=[
                         *([f"{_ins_label_col}:N"] if _ins_label_col else []),
                         alt.Tooltip("insert_size:Q", title="Insert size (bp)"),
                         alt.Tooltip(f"{_ins_y_field}:Q",
                                     title=_ins_y_title,
-                                    **({"format": ".4f"} if (_ins_use_freq or _ins_use_corrected) else {})),
+                                    **({"format": ".4f"} if _ins_use_corrected else {})),
                     ],
                 )
                 if _ins_label_col:
@@ -3208,7 +3273,7 @@ with tab_reads:
                         f" A kink near {int(_gap_threshold)} bp (2× read length) is expected: "
                         "fragments longer than this have a coverage gap between R1 and R2, "
                         "so not every fragment is captured at every locus. "
-                        "Select 'Gap-corrected' to divide each count by the capture probability "
+                        "Frequency mode divides each bin by its capture probability "
                         "min(1, 2R/L), recovering the unbiased fragment size distribution."
                     )
                 st.caption(_ins_caption)
@@ -3219,33 +3284,48 @@ with tab_reads:
             _af_ins_color_options = ["All samples (aggregate)", "Sample"]
             if _has_data("batch"):
                 _af_ins_color_options.append("Batch")
+            if _has_data("label1"):
+                _af_ins_color_options.append("Label 1")
+            if _has_data("label2"):
+                _af_ins_color_options.append("Label 2")
+            if _has_data("label3"):
+                _af_ins_color_options.append("Label 3")
             _af_ins_ctrl1, _af_ins_ctrl2 = st.columns(2)
             _af_ins_color_by = _af_ins_ctrl1.radio(
                 "Color by", _af_ins_color_options,
                 horizontal=True, key="af_ins_color_by",
             )
             _af_ins_y_mode = _af_ins_ctrl2.radio(
-                "Y axis", ["Gap-corrected", "Frequency", "Count"],
+                "Y axis", ["Frequency", "Count"],
                 horizontal=True, key="af_ins_y_mode",
             )
             _af_ins_by_sample = _af_ins_color_by == "Sample"
             _af_ins_by_batch  = _af_ins_color_by == "Batch"
+            _af_ins_by_label  = _af_ins_color_by in ("Label 1", "Label 2", "Label 3")
+            _af_ins_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_af_ins_color_by)
             _af_ins_group_col = (
-                "sample_id" if _af_ins_by_sample else
-                "batch"     if _af_ins_by_batch  else
+                "sample_id"       if _af_ins_by_sample else
+                "batch"           if _af_ins_by_batch  else
+                _af_ins_lbl_col   if _af_ins_by_label  else
                 None
             )
             _af_ins_extra_select = (
-                "ar.sample_id, " if _af_ins_by_sample else
-                "_locus.batch, " if _af_ins_by_batch  else
+                "ar.sample_id, "                           if _af_ins_by_sample else
+                "_locus.batch, "                           if _af_ins_by_batch  else
+                f"_locus.{_af_ins_lbl_col}, "              if _af_ins_by_label  else
                 ""
             )
             _af_ins_extra_group = (
-                "ar.sample_id, " if _af_ins_by_sample else
-                "_locus.batch, " if _af_ins_by_batch  else
+                "ar.sample_id, "                           if _af_ins_by_sample else
+                "_locus.batch, "                           if _af_ins_by_batch  else
+                f"_locus.{_af_ins_lbl_col}, "              if _af_ins_by_label  else
                 ""
             )
-            _af_ins_locus_extra = ", batch" if _af_ins_by_batch else ""
+            _af_ins_locus_extra = (
+                ", batch"                   if _af_ins_by_batch else
+                f", {_af_ins_lbl_col}"      if _af_ins_by_label else
+                ""
+            )
 
             _af_ins_df = con.execute(f"""
                 SELECT
@@ -3273,8 +3353,7 @@ with tab_reads:
             if _af_ins_df.empty:
                 st.info("No data.")
             else:
-                _af_ins_use_freq      = _af_ins_y_mode == "Frequency"
-                _af_ins_use_corrected = _af_ins_y_mode == "Gap-corrected"
+                _af_ins_use_corrected = _af_ins_y_mode == "Frequency"
 
                 # When grouping by sample/batch, combine group + af_class into one label
                 # so color encodes the group and line style implicitly encodes AF class.
@@ -3303,21 +3382,17 @@ with tab_reads:
                 else:
                     _af_ins_df["n_eff"] = _af_ins_df["n_reads"].astype(float)
 
-                if _af_ins_use_freq or _af_ins_use_corrected:
+                if _af_ins_use_corrected:
                     _norm_key = "series" if _af_ins_group_col else "af_class"
                     _af_totals = _af_ins_df.groupby(_norm_key)["n_eff"].transform("sum")
                     _af_ins_df["frequency"] = _af_ins_df["n_eff"] / _af_totals
 
-                _af_ins_y_title = (
-                    "Gap-corrected frequency" if _af_ins_use_corrected else
-                    "Frequency"               if _af_ins_use_freq      else
-                    "Alt-supporting reads"
-                )
-                _af_ins_y_field = "frequency" if (_af_ins_use_freq or _af_ins_use_corrected) else "n_reads"
+                _af_ins_y_title = "Frequency" if _af_ins_use_corrected else "Alt-supporting reads"
+                _af_ins_y_field = "frequency" if _af_ins_use_corrected else "n_reads"
                 _af_ins_y = (
                     alt.Y(f"{_af_ins_y_field}:Q", title=_af_ins_y_title,
                           axis=alt.Axis(format=".3f"))
-                    if (_af_ins_use_freq or _af_ins_use_corrected) else
+                    if _af_ins_use_corrected else
                     alt.Y("n_reads:Q", title="Alt-supporting reads")
                 )
                 _af_ins_tooltip = [
@@ -3326,7 +3401,7 @@ with tab_reads:
                     alt.Tooltip("af_class:N", title="AF class"),
                     alt.Tooltip(_af_ins_y_field + ":Q",
                                 title=_af_ins_y_title,
-                                **({"format": ".4f"} if (_af_ins_use_freq or _af_ins_use_corrected) else {})),
+                                **({"format": ".4f"} if _af_ins_use_corrected else {})),
                 ]
                 _af_ins_chart = (
                     alt.Chart(_af_ins_df)
@@ -3348,7 +3423,7 @@ with tab_reads:
                 )
                 if _gap_threshold > 0:
                     _af_ins_caption += (
-                        f" Select 'Gap-corrected' to remove the coverage-gap bias near {int(_gap_threshold)} bp."
+                        f" Select 'Frequency' to remove the coverage-gap bias near {int(_gap_threshold)} bp."
                     )
                 st.caption(_af_ins_caption)
 
@@ -3419,6 +3494,12 @@ with tab_duplex:
         _fs_color_options = ["All samples (aggregate)", "Sample"]
         if _has_data("batch"):
             _fs_color_options.append("Batch")
+        if _has_data("label1"):
+            _fs_color_options.append("Label 1")
+        if _has_data("label2"):
+            _fs_color_options.append("Label 2")
+        if _has_data("label3"):
+            _fs_color_options.append("Label 3")
         _fs_color_by = _fs_ctrl_col1.radio(
             "Color by", _fs_color_options,
             horizontal=True, key="fs_color_by",
@@ -3429,11 +3510,14 @@ with tab_duplex:
         )
         _fs_by_sample = _fs_color_by == "Sample"
         _fs_by_batch  = _fs_color_by == "Batch"
+        _fs_by_label  = _fs_color_by in ("Label 1", "Label 2", "Label 3")
+        _fs_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_fs_color_by)
         _fs_normalize = _fs_y_mode == "Fraction"
 
         _fs_group_col = (
-            "ar.sample_id" if _fs_by_sample else
-            "ab.batch"     if _fs_by_batch  else
+            "ar.sample_id"          if _fs_by_sample else
+            "ab.batch"              if _fs_by_batch  else
+            f"_lbl.{_fs_lbl_col}"   if _fs_by_label  else
             None
         )
         _fs_select = f"{_fs_group_col}, " if _fs_group_col else ""
@@ -3441,7 +3525,9 @@ with tab_duplex:
 
         _fs_source = (
             f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
-            if _fs_by_batch else _r_join
+            if _fs_by_batch else
+            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, {_fs_lbl_col} FROM {table_expr} WHERE {_fs_lbl_col} IS NOT NULL) _lbl ON ar.sample_id = _lbl.sample_id"
+            if _fs_by_label else _r_join
         )
 
         _fs_df = con.execute(f"""
@@ -3471,8 +3557,9 @@ with tab_duplex:
                 ]
 
             _fs_label_col = (
-                "sample_id" if _fs_by_sample else
-                "batch"     if _fs_by_batch  else
+                "sample_id"  if _fs_by_sample else
+                "batch"      if _fs_by_batch  else
+                _fs_lbl_col  if _fs_by_label  else
                 None
             )
             if _fs_normalize:
