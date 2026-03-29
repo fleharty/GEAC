@@ -1072,6 +1072,7 @@ with st.expander("Data table", expanded=True):
         width="stretch",
         on_select="rerun",
         selection_mode="single-row",
+        key="main_data_table",
     )
     igv_buttons([], df, key="main")
 
@@ -1248,7 +1249,7 @@ with tab1:
                 .properties(title=f"{vtype} VAF Distribution", height=300)
             )
             _vtype_count = int(counts["count"].sum())
-            event = st.altair_chart(chart, width="stretch", on_select="rerun")
+            event = st.altair_chart(chart, width="stretch", on_select="rerun", key=f"vaf_chart_{vtype}")
             st.caption(
                 f"{_vtype_count:,} alt-allele records (one per unique alt allele observed "
                 f"at a locus in a sample). Click a bar to drill down."
@@ -1625,7 +1626,7 @@ with tab2:
                 .resolve_scale(y="shared")
                 .properties(title=alt.TitleParams(_chart_title, fontSize=14))
             )
-            event = st.altair_chart(chart, width="stretch", on_select="rerun")
+            event = st.altair_chart(chart, width="stretch", on_select="rerun", key="sbs96_spectrum")
 
             if recon_df is not None:
                 st.caption(
@@ -2138,6 +2139,7 @@ with tab2:
                             _strat_sbs96_chart(_r1_s96, f"Read 1 (n={_n_r1:,})", _r12_y_max, sel_name="r1_click"),
                             width="stretch",
                             on_select="rerun",
+                            key="sbs96_r1",
                         )
                     else:
                         st.info("No R1 SNVs in current selection.")
@@ -2147,6 +2149,7 @@ with tab2:
                             _strat_sbs96_chart(_r2_s96, f"Read 2 (n={_n_r2:,})", _r12_y_max, sel_name="r2_click"),
                             width="stretch",
                             on_select="rerun",
+                            key="sbs96_r2",
                         )
                     else:
                         st.info("No R2 SNVs in current selection.")
@@ -2210,7 +2213,7 @@ with tab2:
                 .add_params(sel_param)
                 .properties(title="SNV Error Spectrum", height=350)
             )
-            event = st.altair_chart(chart, width="stretch", on_select="rerun")
+            event = st.altair_chart(chart, width="stretch", on_select="rerun", key="snv_error_spectrum")
 
             pts = (event.selection or {}).get("bar_click", [])
             if pts:
@@ -2507,6 +2510,7 @@ with tab3:
         (ci_lower + ci_upper + diag_line + scatter).resolve_scale(color="independent"),
         width="stretch",
         on_select="rerun",
+        key="strand_bias_scatter",
     )
 
     # ── Drill-down for selected points ────────────────────────────────────────
@@ -2642,6 +2646,7 @@ with tab_cohort:
                 on_select="rerun",
                 selection_mode="single-row",
                 hide_index=True,
+                key="cohort_data_table",
             )
 
             _cohort_sel = (_cohort_event.selection or {}).get("rows", [])
