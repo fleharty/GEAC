@@ -39,7 +39,7 @@ fn dst_table_exists(conn: &Connection, table: &str) -> Result<bool> {
 fn copy_table(conn: &Connection, alias: &str, table: &str) -> Result<()> {
     if dst_table_exists(conn, table)? {
         conn.execute_batch(&format!(
-            "INSERT INTO {table} SELECT * FROM {alias}.{table};"
+            "INSERT INTO {table} BY NAME SELECT * FROM {alias}.{table};"
         ))
         .with_context(|| format!("failed to insert '{table}' from attached '{alias}'"))?;
     } else {
@@ -123,7 +123,7 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
             let escaped = path.display().to_string().replace('\'', "''");
             info!(file = %path.display(), idx = idx + 1, total = locus_inputs.len(), "inserting locus file");
             conn.execute_batch(&format!(
-                "INSERT INTO alt_bases SELECT * FROM read_parquet('{escaped}');"
+                "INSERT INTO alt_bases BY NAME SELECT * FROM read_parquet('{escaped}');"
             ))
             .with_context(|| format!("failed to insert {}", path.display()))?;
         }
@@ -149,7 +149,7 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
             let escaped = path.display().to_string().replace('\'', "''");
             info!(file = %path.display(), idx = idx + 1, total = reads_inputs.len(), "inserting reads file");
             conn.execute_batch(&format!(
-                "INSERT INTO alt_reads SELECT * FROM read_parquet('{escaped}');"
+                "INSERT INTO alt_reads BY NAME SELECT * FROM read_parquet('{escaped}');"
             ))
             .with_context(|| format!("failed to insert reads file {}", path.display()))?;
         }
@@ -175,7 +175,7 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
             let escaped = path.display().to_string().replace('\'', "''");
             info!(file = %path.display(), idx = idx + 1, total = normal_inputs.len(), "inserting normal evidence file");
             conn.execute_batch(&format!(
-                "INSERT INTO normal_evidence SELECT * FROM read_parquet('{escaped}');"
+                "INSERT INTO normal_evidence BY NAME SELECT * FROM read_parquet('{escaped}');"
             ))
             .with_context(|| format!("failed to insert normal evidence file {}", path.display()))?;
         }
@@ -201,7 +201,7 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
             let escaped = path.display().to_string().replace('\'', "''");
             info!(file = %path.display(), idx = idx + 1, total = pon_inputs.len(), "inserting PoN evidence file");
             conn.execute_batch(&format!(
-                "INSERT INTO pon_evidence SELECT * FROM read_parquet('{escaped}');"
+                "INSERT INTO pon_evidence BY NAME SELECT * FROM read_parquet('{escaped}');"
             ))
             .with_context(|| format!("failed to insert PoN evidence file {}", path.display()))?;
         }
@@ -227,7 +227,7 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
             let escaped = path.display().to_string().replace('\'', "''");
             info!(file = %path.display(), idx = idx + 1, total = coverage_inputs.len(), "inserting coverage file");
             conn.execute_batch(&format!(
-                "INSERT INTO coverage SELECT * FROM read_parquet('{escaped}');"
+                "INSERT INTO coverage BY NAME SELECT * FROM read_parquet('{escaped}');"
             ))
             .with_context(|| format!("failed to insert coverage file {}", path.display()))?;
         }
