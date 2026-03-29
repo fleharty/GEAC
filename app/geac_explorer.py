@@ -20,11 +20,17 @@ def _sql_str(value: str) -> str:
 
 
 @st.cache_data
-def _compute_recurrence_loci(path: str, sr_lo: int, sr_hi: int) -> pd.DataFrame:
+def _compute_recurrence_loci(
+    path: str, sr_lo: int, sr_hi: int, scope_where: str = "TRUE"
+) -> pd.DataFrame:
     """Return (chrom, pos, ref_allele, alt_allele) tuples seen in sr_lo..sr_hi samples.
 
-    Results are cached by (path, sr_lo, sr_hi) so the expensive GROUP BY only
-    re-executes when the slider values change, not on every Streamlit rerun.
+    ``scope_where`` restricts which rows participate in the recurrence count
+    (e.g. sample/batch/label/on-target filters) so the slider reflects only
+    the currently visible cohort subset.
+
+    Results are cached by (path, sr_lo, sr_hi, scope_where) so the expensive
+    GROUP BY only re-executes when any of these values change.
     """
     if path.endswith(".duckdb"):
         _c = duckdb.connect(path, read_only=True)
@@ -35,6 +41,7 @@ def _compute_recurrence_loci(path: str, sr_lo: int, sr_hi: int) -> pd.DataFrame:
     result = _c.execute(f"""
         SELECT chrom, pos, ref_allele, alt_allele
         FROM {tbl}
+        WHERE {scope_where}
         GROUP BY chrom, pos, ref_allele, alt_allele
         HAVING COUNT(DISTINCT sample_id) BETWEEN {sr_lo} AND {sr_hi}
     """).df()
@@ -911,7 +918,31 @@ if sample_sel:
     conditions.append(f"sample_id IN ({s_list})")
 _sr_lo, _sr_hi = sample_recurrence
 if _n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total):
-    _rec_df = _compute_recurrence_loci(path, _sr_lo, _sr_hi)
+    # Build a scoping clause so recurrence is counted only among the
+    # currently selected cohort subset (sample/batch/label/on-target).
+    _scope_parts: list[str] = []
+    if sample_sel:
+        _scope_parts.append("sample_id IN ({})".format(
+            ", ".join(f"'{_sql_str(s)}'" for s in sample_sel)))
+    if batch_sel:
+        _scope_parts.append("batch IN ({})".format(
+            ", ".join(f"'{_sql_str(b)}'" for b in batch_sel)))
+    if label1_sel:
+        _scope_parts.append("label1 IN ({})".format(
+            ", ".join(f"'{_sql_str(v)}'" for v in label1_sel)))
+    if label2_sel:
+        _scope_parts.append("label2 IN ({})".format(
+            ", ".join(f"'{_sql_str(v)}'" for v in label2_sel)))
+    if label3_sel:
+        _scope_parts.append("label3 IN ({})".format(
+            ", ".join(f"'{_sql_str(v)}'" for v in label3_sel)))
+    if "on_target" in _schema_cols:
+        if on_target_sel == "On target":
+            _scope_parts.append("on_target = true")
+        elif on_target_sel == "Off target":
+            _scope_parts.append("on_target = false")
+    _scope_where = " AND ".join(_scope_parts) if _scope_parts else "TRUE"
+    _rec_df = _compute_recurrence_loci(path, _sr_lo, _sr_hi, _scope_where)
     con.register("_recurrence_loci", _rec_df)
     conditions.append(
         "(chrom, pos, ref_allele, alt_allele) IN "
