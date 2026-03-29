@@ -160,13 +160,20 @@ sample_sel = st.sidebar.multiselect("Samples (blank = all)", samples, key="sampl
 
 _n_samples_total = len(samples)
 if _n_samples_total > 1:
+    # Clamp any stored session state to the valid range for the current dataset
+    # (guards against loading a different dataset with fewer samples).
     if "sample_recurrence" not in st.session_state:
         st.session_state["sample_recurrence"] = (1, _n_samples_total)
+    else:
+        _sr = st.session_state["sample_recurrence"]
+        st.session_state["sample_recurrence"] = (
+            max(1, min(_sr[0], _n_samples_total)),
+            max(1, min(_sr[1], _n_samples_total)),
+        )
     sample_recurrence = st.sidebar.slider(
         "Sample recurrence (# samples with locus)",
         min_value=1,
         max_value=_n_samples_total,
-        value=(1, _n_samples_total),
         step=1,
         key="sample_recurrence",
         help="Filter loci by how many samples carry that alt allele. "
@@ -495,6 +502,8 @@ else:
     is_exclude_mode = False
     read_strand_sel = "All"
     _fs_lo = _fs_hi = _cycle_lo = _cycle_hi = _mq_lo = _mq_hi = _is_lo = _is_hi = 0
+
+_base_table_expr = table_expr  # pre-reads-filter; used for sample-recurrence counts
 
 # When per-read filters are active, redefine table_expr as a JOIN subquery.
 # Two modes controlled by the "Recompute alt count from filtered reads" checkbox:
@@ -852,13 +861,12 @@ if sample_sel:
     conditions.append(f"sample_id IN ({s_list})")
 _sr_lo, _sr_hi = sample_recurrence
 if _n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total):
-    conditions.append(f"""
-        (chrom, pos, ref_allele, alt_allele) IN (
-            SELECT chrom, pos, ref_allele, alt_allele
-            FROM {table_expr}
-            GROUP BY chrom, pos, ref_allele, alt_allele
-            HAVING COUNT(DISTINCT sample_id) BETWEEN {_sr_lo} AND {_sr_hi}
-        )""".strip()
+    conditions.append(
+        f"(chrom, pos, ref_allele, alt_allele) IN ("
+        f"SELECT chrom, pos, ref_allele, alt_allele "
+        f"FROM {_base_table_expr} "
+        f"GROUP BY chrom, pos, ref_allele, alt_allele "
+        f"HAVING COUNT(DISTINCT sample_id) BETWEEN {_sr_lo} AND {_sr_hi})"
     )
 if batch_sel:
     b_list = ", ".join(f"'{b}'" for b in batch_sel)
