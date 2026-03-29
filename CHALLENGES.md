@@ -240,6 +240,83 @@ of Altair point-selection events in Streamlit's `on_select="rerun"` API is
 unclear; needs further investigation.
 **See also:** The general `on_select="rerun"` debugging recipe below.
 
+### Sample recurrence filter causes intermittent Position drill-down failures
+**Symptom:** After adding a sample recurrence slider (filters loci by how many
+samples carry a given alt allele), the Position drill-down table appears
+inconsistently — reliably at low recurrence values (e.g. 7–12 samples) but only
+about 1-in-5 clicks at high values (e.g. 52–73 samples). The drill-down worked
+every time before the recurrence feature was added.
+
+**Root cause 1 — session state out of range:**
+When switching between datasets with different cohort sizes, the stored
+`sample_recurrence` session state value (e.g. `(1, 73)`) can exceed the new
+dataset's `max_value` (e.g. 8 samples). Streamlit raises a silent error rendering
+the slider, which prevents the page from executing past that widget — so the
+drill-down section is never reached. This explains the "sometimes" breakage
+independent of recurrence value.
+**Fix:** Clamp the stored session state to `[1, _n_samples_total]` before each
+slider render:
+```python
+_sr = st.session_state["sample_recurrence"]
+st.session_state["sample_recurrence"] = (
+    max(1, min(_sr[0], _n_samples_total)),
+    max(1, min(_sr[1], _n_samples_total)),
+)
+```
+
+**Root cause 2 — expensive GROUP BY re-executes on every rerun:**
+The recurrence condition was a self-referencing subquery embedded directly in the
+`WHERE` clause:
+```sql
+(chrom, pos, ref_allele, alt_allele) IN (
+    SELECT chrom, pos, ref_allele, alt_allele FROM alt_bases
+    GROUP BY chrom, pos, ref_allele, alt_allele
+    HAVING COUNT(DISTINCT sample_id) BETWEEN {lo} AND {hi}
+)
+```
+This full-table GROUP BY runs on every Streamlit rerun — including the rerun
+triggered by clicking a row to open the drill-down. At high recurrence values the
+query takes several seconds. The user, seeing no immediate response, clicks again.
+The second click triggers another rerun that clears the first rerun's row
+selection, so the drill-down never appears. This is why it works at low recurrence
+(fast query) but fails at high recurrence (slow query).
+**Fix:** Wrapped the computation in `@st.cache_data` keyed on `(path, lo, hi)`.
+The GROUP BY now runs only when the slider values change; row-click reruns use
+the cached result registered as a DuckDB in-memory view:
+```python
+@st.cache_data
+def _compute_recurrence_loci(path, sr_lo, sr_hi): ...
+_rec_df = _compute_recurrence_loci(path, _sr_lo, _sr_hi)
+con.register("_recurrence_loci", _rec_df)
+conditions.append("(chrom, pos, ref_allele, alt_allele) IN "
+                  "(SELECT ... FROM _recurrence_loci)")
+```
+
+**Root cause 3 — subquery used reads-filtered table_expr:**
+The original subquery used the current `table_expr`, which (when per-read filters
+are active) is a complex multi-table JOIN subquery. Embedding this inside the
+recurrence IN-subquery doubled the join cost and introduced edge cases.
+**Fix:** Saved `_base_table_expr = table_expr` before the reads-filter
+reassignment and used it in the recurrence subquery. Sample recurrence should count
+across the raw data regardless of per-read filter state.
+
+**Current status:** The drill-down is significantly more reliable after these
+three fixes but still fails occasionally under some conditions. The root cause of
+the remaining failures is not fully understood. Suspected additional contributors:
+- Streamlit's WebSocket can time out or the browser can reconnect during a slow
+  full-table scan, triggering an extra rerun that clears selection state.
+- The `con.register("_recurrence_loci", _rec_df)` call re-registers the view on
+  every rerun; if the view is stale or the connection is reused across requests
+  this could produce empty results.
+- For very large cohorts, even the cached-result IN-clause join may be slow enough
+  to approach Streamlit's rerun timeout.
+
+**Possible future approaches:**
+- Pre-materialise the recurrence loci into a DuckDB temp table at filter-change
+  time and use it as a plain table join rather than an IN-clause.
+- Use a JOIN instead of IN for better query planning.
+- Add a spinner or progress indicator so users know to wait rather than click again.
+
 ### `st.altair_chart(on_select="rerun")` selection returns `{}` instead of datum
 **Symptom:** Clicking a chart cell or bar triggers a Streamlit rerun and the
 correct Altair selection name key is present in `event.selection`, but its value
