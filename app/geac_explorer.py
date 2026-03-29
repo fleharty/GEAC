@@ -13,6 +13,29 @@ import geac_config
 
 _IS_MIN, _IS_MAX = 20, 500  # insert size slider bounds
 
+
+@st.cache_data
+def _compute_recurrence_loci(path: str, sr_lo: int, sr_hi: int) -> pd.DataFrame:
+    """Return (chrom, pos, ref_allele, alt_allele) tuples seen in sr_lo..sr_hi samples.
+
+    Results are cached by (path, sr_lo, sr_hi) so the expensive GROUP BY only
+    re-executes when the slider values change, not on every Streamlit rerun.
+    """
+    if path.endswith(".duckdb"):
+        _c = duckdb.connect(path, read_only=True)
+        tbl = "alt_bases"
+    else:
+        _c = duckdb.connect()
+        tbl = f"read_parquet('{path}', union_by_name=true)"
+    result = _c.execute(f"""
+        SELECT chrom, pos, ref_allele, alt_allele
+        FROM {tbl}
+        GROUP BY chrom, pos, ref_allele, alt_allele
+        HAVING COUNT(DISTINCT sample_id) BETWEEN {sr_lo} AND {sr_hi}
+    """).df()
+    _c.close()
+    return result
+
 st.set_page_config(page_title="GEAC Explorer", layout="wide")
 
 _LOGO = Path(__file__).parent.parent / "docs" / "geac-logo.svg"
@@ -861,12 +884,11 @@ if sample_sel:
     conditions.append(f"sample_id IN ({s_list})")
 _sr_lo, _sr_hi = sample_recurrence
 if _n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total):
+    _rec_df = _compute_recurrence_loci(path, _sr_lo, _sr_hi)
+    con.register("_recurrence_loci", _rec_df)
     conditions.append(
-        f"(chrom, pos, ref_allele, alt_allele) IN ("
-        f"SELECT chrom, pos, ref_allele, alt_allele "
-        f"FROM {_base_table_expr} "
-        f"GROUP BY chrom, pos, ref_allele, alt_allele "
-        f"HAVING COUNT(DISTINCT sample_id) BETWEEN {_sr_lo} AND {_sr_hi})"
+        "(chrom, pos, ref_allele, alt_allele) IN "
+        "(SELECT chrom, pos, ref_allele, alt_allele FROM _recurrence_loci)"
     )
 if batch_sel:
     b_list = ", ".join(f"'{b}'" for b in batch_sel)
