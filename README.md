@@ -335,7 +335,7 @@ Key options:
 | `--gc-window` | `100` | Window size (bp) for GC-content calculation |
 | `--min-depth` | `0` | Only emit positions with depth ≥ this value |
 | `--bin-size` | `1` | Merge consecutive positions into bins of this size |
-| `--adaptive-depth-threshold` | — | Adaptively downsample to this target depth |
+| `--adaptive-depth-threshold` | — | Positions with depth below this value are emitted at single-base resolution (`bin_size=1`) and split any in-progress bin, preserving precision in low-coverage regions |
 
 The output Parquet is routed to the `coverage` table by `geac merge` when its filename
 ends in `.coverage.parquet`.
