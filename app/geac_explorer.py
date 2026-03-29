@@ -797,18 +797,28 @@ IGV_CAP = 5
 _IGV_CHUNK = 10_000
 
 
-def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str):
+def igv_buttons(
+    extra_conditions: list[str],
+    display_df: pd.DataFrame,
+    key: str,
+    use_global_filters: bool = True,
+):
     """Render IGV Prepare + Download buttons with chunked progress.
 
-    extra_conditions — additional SQL WHERE fragments (on top of global filters)
-    display_df       — already-fetched display DataFrame (used only to enumerate sample_ids)
-    key              — unique widget key prefix
+    extra_conditions   — SQL WHERE fragments
+    display_df         — already-fetched display DataFrame
+    key                — unique widget key prefix
+    use_global_filters — when True (default), prepend the sidebar ``conditions``
+                         to *extra_conditions*; when False, use *extra_conditions*
+                         alone (e.g. for the position drill-down, which shows all
+                         samples at the locus regardless of sidebar filters).
     """
     if not manifest:
         st.caption("🧭 Add a manifest in the sidebar to enable IGV session download.")
         return
 
-    _extra_w = " AND ".join(conditions + extra_conditions)
+    _where_parts = (conditions + extra_conditions) if use_global_filters else extra_conditions
+    _extra_w = " AND ".join(_where_parts) if _where_parts else "TRUE"
     sample_ids = query_distinct_samples(con, table_expr, _extra_w)
     n = len(sample_ids)
     cap_samples = sample_ids[:IGV_CAP]
@@ -1187,6 +1197,7 @@ if _selected_rows:
         [f"chrom = '{_chrom}'", f"pos = {_pos}"],
         _drill_df,
         key=f"drill_{_chrom}_{_pos}",
+        use_global_filters=False,
     )
 
     # ── Per-read detail (only when alt_reads table is present) ────────────────
