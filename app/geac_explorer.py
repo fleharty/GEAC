@@ -14,6 +14,11 @@ import geac_config
 _IS_MIN, _IS_MAX = 20, 500  # insert size slider bounds
 
 
+def _sql_str(value: str) -> str:
+    """Escape a string value for safe interpolation into a SQL literal."""
+    return value.replace("'", "''")
+
+
 @st.cache_data
 def _compute_recurrence_loci(path: str, sr_lo: int, sr_hi: int) -> pd.DataFrame:
     """Return (chrom, pos, ref_allele, alt_allele) tuples seen in sr_lo..sr_hi samples.
@@ -824,7 +829,7 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
             key=f"{key}_sample_pick",
         )
         cap_samples = chosen if chosen else cap_samples
-        _cap_list = ", ".join(f"'{s}'" for s in cap_samples)
+        _cap_list = ", ".join(f"'{_sql_str(s)}'" for s in cap_samples)
         _chosen_records = con.execute(
             f"SELECT COUNT(*) FROM {table_expr} WHERE {_extra_w} "
             f"AND sample_id IN ({_cap_list})"
@@ -838,7 +843,7 @@ def igv_buttons(extra_conditions: list[str], display_df: pd.DataFrame, key: str)
 
     if st.button("Prepare IGV session", key=f"{key}_prepare"):
         _sample_clause = "sample_id IN ({})".format(
-            ", ".join(f"'{s}'" for s in cap_samples)
+            ", ".join(f"'{_sql_str(s)}'" for s in cap_samples)
         )
         w = " AND ".join(conditions + extra_conditions + [_sample_clause])
         estimated = con.execute(
@@ -902,7 +907,7 @@ if max_alt > 0:
 if chrom_sel != "All":
     conditions.append(f"chrom = '{chrom_sel}'")
 if sample_sel:
-    s_list = ", ".join(f"'{s}'" for s in sample_sel)
+    s_list = ", ".join(f"'{_sql_str(s)}'" for s in sample_sel)
     conditions.append(f"sample_id IN ({s_list})")
 _sr_lo, _sr_hi = sample_recurrence
 if _n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total):
@@ -913,19 +918,19 @@ if _n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total):
         "(SELECT chrom, pos, ref_allele, alt_allele FROM _recurrence_loci)"
     )
 if batch_sel:
-    b_list = ", ".join(f"'{b}'" for b in batch_sel)
+    b_list = ", ".join(f"'{_sql_str(b)}'" for b in batch_sel)
     conditions.append(f"batch IN ({b_list})")
 if label1_sel:
-    l_list = ", ".join(f"'{v}'" for v in label1_sel)
+    l_list = ", ".join(f"'{_sql_str(v)}'" for v in label1_sel)
     conditions.append(f"label1 IN ({l_list})")
 if label2_sel:
-    l_list = ", ".join(f"'{v}'" for v in label2_sel)
+    l_list = ", ".join(f"'{_sql_str(v)}'" for v in label2_sel)
     conditions.append(f"label2 IN ({l_list})")
 if label3_sel:
-    l_list = ", ".join(f"'{v}'" for v in label3_sel)
+    l_list = ", ".join(f"'{_sql_str(v)}'" for v in label3_sel)
     conditions.append(f"label3 IN ({l_list})")
 if variant_sel:
-    t_list = ", ".join(f"'{t}'" for t in variant_sel)
+    t_list = ", ".join(f"'{_sql_str(t)}'" for t in variant_sel)
     conditions.append(f"variant_type IN ({t_list})")
 if min_fwd_alt > 0:
     conditions.append(f"fwd_alt_count >= {min_fwd_alt}")
@@ -946,7 +951,7 @@ elif variant_called_sel == "No":
 elif variant_called_sel == "Unknown (no VCF/TSV)":
     conditions.append("variant_called IS NULL")
 if variant_filter_sel:
-    vf_list = ", ".join(f"'{v.replace(chr(39), chr(39)*2)}'" for v in variant_filter_sel)
+    vf_list = ", ".join(f"'{_sql_str(v)}'" for v in variant_filter_sel)
     conditions.append(f"variant_filter IN ({vf_list})")
 if "on_target" in _schema_cols:
     if on_target_sel == "On target":
@@ -964,7 +969,7 @@ if "gnomad_af" in _schema_cols:
     elif not gnomad_include_null:
         conditions.append("gnomad_af IS NOT NULL")
 if gene_text.strip() and "gene" in _schema_cols:
-    _gene_escaped = gene_text.strip().replace("'", "''")
+    _gene_escaped = _sql_str(gene_text.strip())
     conditions.append(f"gene = '{_gene_escaped}'")
 
 if _repeat_cols_present:
