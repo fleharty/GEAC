@@ -93,7 +93,7 @@ pct_called  = f"{100 * n_called / n_annotated:.1f}%" if n_annotated > 0 else "N/
 
 # ── Filters (sidebar) ─────────────────────────────────────────────────────────
 _FILTER_KEYS = [
-    "chrom_sel", "sample_sel", "batch_sel", "label1_sel", "label2_sel", "label3_sel",
+    "chrom_sel", "sample_sel", "sample_recurrence", "batch_sel", "label1_sel", "label2_sel", "label3_sel",
     "gene_text", "variant_sel", "vaf_range",
     "min_alt", "min_fwd_alt", "min_rev_alt",
     "min_overlap_agree", "min_overlap_disagree",
@@ -112,6 +112,7 @@ _hdr_col.header("🔧 Filters")
 if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["chrom_sel"]          = "All"
     st.session_state["sample_sel"]         = []
+    st.session_state["sample_recurrence"]  = (1, len(samples))
     st.session_state["batch_sel"]          = []
     st.session_state["label1_sel"]         = []
     st.session_state["label2_sel"]         = []
@@ -156,6 +157,23 @@ chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + chroms, key="chrom_sel"
 if "sample_sel" not in st.session_state:
     st.session_state["sample_sel"] = []
 sample_sel = st.sidebar.multiselect("Samples (blank = all)", samples, key="sample_sel")
+
+_n_samples_total = len(samples)
+if _n_samples_total > 1:
+    if "sample_recurrence" not in st.session_state:
+        st.session_state["sample_recurrence"] = (1, _n_samples_total)
+    sample_recurrence = st.sidebar.slider(
+        "Sample recurrence (# samples with locus)",
+        min_value=1,
+        max_value=_n_samples_total,
+        value=(1, _n_samples_total),
+        step=1,
+        key="sample_recurrence",
+        help="Filter loci by how many samples carry that alt allele. "
+             "Set min > 1 to find recurrent sites; set max = 1 to find sample-unique sites.",
+    )
+else:
+    sample_recurrence = (1, 1)
 
 _schema_cols = set(con.execute(f"DESCRIBE SELECT * FROM {table_expr} LIMIT 0").df()["column_name"].tolist())
 
@@ -832,6 +850,16 @@ if chrom_sel != "All":
 if sample_sel:
     s_list = ", ".join(f"'{s}'" for s in sample_sel)
     conditions.append(f"sample_id IN ({s_list})")
+_sr_lo, _sr_hi = sample_recurrence
+if _n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total):
+    conditions.append(f"""
+        (chrom, pos, ref_allele, alt_allele) IN (
+            SELECT chrom, pos, ref_allele, alt_allele
+            FROM {table_expr}
+            GROUP BY chrom, pos, ref_allele, alt_allele
+            HAVING COUNT(DISTINCT sample_id) BETWEEN {_sr_lo} AND {_sr_hi}
+        )""".strip()
+    )
 if batch_sel:
     b_list = ", ".join(f"'{b}'" for b in batch_sel)
     conditions.append(f"batch IN ({b_list})")
