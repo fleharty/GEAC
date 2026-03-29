@@ -303,6 +303,43 @@ of PoN samples that carry the same allele and the maximum and mean PoN VAF.
 Output naming convention: use `.pon_evidence.parquet` so `geac merge` routes the file
 to the `pon_evidence` table automatically.
 
+### Coverage
+
+`geac coverage` pileups a BAM/CRAM and emits per-position depth and GC content as a
+Parquet file (`.coverage.parquet`).  When a targets BED or Picard interval list is
+supplied, every target position is always emitted even if depth is zero; without
+`--targets` only positions with at least one covering read are written.
+
+```bash
+geac coverage \
+  --input     SAMPLE.bam \
+  --reference hg38.fa \
+  --output    SAMPLE.coverage.parquet \
+  --targets   capture_targets.bed \
+  --sample-id SAMPLE_001
+```
+
+Key options:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--targets` | — | BED or Picard interval list; forces all target positions to be emitted |
+| `--region` | — | Restrict to a genomic region (e.g. `chr1:1000-2000`) |
+| `--gene-annotations` | — | GTF, GFF3, or UCSC genePred for gene/transcript annotation |
+| `--sample-id` | SM tag | Override the sample ID stored in the output |
+| `--batch` | — | Batch/group label stored as a column |
+| `--read-type` | `duplex` | `duplex`, `simplex`, or `raw` |
+| `--pipeline` | `fgbio` | `fgbio`, `dragen`, or `raw` |
+| `--min-map-qual` | `0` | Minimum mapping quality |
+| `--min-base-qual` | `20` | Minimum base quality |
+| `--gc-window` | `100` | Window size (bp) for GC-content calculation |
+| `--min-depth` | `0` | Only emit positions with depth ≥ this value |
+| `--bin-size` | `1` | Merge consecutive positions into bins of this size |
+| `--adaptive-depth-threshold` | — | Adaptively downsample to this target depth |
+
+The output Parquet is routed to the `coverage` table by `geac merge` when its filename
+ends in `.coverage.parquet`.
+
 ### Query the cohort (DuckDB)
 
 You can query either a merged DuckDB or raw Parquet files directly.
@@ -567,7 +604,7 @@ ghcr.io/fleharty/geac:latest
 ```bash
 docker pull ghcr.io/fleharty/geac:latest
 # or a specific version:
-docker pull ghcr.io/fleharty/geac:0.3.9
+docker pull ghcr.io/fleharty/geac:0.3.12
 ```
 
 ### Running geac on Terra
@@ -619,7 +656,7 @@ Three WDL 1.0 workflows are provided in `wdl/`:
 | `reference_fasta_index` | File | `.fai` index |
 | `read_type` | String | `duplex` / `simplex` / `raw` |
 | `pipeline` | String | `fgbio` / `dragen` / `raw` |
-| `docker_image` | String | e.g. `ghcr.io/fleharty/geac:0.3.7` |
+| `docker_image` | String | e.g. `ghcr.io/fleharty/geac:0.3.12` |
 | `sample_id` | String? | Override sample ID (default: BAM SM tag) |
 | `vcf` | File? | VCF/BCF for variant call annotation |
 | `vcf_index` | File? | `.tbi` or `.csi` index for VCF |
@@ -704,7 +741,7 @@ Output: `pon_evidence_parquet` (File) — `{tumor_stem}.pon_evidence.parquet`.
 ### Running on Terra
 
 1. Import the desired WDL into your Terra workspace.
-2. Set `docker_image` to `ghcr.io/fleharty/geac:<version>` (e.g. `ghcr.io/fleharty/geac:0.3.7`).
+2. Set `docker_image` to `ghcr.io/fleharty/geac:<version>` (e.g. `ghcr.io/fleharty/geac:0.3.12`).
 3. For `geac_collect.wdl`: link `input_bam`, `input_bam_index`, `reference_fasta`, and
    `reference_fasta_index` to your workspace data table columns; Terra will scatter automatically.
 4. For `geac_cohort.wdl`: provide parallel arrays directly and let the workflow scatter and merge.
