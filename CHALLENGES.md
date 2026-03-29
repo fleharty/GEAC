@@ -300,22 +300,60 @@ recurrence IN-subquery doubled the join cost and introduced edge cases.
 reassignment and used it in the recurrence subquery. Sample recurrence should count
 across the raw data regardless of per-read filter state.
 
-**Current status:** The drill-down is significantly more reliable after these
-three fixes but still fails occasionally under some conditions. The root cause of
-the remaining failures is not fully understood. Suspected additional contributors:
-- Streamlit's WebSocket can time out or the browser can reconnect during a slow
-  full-table scan, triggering an extra rerun that clears selection state.
-- The `con.register("_recurrence_loci", _rec_df)` call re-registers the view on
-  every rerun; if the view is stale or the connection is reused across requests
-  this could produce empty results.
-- For very large cohorts, even the cached-result IN-clause join may be slow enough
-  to approach Streamlit's rerun timeout.
+**Root cause 4 — missing `key=` on `st.dataframe` (PRIMARY):**
+The main data table used `on_select="rerun"` but had no `key=` parameter:
+```python
+_tbl_event = st.dataframe(
+    df[_table_cols],
+    on_select="rerun",
+    selection_mode="single-row",
+    # no key= !
+)
+```
+Without a stable `key`, Streamlit auto-generates one from the widget's position in
+the render tree. Any change above the widget — updated record counts, reworded
+captions, new sidebar filters (like the sample recurrence slider) — shifts the
+auto-key. On the rerun triggered by clicking a row, Streamlit cannot match the
+incoming selection event back to the widget because the key has changed. The widget
+returns an empty selection, so the drill-down section sees no selected row and
+renders nothing.
+
+This is the same class of bug documented below in the `st.altair_chart` section
+(the AB vs BA heatmap fix). The sample recurrence feature introduced new
+conditional UI elements above the data table (stats captions, recurrence slider),
+which made the auto-key unstable on most reruns — explaining why the drill-down
+"worked before recurrence was added" and failed intermittently after.
+
+**Fix:** Added explicit `key=` to every widget using `on_select="rerun"`. A
+systematic audit found 7 widgets that needed keys:
+```python
+st.dataframe(..., key="main_data_table")         # Position drill-down table
+st.dataframe(..., key="cohort_data_table")        # Cohort tab table
+st.altair_chart(..., key="vaf_chart_{vtype}")     # VAF distribution charts
+st.altair_chart(..., key="sbs96_spectrum")        # SBS96 spectrum
+st.altair_chart(..., key="sbs96_r1")              # SBS96 R1
+st.altair_chart(..., key="sbs96_r2")              # SBS96 R2
+st.altair_chart(..., key="snv_error_spectrum")    # SNV error spectrum
+st.altair_chart(..., key="strand_bias_scatter")   # Strand bias scatter
+```
+
+**Lesson learned:** *Every* widget that uses `on_select="rerun"` must have an
+explicit `key=`. This should be treated as a hard rule, not a nice-to-have. The
+failure mode is silent (empty selection, no error), making it difficult to diagnose
+unless you know to look for it. The symptom worsens as more dynamic content is
+added above the widget, which is why it appeared to be caused by the sample
+recurrence feature when the underlying issue was pre-existing.
+
+**Current status:** After all four fixes the Position drill-down works reliably.
+Root cause 4 was the primary remaining issue — the first three fixes addressed
+real problems (stale session state, slow queries, wrong table expression) but the
+missing `key=` was responsible for most of the observed failures.
 
 **Possible future approaches:**
-- Pre-materialise the recurrence loci into a DuckDB temp table at filter-change
+- Enforce a lint or code review rule: `on_select="rerun"` → must have `key=`.
+- Pre-materialise recurrence loci into a DuckDB temp table at filter-change
   time and use it as a plain table join rather than an IN-clause.
-- Use a JOIN instead of IN for better query planning.
-- Add a spinner or progress indicator so users know to wait rather than click again.
+- Use a JOIN instead of IN for better query planning on very large cohorts.
 
 ### `st.altair_chart(on_select="rerun")` selection returns `{}` instead of datum
 **Symptom:** Clicking a chart cell or bar triggers a Streamlit rerun and the
