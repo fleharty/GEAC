@@ -734,13 +734,20 @@ def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str, target_regio
         resources.append(f'        <Resource path="{tr}" name="Target regions"/>')
         tracks.append(f'        <Track id="{tr}" name="Target regions" color="0,100,200" height="40" featureVisibilityWindow="-1"/>')
 
+    sort_chrom = first["chrom"]
+    sort_pos   = int(first["pos"]) + 1  # IGV is 1-based; GEAC pos is 0-based
+
     for sid in sample_ids:
         entry = manifest.get(str(sid))
         if entry:
             bam, bai = entry["bam"], entry["bai"]
             index_attr = f' index="{bai}"' if bai else ""
             resources.append(f'        <Resource path="{bam}" name="{sid}"{index_attr}/>')
-            tracks.append(f'        <Track id="{bam}" name="{sid}"/>')
+            tracks.append(
+                f'        <Track id="{bam}" name="{sid}">\n'
+                f'            <RenderOptions sortOption="BASE" sortByPosition="{sort_chrom}:{sort_pos}"/>\n'
+                f'        </Track>'
+            )
 
     resources.append('        <Resource path="positions.bed" name="Selected positions"/>')
     tracks.append('        <Track id="positions.bed" name="Selected positions" color="255,0,0" height="40"/>')
