@@ -436,8 +436,8 @@ Place a `geac.toml` file in the directory where you run Streamlit (or pass `--co
 ```toml
 data             = "/path/to/cohort.duckdb"         # pre-fill the data file path
 manifest         = "/path/to/manifest.tsv"           # pre-fill the manifest path
-cosmic           = "/path/to/COSMIC_v3.4_SBS_GRCh37.txt"
-genome_build     = "hg19"                            # hg19 | hg38 | mm10 | mm39 | <any IGV ID>
+cosmic           = "/path/to/COSMIC_v3.4_SBS_GRCh38.txt"
+genome_build     = "hg38"                            # hg19 | hg38 | mm10 | mm39 | <any IGV ID>
 auto_launch_igv  = false                             # auto-load sessions into running IGV
 ```
 
