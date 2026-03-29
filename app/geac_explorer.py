@@ -130,6 +130,9 @@ _sidebar_logo = _LOGO_COMPACT if _LOGO_COMPACT.exists() else _LOGO
 if _sidebar_logo.exists():
     st.sidebar.image(str(_sidebar_logo), use_container_width=True)
 
+chroms  = con.execute(f"SELECT DISTINCT chrom     FROM {table_expr} ORDER BY chrom").df()["chrom"].tolist()
+samples = con.execute(f"SELECT DISTINCT sample_id FROM {table_expr} ORDER BY sample_id").df()["sample_id"].tolist()
+
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
 _hdr_col.header("🔧 Filters")
 if _btn_col.button("Clear all", help="Reset all filters to defaults"):
@@ -172,9 +175,6 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state["mq_exclude_mode"]    = False
     st.session_state["read_strand_sel"]    = "All"
     st.rerun()
-
-chroms = con.execute(f"SELECT DISTINCT chrom FROM {table_expr} ORDER BY chrom").df()["chrom"].tolist()
-samples = con.execute(f"SELECT DISTINCT sample_id FROM {table_expr} ORDER BY sample_id").df()["sample_id"].tolist()
 
 chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + chroms, key="chrom_sel")
 if "sample_sel" not in st.session_state:
