@@ -553,8 +553,8 @@ fragment at a locus. Linked to the locus table by `(sample_id, chrom, pos, alt_a
 | `chrom` | string | Chromosome |
 | `pos` | int64 | 0-based position |
 | `alt_allele` | string | Alt allele (links to locus table) |
-| `cycle` | int32 | 1-based sequencing cycle (= query position + 1) |
-| `read_length` | int32 | Total length of the read in bases |
+| `cycle` | int32 | 1-based sequencing cycle at the alt position. Forward reads: `hard_clips_5prime + qpos + 1`; reverse reads: `hard_clips_5prime + read_length − qpos`. Hard-clipped bases at the 5′ end of synthesis are included so cycle reflects true polymerase position. |
+| `read_length` | int32 | Stored sequence length in bases (hard-clipped bases excluded, soft-clipped bases included) |
 | `is_read1` | bool | `true` if R1 (BAM flag `0x40`), `false` if R2 or unpaired |
 | `ab_count` | int32? | fgbio `aD` tag: AB (top-strand) raw read count; null if tag absent |
 | `ba_count` | int32? | fgbio `bD` tag: BA (bottom-strand) raw read count; null if tag absent |
