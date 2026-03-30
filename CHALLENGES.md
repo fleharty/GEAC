@@ -592,3 +592,24 @@ automatically if it doesn't exist.
 failure above, the run was cancelled before the Homebrew tap job ran.
 **Fix:** Simplified to a single `docker` job building only `linux/amd64`, removing
 the matrix, digest upload/download, and `imagetools create` merge step entirely.
+
+---
+
+## v0.4.0 Agenda
+
+### Stream `alt_bases`/`alt_reads` to Parquet instead of buffering in memory
+**Problem:** `collect_alt_bases` (`src/bam/mod.rs`) returns fully materialized
+`Vec<AltBase>` and `Vec<AltRead>` buffers, which are only written to Parquet later
+in `src/main.rs` and `src/writer/parquet.rs`. For `--reads-output` mode this is the
+dominant scalability risk: a single high-depth sample with many alt loci can produce
+millions of `AltRead` rows, all held in RAM simultaneously.
+**Proposed fix:** Thread a streaming Parquet writer (following the pattern established
+by `CoverageWriter` in `src/writer/parquet_coverage.rs`) through the collect loop,
+flushing in fixed-size batches. The `Vec`-return API would be replaced with a
+callback or writer-sink pattern.
+**Impact:** `alt_bases` output unaffected (Terra re-run not required); `alt_reads`
+output format unchanged but memory footprint drops from O(total_alt_reads) to O(batch).
+
+### Fix gene bar chart click-to-drill-down in Low Coverage tab
+**Problem:** Clicking a bar in the gene-level bar chart in the Low Coverage Explorer
+tab does not trigger the position drill-down. Deferred from v0.3.x work.
