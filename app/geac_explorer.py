@@ -1563,7 +1563,9 @@ with tab2:
                          alt.Tooltip("fraction:Q", format=".3f", title="Fraction")],
             )
             if _sel is not None:
-                _enc["opacity"] = alt.condition(_sel, alt.value(1.0), alt.value(0.4))
+                # Reference by name dict to avoid auto-embedding the param definition
+                # in each sub-chart (which would cause Altair deduplication warnings).
+                _enc["opacity"] = alt.condition({"param": sel_name}, alt.value(1.0), alt.value(0.4))
             panels.append(
                 alt.Chart(_s).mark_bar(color=_SBS_COLORS[_mt]).encode(**_enc).properties(
                     title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt],
@@ -1731,7 +1733,7 @@ with tab2:
                               axis=alt.Axis(labelAngle=-90, labelFontSize=8)),
                         alt.Y(f"{_sbs_y_field}:Q", title=_sbs_y_title,
                               **({"axis": alt.Axis(format=".3f")} if _sbs_use_fraction else {})),
-                        opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.4)),
+                        opacity=alt.condition({"param": "bar_click"}, alt.value(1.0), alt.value(0.4)),
                         tooltip=[
                             "sbs_label:N",
                             alt.Tooltip(f"{_sbs_y_field}:Q", title="Observed", format=_sbs_y_fmt),
