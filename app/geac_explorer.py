@@ -53,8 +53,8 @@ def _compute_recurrence_loci(
 
 st.set_page_config(page_title="GEAC Explorer", layout="wide")
 
-_LOGO = Path(__file__).parent.parent / "docs" / "geac-logo.svg"
-_LOGO_COMPACT = Path(__file__).parent.parent / "docs" / "geac-logo-compact.svg"
+_LOGO = Path(__file__).parent / "geac-logo.svg"
+_LOGO_COMPACT = Path(__file__).parent / "geac-logo-compact.svg"
 if _LOGO.exists():
     st.image(str(_LOGO), use_container_width=True)
 else:
