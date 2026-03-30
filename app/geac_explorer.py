@@ -1165,10 +1165,13 @@ with st.expander("Data table", expanded=True):
 _selected_rows = (_tbl_event.selection or {}).get("rows", [])
 if _selected_rows:
     _row = df.iloc[_selected_rows[0]]
-    # Persist the drill-down locus and selected alt so that widgets inside
-    # the drill-down (e.g. the "Same alt allele" checkbox) can trigger reruns
-    # without the dataframe selection being lost.
-    st.session_state["_drill_locus"] = (str(_row["chrom"]), int(_row["pos"]), str(_row["alt_allele"]))
+    # Only update the persisted locus when the user actually clicked a
+    # *different* row.  Without this guard, reruns triggered by drill-down
+    # widgets (e.g. the "Same alt allele" checkbox) could overwrite the
+    # locus with a stale or shifted row index from the dataframe.
+    _new_locus = (str(_row["chrom"]), int(_row["pos"]), str(_row["alt_allele"]))
+    if st.session_state.get("_drill_locus") != _new_locus:
+        st.session_state["_drill_locus"] = _new_locus
 
 if "_drill_locus" in st.session_state:
     _chrom, _pos, _selected_alt = st.session_state["_drill_locus"]
