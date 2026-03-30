@@ -13,6 +13,9 @@ import geac_config
 
 _IS_MIN, _IS_MAX = 20, 500  # insert size slider bounds
 
+# Version of geac this Explorer was built alongside.
+GEAC_VERSION = "0.3.14"
+
 
 def _sql_str(value: str) -> str:
     """Escape a string value for safe interpolation into a SQL literal."""
@@ -108,6 +111,28 @@ if path.endswith(".duckdb"):
         _has_pon_evidence = True
     except Exception:
         _has_pon_evidence = False
+
+    # ── Version check ─────────────────────────────────────────────────────────
+    try:
+        _meta = con.execute("SELECT geac_version FROM geac_metadata LIMIT 1").fetchone()
+        _db_version = _meta[0] if _meta else None
+    except Exception:
+        _db_version = None
+
+    if _db_version is None:
+        st.warning(
+            f"This database was created with a version of geac older than v0.3.14 "
+            f"(no `geac_metadata` table found). The Explorer expects v{GEAC_VERSION}. "
+            "Some columns or features may be missing.",
+            icon="⚠️",
+        )
+    elif _db_version != GEAC_VERSION:
+        st.warning(
+            f"Version mismatch: database was created with geac v{_db_version}, "
+            f"but this Explorer expects v{GEAC_VERSION}. "
+            "Results may be incomplete or columns may differ.",
+            icon="⚠️",
+        )
 
 # ── Summary stats ─────────────────────────────────────────────────────────────
 stats = con.execute(f"""

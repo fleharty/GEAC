@@ -146,6 +146,13 @@ fn merge_produces_duckdb_with_both_samples() {
         .query_row("SELECT COUNT(DISTINCT sample_id) FROM alt_bases", [], |r| r.get(0))
         .unwrap();
     assert_eq!(n_samples, 2, "expected 2 distinct samples in merged DuckDB");
+
+    // geac_metadata table must exist and record the current tool version.
+    assert!(duckdb_table_exists(&db, "geac_metadata"), "geac_metadata table not created");
+    let version: String = conn
+        .query_row("SELECT geac_version FROM geac_metadata LIMIT 1", [], |r| r.get(0))
+        .expect("could not read geac_version from geac_metadata");
+    assert_eq!(version, env!("CARGO_PKG_VERSION"), "geac_version in metadata should match build version");
 }
 
 // ── geac qc ───────────────────────────────────────────────────────────────────

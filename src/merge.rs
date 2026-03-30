@@ -347,6 +347,16 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
         .context("failed to create coverage index")?;
     }
 
+    // ── Phase 4: Version metadata ──────────────────────────────────────────────
+    info!("writing geac_metadata table...");
+    conn.execute_batch(&format!(
+        "DROP TABLE IF EXISTS geac_metadata;
+         CREATE TABLE geac_metadata (geac_version VARCHAR, created_at TIMESTAMPTZ);
+         INSERT INTO geac_metadata VALUES ('{}', current_timestamp);",
+        env!("CARGO_PKG_VERSION")
+    ))
+    .context("failed to write geac_metadata table")?;
+
     info!(output = %args.output.display(), "merge complete");
     Ok(())
 }
