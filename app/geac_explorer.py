@@ -348,18 +348,16 @@ on_target_sel = st.sidebar.selectbox("Target bases", ["All", "On target", "Off t
 
 _GNOMAD_AF_STEPS = ["0", "1e-6", "1e-5", "1e-4", "1e-3", "0.01", "0.1", "1.0"]
 if _has_data("gnomad_af"):
-    if "gnomad_af_range" not in st.session_state:
-        st.session_state["gnomad_af_range"] = ("0", "1.0")
-    if "gnomad_include_null" not in st.session_state:
-        st.session_state["gnomad_include_null"] = True
     gnomad_af_range = st.sidebar.select_slider(
         "gnomAD AF (log scale)",
         options=_GNOMAD_AF_STEPS,
+        value=("0", "1.0"),
         key="gnomad_af_range",
         help="Filter by gnomAD allele frequency. Steps are logarithmic.",
     )
     gnomad_include_null = st.sidebar.checkbox(
         "Include sites absent from gnomAD",
+        value=True,
         key="gnomad_include_null",
     )
 else:
