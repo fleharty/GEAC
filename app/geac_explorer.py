@@ -725,22 +725,28 @@ def launch_igv_session(session_xml: str, bed: str, sort_locus: str = "") -> str:
     with open(bed_path, "w") as f:
         f.write(bed)
 
-    def _igv_rest_sort(locus: str) -> None:
-        """Send a sort-by-base command to IGV via the REST API."""
+    def _igv_sort_by_base(locus: str) -> None:
+        """Send a sort-by-base command to IGV via the socket command interface.
+
+        Port 60151 accepts plain-text batch commands (not HTTP for sort).
+        Format: ``sort base chr:pos``
+        """
         if not locus:
             return
-        sort_url = f"http://localhost:60151/sort?option=BASE&locus={locus}"
+        import socket
         try:
-            urllib.request.urlopen(sort_url, timeout=8)
-        except (urllib.error.URLError, TimeoutError, OSError):
+            with socket.create_connection(("localhost", 60151), timeout=5) as sock:
+                sock.sendall(f"sort base {locus}\n".encode())
+                sock.recv(256)  # read "OK" response
+        except (OSError, TimeoutError):
             pass  # best-effort; user can sort manually
 
     # Try REST API first
     url = f"http://localhost:60151/load?file={urllib.request.pathname2url(session_path)}&merge=false"
     try:
         urllib.request.urlopen(url, timeout=8)
-        time.sleep(1)  # give IGV a moment to load tracks before sorting
-        _igv_rest_sort(sort_locus)
+        time.sleep(2)  # give IGV time to load BAM tracks before sorting
+        _igv_sort_by_base(sort_locus)
         return "Session loaded into running IGV instance."
     except (urllib.error.URLError, TimeoutError, OSError):
         pass
