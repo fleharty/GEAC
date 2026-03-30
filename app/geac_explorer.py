@@ -1564,21 +1564,21 @@ with tab2:
             )
             if _sel is not None:
                 _enc["opacity"] = alt.condition(_sel, alt.value(1.0), alt.value(0.4))
-            _c = alt.Chart(_s).mark_bar(color=_SBS_COLORS[_mt]).encode(**_enc)
-            if _sel is not None:
-                _c = _c.add_params(_sel)
             panels.append(
-                _c.properties(
+                alt.Chart(_s).mark_bar(color=_SBS_COLORS[_mt]).encode(**_enc).properties(
                     title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt],
                                           fontSize=11, fontWeight="bold"),
                     width=120, height=110,
                 )
             )
-        return (
+        chart = (
             alt.concat(*panels, columns=3)
             .resolve_scale(y="shared")
             .properties(title=alt.TitleParams(title, fontSize=13))
         )
+        if _sel is not None:
+            chart = chart.add_params(_sel)
+        return chart
 
     _trinuc_available = _has_data("trinuc_context")
 
