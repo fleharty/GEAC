@@ -1163,15 +1163,24 @@ with st.expander("Data table", expanded=True):
 
 # ── Position-level drill-down ──────────────────────────────────────────────────
 _selected_rows = (_tbl_event.selection or {}).get("rows", [])
+
+# DEBUG — remove after fixing
+st.text(f"[DEBUG] _selected_rows={_selected_rows}")
+st.text(f"[DEBUG] persisted _drill_locus={st.session_state.get('_drill_locus', 'NOT SET')}")
 if _selected_rows:
     _row = df.iloc[_selected_rows[0]]
+    _new_locus = (str(_row["chrom"]), int(_row["pos"]), str(_row["alt_allele"]))
+    st.text(f"[DEBUG] row index={_selected_rows[0]}, row locus={_new_locus}")
+    st.text(f"[DEBUG] match? {st.session_state.get('_drill_locus') == _new_locus}")
     # Only update the persisted locus when the user actually clicked a
     # *different* row.  Without this guard, reruns triggered by drill-down
     # widgets (e.g. the "Same alt allele" checkbox) could overwrite the
     # locus with a stale or shifted row index from the dataframe.
-    _new_locus = (str(_row["chrom"]), int(_row["pos"]), str(_row["alt_allele"]))
     if st.session_state.get("_drill_locus") != _new_locus:
+        st.text(f"[DEBUG] UPDATING _drill_locus: {st.session_state.get('_drill_locus')} → {_new_locus}")
         st.session_state["_drill_locus"] = _new_locus
+else:
+    st.text("[DEBUG] no row selected in dataframe event")
 
 if "_drill_locus" in st.session_state:
     _chrom, _pos, _selected_alt = st.session_state["_drill_locus"]
