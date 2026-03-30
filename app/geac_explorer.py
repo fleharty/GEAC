@@ -201,6 +201,8 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     for _k in _TAB_UI_KEYS:
         if _k in st.session_state:
             st.session_state[_k] = st.session_state[_k]
+    # Clear drill-down state — the underlying data is changing.
+    st.session_state.pop("_drill_locus", None)
     st.rerun()
 
 chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + chroms, key="chrom_sel")
@@ -1163,7 +1165,13 @@ with st.expander("Data table", expanded=True):
 _selected_rows = (_tbl_event.selection or {}).get("rows", [])
 if _selected_rows:
     _row = df.iloc[_selected_rows[0]]
-    _chrom, _pos = _row["chrom"], int(_row["pos"])
+    # Persist the drill-down locus and selected alt so that widgets inside
+    # the drill-down (e.g. the "Same alt allele" checkbox) can trigger reruns
+    # without the dataframe selection being lost.
+    st.session_state["_drill_locus"] = (str(_row["chrom"]), int(_row["pos"]), str(_row["alt_allele"]))
+
+if "_drill_locus" in st.session_state:
+    _chrom, _pos, _selected_alt = st.session_state["_drill_locus"]
 
     # Query ALL samples/alleles at this locus, ignoring current filters.
     _drill_df = con.execute(f"""
@@ -1199,7 +1207,6 @@ if _selected_rows:
         LIMIT 1
     """).df()
 
-    _selected_alt = str(_row["alt_allele"])
     st.subheader(f"🔍 Position drill-down: {_chrom}:{_pos}")
 
     # Option to restrict to the exact alt allele from the selected row.
