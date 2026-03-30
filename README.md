@@ -27,7 +27,7 @@ cohort database for efficient SQL queries across thousands of samples.
 brew install fleharty/geac/geac
 ```
 
-This installs the `geac` binary plus `geac-explorer` and `geac-coverage-explorer` Streamlit launchers.
+This installs the `geac` binary plus `geac-cohort` and `geac-coverage-explorer` Streamlit launchers.
 
 ### Docker (linux/amd64 — Terra / cloud)
 
@@ -385,7 +385,7 @@ WHERE overlap_alt_disagree > overlap_alt_agree;
 Two interactive Streamlit apps are included:
 
 ```bash
-geac-explorer            # alt base / cohort explorer
+geac-cohort            # alt base / cohort explorer
 geac-coverage-explorer   # per-position coverage explorer
 ```
 
@@ -636,8 +636,9 @@ docker run --rm \
 ### Cutting a release
 
 ```bash
-# 1. Bump version in Cargo.toml, commit, push
-# 2. Tag and push:
+# 1. Bump version in Cargo.toml
+# 2. Update GEAC_VERSION in app/geac_explorer.py and app/geac_coverage_explorer.py
+# 3. Commit, push, then tag:
 git tag v0.X.Y && git push origin v0.X.Y
 ```
 
@@ -780,7 +781,7 @@ geac merge  →  cohort .duckdb
 
     # inputs can be mixed: Parquet files, .duckdb files, or both
 
-geac-explorer  →  interactive alt base / cohort browser
+geac-cohort  →  interactive alt base / cohort browser
 geac-coverage-explorer  →  interactive coverage browser
 ```
 

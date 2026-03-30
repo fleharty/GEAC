@@ -7,12 +7,16 @@ import json
 import streamlit.components.v1 as components
 from igv_helpers import load_manifest, resolve_index_uri
 
+GEAC_VERSION = "0.3.14"
+
 st.set_page_config(page_title="GEAC Coverage Explorer", layout="wide")
 st.title("GEAC Coverage Explorer")
 st.markdown(
     "Per-position depth quality metrics from `geac coverage`. "
     "Accepts a merged cohort DuckDB (with a `coverage` table) or a single `.coverage.parquet` file."
 )
+
+st.sidebar.caption(f"geac v{GEAC_VERSION}")
 
 # ── Project config ─────────────────────────────────────────────────────────────
 _cfg = geac_config.load()
@@ -48,6 +52,26 @@ try:
 except Exception as e:
     st.error(f"Could not open file: {e}")
     st.stop()
+
+# ── Version metadata (DuckDB only) ────────────────────────────────────────────
+if path.endswith(".duckdb"):
+    try:
+        _meta = con.execute("SELECT geac_version, created_at FROM geac_metadata LIMIT 1").fetchone()
+        _db_version = _meta[0] if _meta else None
+        _db_created = _meta[1] if _meta else None
+    except Exception:
+        _db_version = None
+        _db_created = None
+
+    if _db_version is not None and _db_version != GEAC_VERSION:
+        st.warning(
+            f"Version mismatch: database was created with geac v{_db_version}, "
+            f"but this Explorer expects v{GEAC_VERSION}. "
+            "Results may be incomplete or columns may differ.",
+            icon="⚠️",
+        )
+    if _db_created is not None:
+        st.sidebar.caption(str(_db_created)[:10])
 
 # ── Detect optional columns ────────────────────────────────────────────────────
 _cols = {

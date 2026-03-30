@@ -39,11 +39,11 @@ class Geac < Formula
       "google-cloud-storage",
       "google-auth"
 
-    (bin/"geac-explorer").write <<~SH
+    (bin/"geac-cohort").write <<~SH
       #!/bin/bash
       exec "#{libexec}/venv/bin/streamlit" run "#{libexec}/geac_explorer.py" "$@"
     SH
-    chmod 0755, bin/"geac-explorer"
+    chmod 0755, bin/"geac-cohort"
 
     (bin/"geac-coverage-explorer").write <<~SH
       #!/bin/bash

@@ -116,10 +116,12 @@ if path.endswith(".duckdb"):
 
     # ── Version check ─────────────────────────────────────────────────────────
     try:
-        _meta = con.execute("SELECT geac_version FROM geac_metadata LIMIT 1").fetchone()
+        _meta = con.execute("SELECT geac_version, created_at FROM geac_metadata LIMIT 1").fetchone()
         _db_version = _meta[0] if _meta else None
+        _db_created = _meta[1] if _meta else None
     except Exception:
         _db_version = None
+        _db_created = None
 
     if _db_version is None:
         st.warning(
@@ -135,6 +137,10 @@ if path.endswith(".duckdb"):
             "Results may be incomplete or columns may differ.",
             icon="⚠️",
         )
+
+    if _db_created is not None:
+        _created_str = str(_db_created)[:10]  # YYYY-MM-DD
+        st.sidebar.caption(f"DB created {_created_str}")
 
 # ── Summary stats ─────────────────────────────────────────────────────────────
 stats = con.execute(f"""
