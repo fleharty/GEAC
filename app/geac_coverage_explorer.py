@@ -7,7 +7,7 @@ import json
 import streamlit.components.v1 as components
 from igv_helpers import load_manifest, resolve_index_uri
 
-GEAC_VERSION = "0.3.14"
+GEAC_VERSION = "0.3.15"
 
 st.set_page_config(page_title="GEAC Coverage Explorer", layout="wide")
 st.title("GEAC Coverage Explorer")

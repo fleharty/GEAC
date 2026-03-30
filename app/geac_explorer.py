@@ -14,7 +14,7 @@ import geac_config
 _IS_MIN, _IS_MAX = 20, 500  # insert size slider bounds
 
 # Version of geac this Explorer was built alongside.
-GEAC_VERSION = "0.3.14"
+GEAC_VERSION = "0.3.15"
 
 
 def _sql_str(value: str) -> str:
