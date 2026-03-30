@@ -400,6 +400,49 @@ The debug box shows:
 - `mark_point(shape="square")` + `fields=` + `key=` ✓
 - `mark_bar` + `fields=["sbs_label"]` + `key=` ✓
 
+### Drill-down locus changes when toggling "Same alt allele only" checkbox
+**Symptom:** Clicking the "Same alt allele only" checkbox in the Position
+drill-down section would sometimes change the drill-down to an entirely
+different locus (different chrom, pos, and alt allele). The first toggle
+usually worked, but subsequent toggles jumped to unrelated positions.
+
+**Root cause 1 — non-deterministic row order:**
+`query_records()` had no `ORDER BY` clause. DuckDB returned rows in
+arbitrary order that could change between executions. When the checkbox
+triggered a Streamlit rerun, `st.dataframe` reported the same row *index*
+(e.g. `[2]`) as still selected, but row 2 now pointed to a completely
+different locus because the underlying `df` had been re-queried in a
+different order. The guard comparing `(chrom, pos, alt_allele)` tuples
+correctly detected a "new" locus and dutifully overwrote the persisted
+state — with the wrong position.
+
+Debug output confirmed this directly:
+```
+[DEBUG] persisted _drill_locus=('10', 16232465, 'G')
+[DEBUG] row index=2, row locus=('16', 16136558, '-A')
+[DEBUG] UPDATING _drill_locus → ('16', 16136558, '-A')
+```
+Same row index, completely different data.
+
+**Fix:** Added `ORDER BY chrom, pos, alt_allele, sample_id` to
+`query_records()` so row indices are stable across reruns.
+
+**Root cause 2 — drill-down gated on transient dataframe selection:**
+The entire drill-down block was inside `if _selected_rows:`, which
+depended on `st.dataframe`'s `on_select="rerun"` event. When the checkbox
+triggered a rerun, the dataframe could lose its selection state, hiding
+the drill-down (and the checkbox) entirely — making it appear to uncheck
+itself.
+**Fix:** Persist the selected `(chrom, pos, alt_allele)` in
+`st.session_state["_drill_locus"]` when a row is clicked. The drill-down
+renders from the persisted state, not the transient selection event.
+
+**Lesson:** Any query feeding a `st.dataframe` with `on_select="rerun"`
+must have a deterministic `ORDER BY`. Without it, the row index reported
+by Streamlit is meaningless across reruns — it's a pointer into a
+shuffled deck. This is especially dangerous because the failure is silent:
+the drill-down confidently renders the wrong locus with no error.
+
 ---
 
 ## IGV.js Integration
