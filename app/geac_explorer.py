@@ -1199,7 +1199,17 @@ if _selected_rows:
         LIMIT 1
     """).df()
 
+    _selected_alt = str(_row["alt_allele"])
     st.subheader(f"🔍 Position drill-down: {_chrom}:{_pos}")
+
+    # Option to restrict to the exact alt allele from the selected row.
+    _match_alt = st.checkbox(
+        f"Same alt allele only ({_selected_alt})",
+        value=False,
+        key=f"drill_match_alt_{_chrom}_{_pos}",
+    )
+    if _match_alt:
+        _drill_df = _drill_df[_drill_df["alt_allele"] == _selected_alt].reset_index(drop=True)
 
     # Locus-level info as metrics
     _info_cols = st.columns(6)
@@ -1215,8 +1225,12 @@ if _selected_rows:
         _info_cols[5].metric("Trinuc context", str(_locus_row["trinuc_context"].iloc[0] or ""))
 
     st.dataframe(_drill_df, width="stretch", hide_index=True)
+
+    _drill_igv_conditions = [f"chrom = '{_chrom}'", f"pos = {_pos}"]
+    if _match_alt:
+        _drill_igv_conditions.append(f"alt_allele = '{_sql_str(_selected_alt)}'")
     igv_buttons(
-        [f"chrom = '{_chrom}'", f"pos = {_pos}"],
+        _drill_igv_conditions,
         _drill_df,
         key=f"drill_{_chrom}_{_pos}",
         use_global_filters=False,
@@ -1224,6 +1238,7 @@ if _selected_rows:
 
     # ── Per-read detail (only when alt_reads table is present) ────────────────
     if _has_alt_reads:
+        _reads_alt_clause = f" AND alt_allele = '{_sql_str(_selected_alt)}'" if _match_alt else ""
         _reads_df = con.execute(f"""
             SELECT
                 sample_id,
@@ -1237,7 +1252,7 @@ if _selected_rows:
                 base_qual,
                 map_qual
             FROM alt_reads
-            WHERE chrom = '{_chrom}' AND pos = {_pos}
+            WHERE chrom = '{_chrom}' AND pos = {_pos}{_reads_alt_clause}
             ORDER BY sample_id, alt_allele, family_size DESC NULLS LAST
         """).df()
 
