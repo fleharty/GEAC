@@ -701,14 +701,19 @@ def make_bed(df: pd.DataFrame) -> str:
     return "\n".join(lines) + "\n"
 
 
-def launch_igv_session(session_xml: str, bed: str) -> str:
+def launch_igv_session(session_xml: str, bed: str, sort_locus: str = "") -> str:
     """Write session.xml and positions.bed to a temp dir and load in IGV.
 
     Tries the IGV REST API (localhost:60151) first — works if IGV is already
     running. If the connection is refused, launches IGV via subprocess.
+
+    *sort_locus* (e.g. "chr1:12345") triggers a sort-by-base command via the
+    REST API after loading.  IGV's XML session format does not support
+    sort-on-load, so this only works when IGV is reachable via the REST API.
+
     Returns a status message suitable for st.info / st.success / st.error.
     """
-    import tempfile, subprocess, urllib.request, urllib.error
+    import tempfile, subprocess, urllib.request, urllib.error, time
 
     tmp = tempfile.mkdtemp(prefix="geac_igv_")
     session_path = _os.path.join(tmp, "session.xml")
@@ -718,11 +723,23 @@ def launch_igv_session(session_xml: str, bed: str) -> str:
     with open(bed_path, "w") as f:
         f.write(bed)
 
+    def _igv_rest_sort(locus: str) -> None:
+        """Send a sort-by-base command to IGV via the REST API."""
+        if not locus:
+            return
+        sort_url = f"http://localhost:60151/sort?option=BASE&locus={locus}"
+        try:
+            urllib.request.urlopen(sort_url, timeout=8)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            pass  # best-effort; user can sort manually
+
     # Try REST API first
     url = f"http://localhost:60151/load?file={urllib.request.pathname2url(session_path)}&merge=false"
     try:
         urllib.request.urlopen(url, timeout=8)
-        return f"Session loaded into running IGV instance."
+        time.sleep(1)  # give IGV a moment to load tracks before sorting
+        _igv_rest_sort(sort_locus)
+        return "Session loaded into running IGV instance."
     except (urllib.error.URLError, TimeoutError, OSError):
         pass
 
@@ -749,7 +766,14 @@ def launch_igv_session(session_xml: str, bed: str) -> str:
     )
 
 
-def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str, target_regions: str = "") -> str:
+def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str, target_regions: str = "") -> tuple[str, str]:
+    """Build an IGV session XML and return (xml, sort_locus).
+
+    *sort_locus* is ``"chrom:pos"`` (1-based) for the first locus — used by
+    ``launch_igv_session`` to sort reads by base via the REST API.  IGV's XML
+    session format does not support sort-on-load, so the XML itself contains
+    no sort directives.
+    """
     sample_ids = df["sample_id"].unique().tolist()
     first = df.sort_values(["chrom", "pos"]).iloc[0]
     locus = f"{first['chrom']}:{max(0, int(first['pos']) - 99)}-{int(first['pos']) + 101}"
@@ -761,8 +785,8 @@ def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str, target_regio
         resources.append(f'        <Resource path="{tr}" name="Target regions"/>')
         tracks.append(f'        <Track id="{tr}" name="Target regions" color="0,100,200" height="40" featureVisibilityWindow="-1"/>')
 
-    sort_chrom = first["chrom"]
-    sort_pos   = int(first["pos"]) + 1  # IGV is 1-based; GEAC pos is 0-based
+    sort_pos = int(first["pos"]) + 1  # IGV is 1-based; GEAC pos is 0-based
+    sort_locus = f"{first['chrom']}:{sort_pos}"
 
     for sid in sample_ids:
         entry = manifest.get(str(sid))
@@ -770,16 +794,12 @@ def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str, target_regio
             bam, bai = entry["bam"], entry["bai"]
             index_attr = f' index="{bai}"' if bai else ""
             resources.append(f'        <Resource path="{bam}" name="{sid}"{index_attr}/>')
-            tracks.append(
-                f'        <Track id="{bam}" name="{sid}">\n'
-                f'            <RenderOptions sortOption="BASE" sortByPosition="{sort_chrom}:{sort_pos}"/>\n'
-                f'        </Track>'
-            )
+            tracks.append(f'        <Track id="{bam}" name="{sid}"/>')
 
     resources.append('        <Resource path="positions.bed" name="Selected positions"/>')
     tracks.append('        <Track id="positions.bed" name="Selected positions" color="255,0,0" height="40"/>')
 
-    return (
+    xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n'
         f'<Session genome="{genome}" locus="{locus}" version="8">\n'
         '    <Resources>\n'
@@ -790,6 +810,7 @@ def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str, target_regio
         '    </Tracks>\n'
         '</Session>\n'
     )
+    return xml, sort_locus
 
 
 IGV_CAP = 5
@@ -889,17 +910,18 @@ def igv_buttons(
 
         igv_df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
         bed = make_bed(igv_df)
-        session = make_igv_session(igv_df, manifest, genome, target_regions)
+        session, sort_locus = make_igv_session(igv_df, manifest, genome, target_regions)
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("session.xml", session)
             zf.writestr("positions.bed", bed)
-        st.session_state[f"{key}_igv"]     = buf.getvalue()
-        st.session_state[f"{key}_session"] = session
-        st.session_state[f"{key}_bed"]     = bed
+        st.session_state[f"{key}_igv"]        = buf.getvalue()
+        st.session_state[f"{key}_session"]    = session
+        st.session_state[f"{key}_bed"]        = bed
+        st.session_state[f"{key}_sort_locus"] = sort_locus
 
         if auto_launch_igv:
-            msg = launch_igv_session(session, bed)
+            msg = launch_igv_session(session, bed, sort_locus)
             st.info(msg)
 
     if f"{key}_igv" in st.session_state:
