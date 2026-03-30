@@ -1737,7 +1737,6 @@ with tab2:
                             alt.Tooltip(f"{_sbs_y_field}:Q", title="Observed", format=_sbs_y_fmt),
                         ],
                     )
-                    .add_params(sel_param)
                 )
 
                 if recon_df is not None:
@@ -1766,6 +1765,7 @@ with tab2:
                 alt.concat(*_sub_charts, columns=3)
                 .resolve_scale(y="shared")
                 .properties(title=alt.TitleParams(_chart_title, fontSize=14))
+                .add_params(sel_param)
             )
             event = st.altair_chart(chart, width="stretch", on_select="rerun", key="sbs96_spectrum")
 
