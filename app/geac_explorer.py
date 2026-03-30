@@ -355,13 +355,11 @@ if _has_data("gnomad_af"):
     gnomad_af_range = st.sidebar.select_slider(
         "gnomAD AF (log scale)",
         options=_GNOMAD_AF_STEPS,
-        value=("0", "1.0"),
         key="gnomad_af_range",
         help="Filter by gnomAD allele frequency. Steps are logarithmic.",
     )
     gnomad_include_null = st.sidebar.checkbox(
         "Include sites absent from gnomAD",
-        value=True,
         key="gnomad_include_null",
     )
 else:
