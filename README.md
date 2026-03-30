@@ -252,6 +252,18 @@ geac merge --output cohort.duckdb batch1.duckdb batch2/*.parquet
 The `samples` summary table is always rebuilt from the merged `alt_bases` at the end —
 it is never copied from source DuckDB files so counts are always accurate.
 
+A `geac_metadata` table is always written with the version of geac that performed the
+merge and the timestamp:
+
+```sql
+SELECT * FROM geac_metadata;
+-- geac_version  created_at
+-- 0.3.14        2025-01-15 10:30:00+00
+```
+
+The Explorer checks this version at load time and warns if it differs from the version
+it was built alongside.
+
 The output file must not already exist (use a new path or delete the old file first).
 
 ### Annotate Normal — cross-check tumor loci against a paired normal BAM
