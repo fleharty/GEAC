@@ -3,8 +3,8 @@ mod common;
 use common::{
     assert_geac_success, count_bam_reads, duckdb_count, duckdb_table_exists,
     parquet_count, parquet_query_f32, parquet_query_i32, parquet_query_i64, parquet_query_str,
-    write_bam, write_bed, write_coverage_bam, write_paired_bam, write_reference,
-    write_reference_with_base, CovRead,
+    write_bam, write_bed, write_coverage_bam, write_cycle_bam, write_paired_bam, write_reference,
+    write_reference_with_base, CovRead, CycleTestRead,
 };
 use tempfile::TempDir;
 
@@ -501,6 +501,119 @@ fn merge_routes_reads_parquet_to_alt_reads_table() {
 
     assert!(duckdb_table_exists(&db, "alt_reads"), "alt_reads table not created");
     assert!(duckdb_count(&db, "alt_reads") > 0, "alt_reads table is empty");
+}
+
+// ── Cycle number correctness ───────────────────────────────────────────────────
+
+/// Reverse-strand reads count cycles from the read END (synthesis start is the 3′ end of
+/// the stored sequence).
+///
+/// A 20-bp reverse-strand read with alt at qpos=10:
+///   correct cycle = read_len − qpos = 20 − 10 = 10
+///   buggy  cycle  = qpos + 1 = 11
+#[test]
+fn reads_reverse_strand_cycle_counts_from_read_end() {
+    let dir = TempDir::new().unwrap();
+    let fa  = write_reference(dir.path(), 200);
+
+    // Reverse-strand read of length 20 starting at ref pos 40.
+    // Alt T stored at qpos=10 → reference position 40 + 10 = 50.
+    // cycle = 20 − 10 = 10.
+    let mut seq = vec![b'A'; 20];
+    seq[10] = b'T';
+    let quals = vec![40u8; 20];
+    let bam = write_cycle_bam(dir.path(), "rev.bam", "sample1", 200, vec![
+        CycleTestRead { pos: 40, flags: 0x10, leading_hard_clips: 0, trailing_hard_clips: 0, seq, quals },
+    ]);
+    let out = dir.path().join("rev.parquet");
+
+    assert_geac_success(&[
+        "collect",
+        "--input",    bam.to_str().unwrap(),
+        "--reference", fa.to_str().unwrap(),
+        "--output",   out.to_str().unwrap(),
+        "--read-type", "raw", "--pipeline", "raw",
+        "--reads-output",
+    ]);
+
+    let reads_pq = dir.path().join("rev.reads.parquet");
+    assert!(reads_pq.exists(), "reads parquet not created");
+    let cycle = parquet_query_i32(&reads_pq, "cycle", "alt_allele = 'T'");
+    assert_eq!(cycle, 10, "reverse-strand cycle should be read_len − qpos = 10, not qpos + 1 = 11");
+}
+
+/// Forward read with leading hard clips: the clipped bases shift all cycle numbers up.
+///
+/// A forward read with 5H leading clips, stored length 10, alt at qpos=5:
+///   correct cycle = 5 (hard clips) + 5 (qpos) + 1 = 11
+///   buggy  cycle  = 5 + 1 = 6
+#[test]
+fn reads_forward_hard_clips_counted_in_cycle() {
+    let dir = TempDir::new().unwrap();
+    let fa  = write_reference(dir.path(), 200);
+
+    // Read starts at ref pos 40; alt T at qpos=5 → ref pos 45.
+    // Leading 5H: cycles 1–5 are hard-clipped; stored seq starts at cycle 6.
+    // cycle = 5 + 5 + 1 = 11.
+    let mut seq = vec![b'A'; 10];
+    seq[5] = b'T';
+    let quals = vec![40u8; 10];
+    let bam = write_cycle_bam(dir.path(), "fwd_hc.bam", "sample1", 200, vec![
+        CycleTestRead { pos: 40, flags: 0, leading_hard_clips: 5, trailing_hard_clips: 0, seq, quals },
+    ]);
+    let out = dir.path().join("fwd_hc.parquet");
+
+    assert_geac_success(&[
+        "collect",
+        "--input",    bam.to_str().unwrap(),
+        "--reference", fa.to_str().unwrap(),
+        "--output",   out.to_str().unwrap(),
+        "--read-type", "raw", "--pipeline", "raw",
+        "--reads-output",
+    ]);
+
+    let reads_pq = dir.path().join("fwd_hc.reads.parquet");
+    assert!(reads_pq.exists(), "reads parquet not created");
+    let cycle = parquet_query_i32(&reads_pq, "cycle", "alt_allele = 'T'");
+    assert_eq!(cycle, 11, "forward hard-clip cycle should be hard_clip_before + qpos + 1 = 11");
+}
+
+/// Reverse read with trailing hard clips (= 5′ hard clips in synthesis order):
+/// cycle accounts for those clipped bases.
+///
+/// A reverse read of stored length 10 with 5 trailing H in the CIGAR, alt at qpos=4:
+///   correct cycle = 5 (trailing H = 5′ clips) + (10 − 4) = 11
+///   buggy  cycle  = 4 + 1 = 5
+#[test]
+fn reads_reverse_hard_clips_counted_in_cycle() {
+    let dir = TempDir::new().unwrap();
+    let fa  = write_reference(dir.path(), 200);
+
+    // Reverse-strand read, stored length 10, starting at ref pos 40.
+    // Trailing 5H → 5 bases at the 5′ end of original synthesis are hard-clipped.
+    // Alt T at qpos=4 → ref pos 40 + 4 = 44.
+    // cycle = 5 + (10 − 4) = 11.
+    let mut seq = vec![b'A'; 10];
+    seq[4] = b'T';
+    let quals = vec![40u8; 10];
+    let bam = write_cycle_bam(dir.path(), "rev_hc.bam", "sample1", 200, vec![
+        CycleTestRead { pos: 40, flags: 0x10, leading_hard_clips: 0, trailing_hard_clips: 5, seq, quals },
+    ]);
+    let out = dir.path().join("rev_hc.parquet");
+
+    assert_geac_success(&[
+        "collect",
+        "--input",    bam.to_str().unwrap(),
+        "--reference", fa.to_str().unwrap(),
+        "--output",   out.to_str().unwrap(),
+        "--read-type", "raw", "--pipeline", "raw",
+        "--reads-output",
+    ]);
+
+    let reads_pq = dir.path().join("rev_hc.reads.parquet");
+    assert!(reads_pq.exists(), "reads parquet not created");
+    let cycle = parquet_query_i32(&reads_pq, "cycle", "alt_allele = 'T'");
+    assert_eq!(cycle, 11, "reverse hard-clip cycle should be trailing_H + read_len − qpos = 11");
 }
 
 /// .normal_evidence.parquet files are routed to the normal_evidence table.

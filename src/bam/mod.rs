@@ -205,7 +205,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                             chrom: chrom.clone(),
                             pos,
                             alt_allele: alt_allele.clone(),
-                            cycle: d.qpos as i32 + 1,
+                            cycle: true_cycle(d.qpos, d.read_len, d.is_reverse, d.hard_clip_before),
                             read_length: d.read_len as i32,
                             is_read1: d.is_first_in_pair,
                             ab_count: d.ab_count,
@@ -294,7 +294,7 @@ pub fn collect_alt_bases(args: &CollectArgs, annotator: Option<&dyn VariantAnnot
                         chrom: chrom.clone(),
                         pos,
                         alt_allele: alt_allele.clone(),
-                        cycle: d.qpos as i32 + 1,
+                        cycle: true_cycle(d.qpos, d.read_len, d.is_reverse, d.hard_clip_before),
                         read_length: d.read_len as i32,
                         is_read1: d.is_first_in_pair,
                         ab_count: d.ab_count,
@@ -321,6 +321,15 @@ struct ReadDetail {
     qpos: usize,
     read_len: usize,
     is_first_in_pair: bool,
+    /// True when the read is on the reverse strand (BAM flag 0x10).
+    is_reverse: bool,
+    /// Number of hard-clipped bases at the 5′ end of the original synthesis.
+    ///
+    /// For forward-strand reads this equals the leading `H` operations in the CIGAR.
+    /// For reverse-strand reads this equals the trailing `H` operations, because the
+    /// stored sequence is the reverse complement and the CIGAR is written in reference
+    /// order (trailing H = 5′ end of the original molecule).
+    hard_clip_before: usize,
     base_qual: u8,
     map_qual: u8,
     ab_count: Option<i32>,
@@ -362,6 +371,7 @@ struct LocusRead {
     is_first_in_pair: bool,
     qpos: usize,
     read_len: usize,
+    hard_clip_before: usize,
     base_qual: u8,
     map_qual: u8,
     /// fgbio aD tag: AB (top-strand) raw read count
@@ -445,6 +455,8 @@ fn tally_pileup(
         let is_first_in_pair = record.flags() & 0x40 != 0;
         let map_qual = record.mapq();
         let read_len = record.seq_len();
+        let (hc_leading, hc_trailing) = hard_clip_counts(&record);
+        let hard_clip_before = if is_reverse { hc_trailing } else { hc_leading };
 
         let (ab_count, ba_count, family_size, insert_size) = if collect_reads {
             let ab = aux_i32(&record, b"aD");
@@ -460,7 +472,7 @@ fn tally_pileup(
         by_qname
             .entry(record.qname().to_vec())
             .or_default()
-            .push(LocusRead { base, is_reverse, is_first_in_pair, qpos, read_len, base_qual, map_qual, ab_count, ba_count, family_size, insert_size });
+            .push(LocusRead { base, is_reverse, is_first_in_pair, qpos, read_len, hard_clip_before, base_qual, map_qual, ab_count, ba_count, family_size, insert_size });
     }
 
     // Second pass: tally with overlap detection.
@@ -479,6 +491,8 @@ fn tally_pileup(
                     qpos: $r.qpos,
                     read_len: $r.read_len,
                     is_first_in_pair: $r.is_first_in_pair,
+                    is_reverse: $r.is_reverse,
+                    hard_clip_before: $r.hard_clip_before,
                     base_qual: $r.base_qual,
                     map_qual: $r.map_qual,
                     ab_count: $r.ab_count,
@@ -617,6 +631,53 @@ fn aux_i32(record: &bam::Record, tag: &[u8; 2]) -> Option<i32> {
     }
 }
 
+/// Returns `(leading_hard_clips, trailing_hard_clips)` for the record's CIGAR string.
+///
+/// Hard-clipped bases are not stored in the BAM sequence, so `seq_len()` and `qpos` do
+/// not account for them.  Knowing how many bases were hard-clipped at each end is
+/// required to compute the correct sequencing cycle number.
+fn hard_clip_counts(record: &bam::Record) -> (usize, usize) {
+    use rust_htslib::bam::record::Cigar;
+    let cigar = record.cigar();
+    let cigar_slice: &[Cigar] = &cigar;
+    let leading = match cigar_slice.first() {
+        Some(Cigar::HardClip(n)) => *n as usize,
+        _ => 0,
+    };
+    let trailing = if cigar_slice.len() > 1 {
+        match cigar_slice.last() {
+            Some(Cigar::HardClip(n)) => *n as usize,
+            _ => 0,
+        }
+    } else {
+        0
+    };
+    (leading, trailing)
+}
+
+/// Compute the 1-based sequencing cycle for an alt-supporting base.
+///
+/// The cycle number reflects the position in synthesis order (cycle 1 = first base
+/// synthesized by the polymerase).
+///
+/// For **forward-strand** reads the stored sequence is in synthesis order, so:
+///   `cycle = hard_clip_before + qpos + 1`
+///
+/// For **reverse-strand** reads BAM stores the reverse complement.  `qpos = 0` is the
+/// last synthesized base (3′ end of synthesis), so synthesis order runs backwards:
+///   `cycle = hard_clip_before + read_len − qpos`
+///
+/// `hard_clip_before` is the number of hard-clipped bases at the 5′ end of the
+/// original molecule (leading H for forward reads, trailing H for reverse reads).
+#[inline]
+fn true_cycle(qpos: usize, read_len: usize, is_reverse: bool, hard_clip_before: usize) -> i32 {
+    if is_reverse {
+        (hard_clip_before + read_len - qpos) as i32
+    } else {
+        (hard_clip_before + qpos + 1) as i32
+    }
+}
+
 // ── Indel tallying ────────────────────────────────────────────────────────────
 
 /// Per-indel-allele tally at a pileup position.
@@ -733,10 +794,14 @@ fn tally_indels(
             let qpos = alignment.qpos().unwrap_or(0);
             let qual = record.qual();
             let tlen = record.insert_size();
+            let (hc_leading, hc_trailing) = hard_clip_counts(&record);
+            let hard_clip_before = if is_reverse { hc_trailing } else { hc_leading };
             Some(ReadDetail {
                 qpos,
                 read_len: record.seq_len(),
                 is_first_in_pair,
+                is_reverse,
+                hard_clip_before,
                 base_qual: qual.get(qpos).copied().unwrap_or(0),
                 map_qual: record.mapq(),
                 ab_count: aux_i32(&record, b"aD"),

@@ -355,6 +355,90 @@ pub fn write_paired_bam(
     sorted
 }
 
+// ── Cycle-number test BAM ─────────────────────────────────────────────────────
+
+/// Specification for a single read in `write_cycle_bam`.
+pub struct CycleTestRead {
+    /// 0-based leftmost reference position of the first *aligned* base.
+    pub pos: i64,
+    /// SAM flags (e.g. 0 = forward, 0x10 = reverse-strand).
+    pub flags: u16,
+    /// Hard clips at the *start* of the stored CIGAR (left side in reference coords).
+    pub leading_hard_clips: u32,
+    /// Hard clips at the *end* of the stored CIGAR (right side in reference coords).
+    pub trailing_hard_clips: u32,
+    /// Stored sequence (hard-clipped bases must be omitted; length = Match bases).
+    pub seq: Vec<u8>,
+    /// Base qualities, same length as `seq`.
+    pub quals: Vec<u8>,
+}
+
+/// Write a coordinate-sorted, indexed BAM from explicit `CycleTestRead` specifications.
+///
+/// The CIGAR for each read is built as `[leading_hard_clips H,] {seq_len} M [, trailing_hard_clips H]`.
+pub fn write_cycle_bam(
+    dir: &Path,
+    filename: &str,
+    sample_id: &str,
+    ref_len: usize,
+    reads: Vec<CycleTestRead>,
+) -> PathBuf {
+    let bam_path = dir.join(filename);
+
+    let mut header = bam::header::Header::new();
+    let mut hd = bam::header::HeaderRecord::new(b"HD");
+    hd.push_tag(b"VN", "1.6");
+    hd.push_tag(b"SO", "coordinate");
+    header.push_record(&hd);
+
+    let mut sq = bam::header::HeaderRecord::new(b"SQ");
+    sq.push_tag(b"SN", "chr1");
+    sq.push_tag(b"LN", ref_len as i32);
+    header.push_record(&sq);
+
+    let mut rg = bam::header::HeaderRecord::new(b"RG");
+    rg.push_tag(b"ID", "rg1");
+    rg.push_tag(b"SM", sample_id);
+    header.push_record(&rg);
+
+    let mut writer = bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
+
+    for (i, r) in reads.iter().enumerate() {
+        let match_len = r.seq.len() as u32;
+        let mut ops = Vec::new();
+        if r.leading_hard_clips > 0  { ops.push(Cigar::HardClip(r.leading_hard_clips)); }
+        ops.push(Cigar::Match(match_len));
+        if r.trailing_hard_clips > 0 { ops.push(Cigar::HardClip(r.trailing_hard_clips)); }
+        let cigar = CigarString(ops);
+
+        let mut rec = Record::new();
+        rec.set(format!("cycle_read_{i}").as_bytes(), Some(&cigar), &r.seq, &r.quals);
+        rec.set_flags(r.flags);
+        rec.set_tid(0);
+        rec.set_pos(r.pos);
+        rec.set_mapq(60);
+        rec.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+        writer.write(&rec).unwrap();
+    }
+
+    drop(writer);
+
+    let sorted = dir.join(format!("{filename}.sorted.bam"));
+    let status = std::process::Command::new("samtools")
+        .args(["sort", "-o", sorted.to_str().unwrap(), bam_path.to_str().unwrap()])
+        .status()
+        .expect("samtools sort failed");
+    assert!(status.success(), "samtools sort failed");
+
+    let status = std::process::Command::new("samtools")
+        .args(["index", sorted.to_str().unwrap()])
+        .status()
+        .expect("samtools index failed");
+    assert!(status.success(), "samtools index failed");
+
+    sorted
+}
+
 /// Run `geac` with the given arguments and return the process output.
 pub fn run_geac(args: &[&str]) -> std::process::Output {
     std::process::Command::new(env!("CARGO_BIN_EXE_geac"))
