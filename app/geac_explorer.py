@@ -1,4 +1,5 @@
 import io
+import warnings
 import zipfile
 from pathlib import Path
 import numpy as np
@@ -7,6 +8,14 @@ import duckdb
 import altair as alt
 import pandas as pd
 from scipy.optimize import nnls
+
+# DEBUG: turn Altair deduplication warnings into exceptions so we get a full
+# traceback identifying which chart triggers it. Remove once resolved.
+warnings.filterwarnings(
+    "error",
+    message="Automatically deduplicated",
+    category=UserWarning,
+)
 
 from igv_helpers import query_distinct_samples, per_read_warning_note, insert_size_active_part
 import geac_config
