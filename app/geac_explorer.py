@@ -64,6 +64,8 @@ else:
         "per-sample Parquet files or a merged cohort DuckDB database."
     )
 
+st.sidebar.caption(f"geac v{GEAC_VERSION}")
+
 # ── Project config (geac.toml or --config flag) ───────────────────────────────
 _cfg = geac_config.load()
 
