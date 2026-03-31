@@ -6,8 +6,7 @@ import geac_config
 import json
 import streamlit.components.v1 as components
 from igv_helpers import load_manifest, resolve_index_uri
-
-GEAC_VERSION = "0.3.15"
+from explorer import COVERAGE_FILTER_STATE, GEAC_VERSION, DataSource
 
 st.set_page_config(page_title="GEAC Coverage Explorer", layout="wide")
 st.title("GEAC Coverage Explorer")
@@ -35,34 +34,18 @@ if not path or not path.strip():
 path = path.strip()
 
 try:
-    if path.endswith(".duckdb"):
-        con = duckdb.connect(path, read_only=True)
-        table_expr = "coverage"
-        try:
-            con.execute("SELECT 1 FROM coverage LIMIT 1")
-        except Exception:
-            st.error(
-                "No `coverage` table found in this DuckDB. "
-                "Run `geac merge` with `.coverage.parquet` files to create it."
-            )
-            st.stop()
-    else:
-        con = duckdb.connect()
-        table_expr = f"read_parquet('{path}', union_by_name=true)"
+    data_source = DataSource.open_coverage(path)
 except Exception as e:
     st.error(f"Could not open file: {e}")
     st.stop()
 
-# ── Version metadata (DuckDB only) ────────────────────────────────────────────
-if path.endswith(".duckdb"):
-    try:
-        _meta = con.execute("SELECT geac_version, created_at FROM geac_metadata LIMIT 1").fetchone()
-        _db_version = _meta[0] if _meta else None
-        _db_created = _meta[1] if _meta else None
-    except Exception:
-        _db_version = None
-        _db_created = None
+con = data_source.con
+table_expr = data_source.table_expr
 
+# ── Version metadata (DuckDB only) ────────────────────────────────────────────
+if data_source.is_duckdb:
+    _db_version = data_source.db_version
+    _db_created = data_source.db_created
     if _db_version is not None and _db_version != GEAC_VERSION:
         st.warning(
             f"Version mismatch: database was created with geac v{_db_version}, "
@@ -73,11 +56,16 @@ if path.endswith(".duckdb"):
     if _db_created is not None:
         st.sidebar.caption(str(_db_created)[:10])
 
+_missing_required_cols = data_source.required_columns_missing()
+if _missing_required_cols:
+    st.warning(
+        "This dataset is missing required `coverage` columns expected by the current Explorer: "
+        + ", ".join(sorted(_missing_required_cols)),
+        icon="⚠️",
+    )
+
 # ── Detect optional columns ────────────────────────────────────────────────────
-_cols = {
-    row[0]
-    for row in con.execute(f"DESCRIBE SELECT * FROM {table_expr} LIMIT 0").fetchall()
-}
+_cols = set(data_source.schema_cols)
 _has_gene      = "gene" in _cols
 _has_on_target = "on_target" in _cols
 _has_bin_n     = "bin_n" in _cols
@@ -85,27 +73,16 @@ _has_bin_n     = "bin_n" in _cols
 # ── Sidebar filters ────────────────────────────────────────────────────────────
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
 _hdr_col.header("Filters")
-_FILTER_KEYS = ["sample_sel", "chrom_sel", "gene_text", "on_target_sel"]
 if _btn_col.button("Clear", help="Reset all filters"):
-    for k in _FILTER_KEYS:
-        if k in st.session_state:
-            del st.session_state[k]
+    COVERAGE_FILTER_STATE.clear(st.session_state)
     st.rerun()
 
-all_samples = (
-    con.execute(f"SELECT DISTINCT sample_id FROM {table_expr} ORDER BY sample_id")
-    .df()["sample_id"]
-    .tolist()
-)
+all_samples = data_source.distinct_values("sample_id")
 sample_sel = st.sidebar.multiselect(
     "Samples", all_samples, default=all_samples, key="sample_sel"
 )
 
-all_chroms = (
-    con.execute(f"SELECT DISTINCT chrom FROM {table_expr} ORDER BY chrom")
-    .df()["chrom"]
-    .tolist()
-)
+all_chroms = data_source.distinct_values("chrom")
 chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + all_chroms, key="chrom_sel")
 
 if _has_gene:

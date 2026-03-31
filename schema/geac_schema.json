@@ -1,0 +1,153 @@
+{
+  "feature_tables": [
+    "alt_reads",
+    "normal_evidence",
+    "pon_evidence",
+    "coverage"
+  ],
+  "tables": {
+    "alt_bases": {
+      "required_columns": [
+        "sample_id",
+        "chrom",
+        "pos",
+        "ref_allele",
+        "alt_allele",
+        "variant_type",
+        "total_depth",
+        "alt_count",
+        "ref_count",
+        "fwd_depth",
+        "rev_depth",
+        "fwd_alt_count",
+        "rev_alt_count",
+        "fwd_ref_count",
+        "rev_ref_count",
+        "overlap_depth",
+        "overlap_alt_agree",
+        "overlap_alt_disagree",
+        "overlap_ref_agree",
+        "read_type",
+        "pipeline"
+      ],
+      "optional_columns": [
+        "batch",
+        "label1",
+        "label2",
+        "label3",
+        "variant_called",
+        "variant_filter",
+        "on_target",
+        "gene",
+        "homopolymer_len",
+        "str_period",
+        "str_len",
+        "trinuc_context",
+        "gnomad_af"
+      ]
+    },
+    "alt_reads": {
+      "required_columns": [
+        "sample_id",
+        "chrom",
+        "pos",
+        "alt_allele",
+        "cycle",
+        "read_length",
+        "is_read1",
+        "base_qual",
+        "map_qual"
+      ],
+      "optional_columns": [
+        "ab_count",
+        "ba_count",
+        "family_size",
+        "insert_size"
+      ]
+    },
+    "normal_evidence": {
+      "required_columns": [
+        "tumor_sample_id",
+        "chrom",
+        "pos",
+        "tumor_alt_allele",
+        "normal_sample_id",
+        "normal_alt_allele",
+        "normal_depth",
+        "normal_alt_count"
+      ],
+      "optional_columns": []
+    },
+    "pon_evidence": {
+      "required_columns": [
+        "tumor_sample_id",
+        "chrom",
+        "pos",
+        "tumor_alt_allele",
+        "n_pon_samples",
+        "pon_total_samples",
+        "max_pon_vaf",
+        "mean_pon_vaf"
+      ],
+      "optional_columns": []
+    },
+    "coverage": {
+      "required_columns": [
+        "sample_id",
+        "chrom",
+        "pos",
+        "end",
+        "total_depth",
+        "min_depth",
+        "max_depth",
+        "fwd_depth",
+        "rev_depth",
+        "raw_read_depth",
+        "frac_dup",
+        "overlap_depth",
+        "frac_overlap",
+        "mean_mapq",
+        "frac_mapq0",
+        "frac_low_mapq",
+        "mean_base_qual",
+        "min_base_qual_obs",
+        "max_base_qual_obs",
+        "frac_low_bq",
+        "mean_insert_size",
+        "min_insert_size",
+        "max_insert_size",
+        "n_insert_size_obs",
+        "gc_content",
+        "read_type",
+        "pipeline"
+      ],
+      "optional_columns": [
+        "bin_n",
+        "batch",
+        "on_target",
+        "gene"
+      ]
+    },
+    "geac_metadata": {
+      "required_columns": [
+        "geac_version",
+        "created_at"
+      ],
+      "optional_columns": []
+    },
+    "samples": {
+      "required_columns": [
+        "sample_id",
+        "batch",
+        "n_alt_loci",
+        "total_alt_reads",
+        "n_positions",
+        "min_pos",
+        "max_pos",
+        "read_type",
+        "pipeline"
+      ],
+      "optional_columns": []
+    }
+  }
+}
