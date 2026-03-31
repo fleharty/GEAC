@@ -499,6 +499,7 @@ with tab_low:
             width="stretch",
             on_select="rerun",
             selection_mode="single-row",
+            key="low_coverage_table",
         )
         _low_rows = (_low_event.selection or {}).get("rows", [])
         if _low_rows:
@@ -535,21 +536,25 @@ with tab_low:
                 .add_params(_gene_sel)
                 .properties(height=max(120, 22 * len(by_gene)))
             )
-            event = st.altair_chart(gene_bar, width="stretch", on_select="rerun")
+            event = st.altair_chart(
+                gene_bar, width="stretch", on_select="rerun", key="low_coverage_gene_bar"
+            )
             # event.selection is an AttributeDictionary keyed by the Altair param name;
-            # find the first non-empty list value regardless of key
+            # find the first non-empty list value regardless of key.
+            # Only update persisted state when the event actually carries a selection;
+            # leave it alone on reruns where selection is absent (e.g. filter change).
             pts = []
             if event.selection:
                 for v in event.selection.values():
                     if isinstance(v, list) and v:
                         pts = v
                         break
+                # A non-empty selection dict with no populated list means the user
+                # explicitly deselected (clicked the same bar again).
+                if not pts:
+                    st.session_state.pop("_low_selected_gene", None)
             if pts:
                 st.session_state["_low_selected_gene"] = pts[0].get("gene")
-            elif event.selection is not None and not any(
-                isinstance(v, list) and v for v in event.selection.values()
-            ):
-                st.session_state.pop("_low_selected_gene", None)
 
             selected_gene = st.session_state.get("_low_selected_gene")
             if selected_gene and selected_gene in low_df["gene"].values:

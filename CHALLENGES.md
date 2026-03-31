@@ -610,6 +610,25 @@ callback or writer-sink pattern.
 **Impact:** `alt_bases` output unaffected (Terra re-run not required); `alt_reads`
 output format unchanged but memory footprint drops from O(total_alt_reads) to O(batch).
 
-### Fix gene bar chart click-to-drill-down in Low Coverage tab
+### Gene bar chart click-to-drill-down not working in Low Coverage tab
 **Problem:** Clicking a bar in the gene-level bar chart in the Low Coverage Explorer
-tab does not trigger the position drill-down. Deferred from v0.3.x work.
+tab does not trigger the gene drill-down table.
+**Root cause:** Same class of bug as the main Explorer's position drill-down:
+- `st.altair_chart(..., on_select="rerun")` had no `key=` parameter — Streamlit
+  auto-generated a key from render-tree position, which shifted across reruns causing
+  the selection event to be dropped.
+- `st.dataframe(..., on_select="rerun")` for the low-coverage table was also missing
+  `key=`.
+- The "deselect" branch in the session-state update unconditionally cleared
+  `_low_selected_gene` whenever `event.selection` returned empty `{}` — which is
+  exactly what a missing-key widget returns on every non-click rerun, so the drill-down
+  was immediately cleared after being set.
+**Fix:**
+- Added `key="low_coverage_gene_bar"` to `st.altair_chart`.
+- Added `key="low_coverage_table"` to the low-coverage `st.dataframe`.
+- Tightened the deselect logic: only clear `_low_selected_gene` when
+  `event.selection` is non-empty but contains no populated list (explicit
+  deselection), not when `event.selection` is falsy (no event yet / key mismatch).
+**Lesson:** Every `on_select="rerun"` widget needs an explicit stable `key=`.
+The failure mode is always silent (empty selection, no error). See the main
+`on_select="rerun"` recipe entry above.
