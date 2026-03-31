@@ -9,10 +9,11 @@ import altair as alt
 import pandas as pd
 from scipy.optimize import nnls
 
-# DEBUG: turn Altair deduplication warnings into exceptions so we get a full
-# traceback identifying which chart triggers it. Remove once resolved.
+# Altair emits a spurious "Automatically deduplicated selection parameter" UserWarning
+# when a shared cross-panel selection param is present in multiple sub-charts.  The
+# deduplication it performs is intentionally correct behaviour; suppress the noise.
 warnings.filterwarnings(
-    "error",
+    "ignore",
     message="Automatically deduplicated",
     category=UserWarning,
 )
@@ -65,7 +66,7 @@ st.set_page_config(page_title="GEAC Explorer", layout="wide")
 _LOGO = Path(__file__).parent / "geac-logo.svg"
 _LOGO_COMPACT = Path(__file__).parent / "geac-logo-compact.svg"
 if _LOGO.exists():
-    st.image(str(_LOGO), use_container_width=True)
+    st.image(str(_LOGO), width="stretch")
 else:
     st.title("GEAC Explorer")
     st.markdown(
@@ -182,7 +183,7 @@ _FILTER_KEYS = [
 
 _sidebar_logo = _LOGO_COMPACT if _LOGO_COMPACT.exists() else _LOGO
 if _sidebar_logo.exists():
-    st.sidebar.image(str(_sidebar_logo), use_container_width=True)
+    st.sidebar.image(str(_sidebar_logo), width="stretch")
 
 chroms  = con.execute(f"SELECT DISTINCT chrom     FROM {table_expr} ORDER BY chrom").df()["chrom"].tolist()
 samples = con.execute(f"SELECT DISTINCT sample_id FROM {table_expr} ORDER BY sample_id").df()["sample_id"].tolist()

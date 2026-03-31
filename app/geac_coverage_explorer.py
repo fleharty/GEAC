@@ -281,7 +281,7 @@ with tab_summary:
         ORDER BY sample_id
     """).df()
 
-    st.dataframe(summary_df, use_container_width=True)
+    st.dataframe(summary_df, width="stretch")
 
     if len(summary_df) > 0:
         st.markdown("**Mean depth per sample**")
@@ -295,7 +295,7 @@ with tab_summary:
             )
             .properties(height=max(120, 28 * len(summary_df)))
         )
-        st.altair_chart(bar, use_container_width=True)
+        st.altair_chart(bar, width="stretch")
 
         qc_metrics = summary_df.melt(
             id_vars="sample_id",
@@ -324,7 +324,7 @@ with tab_summary:
             .properties(height=max(60, 22 * len(summary_df)))
             .resolve_scale(x="independent")
         )
-        st.altair_chart(qc_chart, use_container_width=True)
+        st.altair_chart(qc_chart, width="stretch")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Tab 2 — Depth distribution
@@ -361,7 +361,7 @@ with tab_depth:
             .properties(width=700, height=350)
             .interactive()
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
 
         # Fraction at depth thresholds
         st.markdown("**Fraction of loci at or above depth threshold**")
@@ -374,7 +374,7 @@ with tab_depth:
                 below = grp.loc[grp["depth_bin"] < t, "n_loci"].sum()
                 row[f">={t}x"] = round((total - below) / total, 3) if total > 0 else 0.0
             rows.append(row)
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Tab 3 — GC bias
@@ -424,7 +424,7 @@ with tab_gc:
             .properties(width=700, height=350)
             .interactive()
         )
-        st.altair_chart(gc_chart, use_container_width=True)
+        st.altair_chart(gc_chart, width="stretch")
 
         # Optionally overlay frac_mapq0 on a second y-axis (shown as separate chart)
         mapq_df = con.execute(f"""
@@ -466,7 +466,7 @@ with tab_gc:
                 .properties(width=700, height=250)
                 .interactive()
             )
-            st.altair_chart(mapq_chart, use_container_width=True)
+            st.altair_chart(mapq_chart, width="stretch")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Tab 4 — Low coverage
@@ -519,7 +519,7 @@ with tab_low:
     else:
         _low_event = st.dataframe(
             low_df,
-            use_container_width=True,
+            width="stretch",
             on_select="rerun",
             selection_mode="single-row",
         )
@@ -558,7 +558,7 @@ with tab_low:
                 .add_params(_gene_sel)
                 .properties(height=max(120, 22 * len(by_gene)))
             )
-            event = st.altair_chart(gene_bar, use_container_width=True, on_select="rerun")
+            event = st.altair_chart(gene_bar, width="stretch", on_select="rerun")
             # event.selection is an AttributeDictionary keyed by the Altair param name;
             # find the first non-empty list value regardless of key
             pts = []
@@ -579,7 +579,7 @@ with tab_low:
                 st.markdown(f"**Records for {selected_gene}**")
                 st.dataframe(
                     low_df[low_df["gene"] == selected_gene].reset_index(drop=True),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
 # ──────────────────────────────────────────────────────────────────────────────
