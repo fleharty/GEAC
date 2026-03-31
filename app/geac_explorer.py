@@ -161,7 +161,7 @@ if data_source.is_duckdb:
             st.caption("Merged inputs")
             st.dataframe(
                 _meta_inputs,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 key="advanced_metadata_inputs",
             )
