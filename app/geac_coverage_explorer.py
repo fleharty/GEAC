@@ -171,7 +171,12 @@ def _gcs_access_token() -> tuple[str | None, str | None]:
     except Exception as e:
         print(f"[IGV] token error: {e}", flush=True)
         return None, str(e)
-def _igv_tracks(sample_ids: tuple[str, ...], manifest_json: str, oauth_token: str | None = None) -> list[dict]:
+def _igv_tracks(
+    sample_ids: tuple[str, ...],
+    manifest_json: str,
+    oauth_token: str | None = None,
+    track_height: int = 250,
+) -> list[dict]:
     """Build IGV track dicts for *sample_ids*, passing URIs (including gs://) directly."""
     manifest = json.loads(manifest_json)
     tracks = []
@@ -184,7 +189,7 @@ def _igv_tracks(sample_ids: tuple[str, ...], manifest_json: str, oauth_token: st
         track: dict = {
             "name": sid,
             "url": bam_uri,
-            "height": 100,
+            "height": track_height,
             "colorBy": "strand",
         }
         if index_uri:
@@ -602,6 +607,11 @@ with tab_igv:
         if not _igv_samples:
             st.info("No selected samples found in manifest.")
         else:
+            _track_height = st.slider(
+                "Track height (px)", min_value=100, max_value=600,
+                value=250, step=50, key="igv_track_height",
+            )
+
             if st.button("Load IGV", type="primary"):
                 st.session_state["_igv_loaded"] = True
 
@@ -623,8 +633,13 @@ with tab_igv:
                         st.warning(f"GCS auth failed: {_token_err}", icon="⚠️")
                     else:
                         st.caption("Auth token: ✓ obtained")
-                tracks = _igv_tracks(_igv_samples, json.dumps(_manifest), oauth_token=_token)
-                component_height = 300 + 110 * len(tracks)
+                tracks = _igv_tracks(
+                    _igv_samples, json.dumps(_manifest),
+                    oauth_token=_token, track_height=_track_height,
+                )
+                # IGV browser chrome (toolbar + cytoband + reference track) is ~180px;
+                # each BAM/CRAM track adds track_height + ~30px for its header.
+                component_height = 180 + (_track_height + 30) * len(tracks)
                 components.html(
                     _igv_html(igv_locus or "chr20", tracks, oauth_token=_token),
                     height=component_height,
