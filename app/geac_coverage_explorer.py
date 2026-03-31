@@ -143,11 +143,20 @@ def where(extra: list[str] | None = None) -> str:
 
 # ── IGV.js component ───────────────────────────────────────────────────────────
 @st.cache_data(ttl=2700, show_spinner=False)  # refresh well before the 60-min token expiry
-def _gcs_access_token() -> str | None:
-    """Return a GCS read-only access token from ADC, or None if unavailable."""
+def _gcs_access_token() -> tuple[str | None, str | None]:
+    """Return (token, error_message) from ADC.
+
+    error_message is None on success.  On failure it is a human-readable string
+    suitable for display in the UI.  Two distinct failure modes are reported:
+    - 'not_installed': google-auth package is absent
+    - other: credentials exist but refresh failed
+    """
     try:
         import google.auth
         import google.auth.transport.requests
+    except ModuleNotFoundError:
+        return None, "not_installed"
+    try:
         credentials, project = google.auth.default(
             scopes=["https://www.googleapis.com/auth/devstorage.read_only"]
         )
@@ -158,10 +167,10 @@ def _gcs_access_token() -> str | None:
         print(f"[IGV] token obtained  : {bool(token)}", flush=True)
         print(f"[IGV] token prefix    : {token[:20] if token else 'None'}...", flush=True)
         print(f"[IGV] token expiry    : {getattr(credentials, 'expiry', 'unknown')}", flush=True)
-        return token
+        return token, None
     except Exception as e:
         print(f"[IGV] token error: {e}", flush=True)
-        return None
+        return None, str(e)
 def _igv_tracks(sample_ids: tuple[str, ...], manifest_json: str, oauth_token: str | None = None) -> list[dict]:
     """Build IGV track dicts for *sample_ids*, passing URIs (including gs://) directly."""
     manifest = json.loads(manifest_json)
@@ -597,8 +606,23 @@ with tab_igv:
                 st.session_state["_igv_loaded"] = True
 
             if st.session_state.get("_igv_loaded"):
-                _token = _gcs_access_token()
-                st.caption(f"Auth token: {'✓ obtained' if _token else '✗ not available'}")
+                _needs_gcs = any(
+                    str(_manifest.get(str(s), {}).get("bam", "")).startswith("gs://")
+                    for s in _igv_samples
+                )
+                _token: str | None = None
+                if _needs_gcs:
+                    _token, _token_err = _gcs_access_token()
+                    if _token_err == "not_installed":
+                        st.warning(
+                            "GCS BAMs detected but the `google-auth` package is not installed. "
+                            "Install it with `pip install google-auth` and restart the app.",
+                            icon="⚠️",
+                        )
+                    elif _token_err:
+                        st.warning(f"GCS auth failed: {_token_err}", icon="⚠️")
+                    else:
+                        st.caption("Auth token: ✓ obtained")
                 tracks = _igv_tracks(_igv_samples, json.dumps(_manifest), oauth_token=_token)
                 component_height = 300 + 110 * len(tracks)
                 components.html(
