@@ -60,8 +60,34 @@ def _write_alt_db(path: str) -> None:
             map_qual INTEGER
         );
         INSERT INTO alt_reads VALUES ('sample1', 'chr1', 10, 'T', 11, 150, TRUE, 40, 60);
-        CREATE TABLE geac_metadata (geac_version VARCHAR, created_at TIMESTAMPTZ);
-        INSERT INTO geac_metadata VALUES ('0.3.15', current_timestamp);
+        CREATE TABLE geac_metadata (
+            schema_version VARCHAR,
+            geac_version VARCHAR,
+            created_at TIMESTAMPTZ,
+            command_line VARCHAR,
+            output_path VARCHAR,
+            platform_os VARCHAR,
+            platform_arch VARCHAR,
+            platform_family VARCHAR,
+            n_alt_bases_inputs BIGINT,
+            n_alt_reads_inputs BIGINT,
+            n_normal_evidence_inputs BIGINT,
+            n_pon_evidence_inputs BIGINT,
+            n_coverage_inputs BIGINT,
+            n_duckdb_inputs BIGINT,
+            n_samples BIGINT,
+            alt_bases_rows BIGINT,
+            alt_reads_rows BIGINT,
+            normal_evidence_rows BIGINT,
+            pon_evidence_rows BIGINT,
+            coverage_rows BIGINT,
+            samples_rows BIGINT
+        );
+        INSERT INTO geac_metadata VALUES (
+            'duckdb-v2', '0.3.15', current_timestamp, 'geac merge', '/tmp/cohort.duckdb',
+            'macos', 'arm64', 'unix',
+            1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1
+        );
         """
     )
     con.close()
@@ -108,8 +134,34 @@ def _write_coverage_db(path: str) -> None:
             0.0, 10, 0.1, 60.0, 0.0, 0.0, 35.0, 30, 40, 0.0,
             200.0, 200, 200, 1, 0.5, 'raw', 'raw', 1, 'TP53', TRUE
         );
-        CREATE TABLE geac_metadata (geac_version VARCHAR, created_at TIMESTAMPTZ);
-        INSERT INTO geac_metadata VALUES ('0.3.15', current_timestamp);
+        CREATE TABLE geac_metadata (
+            schema_version VARCHAR,
+            geac_version VARCHAR,
+            created_at TIMESTAMPTZ,
+            command_line VARCHAR,
+            output_path VARCHAR,
+            platform_os VARCHAR,
+            platform_arch VARCHAR,
+            platform_family VARCHAR,
+            n_alt_bases_inputs BIGINT,
+            n_alt_reads_inputs BIGINT,
+            n_normal_evidence_inputs BIGINT,
+            n_pon_evidence_inputs BIGINT,
+            n_coverage_inputs BIGINT,
+            n_duckdb_inputs BIGINT,
+            n_samples BIGINT,
+            alt_bases_rows BIGINT,
+            alt_reads_rows BIGINT,
+            normal_evidence_rows BIGINT,
+            pon_evidence_rows BIGINT,
+            coverage_rows BIGINT,
+            samples_rows BIGINT
+        );
+        INSERT INTO geac_metadata VALUES (
+            'duckdb-v2', '0.3.15', current_timestamp, 'geac merge', '/tmp/coverage.duckdb',
+            'macos', 'arm64', 'unix',
+            0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0
+        );
         """
     )
     con.close()
@@ -135,6 +187,7 @@ class TestDataSource:
         assert ds.required_columns_missing() == []
         assert ds.distinct_values("sample_id") == ["sample1"]
         assert ds.db_version == "0.3.15"
+        assert ds.db_schema_version == "duckdb-v2"
 
     def test_open_coverage_uses_same_metadata_and_contract_logic(self, tmp_path):
         db = tmp_path / "coverage.duckdb"
@@ -147,6 +200,7 @@ class TestDataSource:
         assert ds.has_column("bin_n") is True
         assert ds.has_non_null("gene") is True
         assert ds.db_version == "0.3.15"
+        assert ds.db_schema_version == "duckdb-v2"
 
 
 class TestFilterState:
@@ -228,6 +282,7 @@ class TestDataSourceParquet:
         assert ds.has_column("nonexistent_col") is False
         assert ds.distinct_values("sample_id") == ["sample1"]
         assert ds.db_version is None  # no metadata in parquet mode
+        assert ds.db_schema_version is None
         assert ds.required_columns_missing() == []
 
     def test_parquet_has_non_null_batch(self, tmp_path):

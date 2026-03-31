@@ -130,8 +130,40 @@
     },
     "geac_metadata": {
       "required_columns": [
+        "schema_version",
         "geac_version",
-        "created_at"
+        "created_at",
+        "command_line",
+        "output_path",
+        "platform_os",
+        "platform_arch",
+        "platform_family",
+        "n_alt_bases_inputs",
+        "n_alt_reads_inputs",
+        "n_normal_evidence_inputs",
+        "n_pon_evidence_inputs",
+        "n_coverage_inputs",
+        "n_duckdb_inputs",
+        "n_samples",
+        "alt_bases_rows",
+        "alt_reads_rows",
+        "normal_evidence_rows",
+        "pon_evidence_rows",
+        "coverage_rows",
+        "samples_rows"
+      ],
+      "optional_columns": []
+    },
+    "geac_inputs": {
+      "required_columns": [
+        "input_path",
+        "input_kind",
+        "source_kind",
+        "file_size_bytes",
+        "modified_at",
+        "checksum_sha256",
+        "sample_count",
+        "row_count"
       ],
       "optional_columns": []
     },

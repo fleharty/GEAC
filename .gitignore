@@ -2,3 +2,7 @@
 
 # Project-specific config (contains local paths — not for version control)
 geac.toml
+
+# Python cache artifacts
+__pycache__/
+*.py[cod]

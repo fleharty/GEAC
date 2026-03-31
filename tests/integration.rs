@@ -210,10 +210,14 @@ fn merge_produces_duckdb_with_both_samples() {
         .unwrap();
     assert_eq!(n_samples, 2, "expected 2 distinct samples in merged DuckDB");
 
-    // geac_metadata table must exist and record the current tool version.
+    // geac_metadata / geac_inputs must exist and record merge provenance.
     assert!(
         duckdb_table_exists(&db, "geac_metadata"),
         "geac_metadata table not created"
+    );
+    assert!(
+        duckdb_table_exists(&db, "geac_inputs"),
+        "geac_inputs table not created"
     );
     let version: String = conn
         .query_row("SELECT geac_version FROM geac_metadata LIMIT 1", [], |r| {
@@ -224,6 +228,41 @@ fn merge_produces_duckdb_with_both_samples() {
         version,
         env!("CARGO_PKG_VERSION"),
         "geac_version in metadata should match build version"
+    );
+    let schema_version: String = conn
+        .query_row(
+            "SELECT schema_version FROM geac_metadata LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .expect("could not read schema_version from geac_metadata");
+    assert_eq!(schema_version, "duckdb-v2");
+    let recorded_samples: i64 = conn
+        .query_row("SELECT n_samples FROM geac_metadata LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .expect("could not read n_samples from geac_metadata");
+    assert_eq!(
+        recorded_samples, 2,
+        "metadata should record merged sample count"
+    );
+    let alt_bases_rows: i64 = conn
+        .query_row(
+            "SELECT alt_bases_rows FROM geac_metadata LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .expect("could not read alt_bases_rows from geac_metadata");
+    assert_eq!(
+        alt_bases_rows, 2,
+        "metadata should record merged alt_bases rows"
+    );
+    let input_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM geac_inputs", [], |r| r.get(0))
+        .expect("could not count geac_inputs rows");
+    assert_eq!(
+        input_rows, 2,
+        "expected one geac_inputs row per merged parquet"
     );
 }
 
@@ -1634,4 +1673,5 @@ fn merged_duckdb_tables_match_schema_manifest() {
     assert_schema_columns_present(&duckdb_columns(&db, "alt_bases"), "alt_bases");
     assert_schema_columns_present(&duckdb_columns(&db, "alt_reads"), "alt_reads");
     assert_schema_columns_present(&duckdb_columns(&db, "geac_metadata"), "geac_metadata");
+    assert_schema_columns_present(&duckdb_columns(&db, "geac_inputs"), "geac_inputs");
 }

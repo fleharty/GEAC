@@ -25,6 +25,7 @@ class DataSource:
     available_tables: set[str] = field(init=False, default_factory=set)
     db_version: str | None = field(init=False, default=None)
     db_created: object | None = field(init=False, default=None)
+    db_schema_version: str | None = field(init=False, default=None)
 
     @classmethod
     def open_alt_bases(cls, path: str) -> "DataSource":
@@ -64,11 +65,22 @@ class DataSource:
     def _load_metadata(self) -> None:
         if "geac_metadata" not in self.available_tables:
             return
+        metadata_cols = set(
+            self.con.execute("DESCRIBE SELECT * FROM geac_metadata LIMIT 0")
+            .df()["column_name"]
+            .tolist()
+        )
+        select_cols = ["geac_version", "created_at"]
+        if "schema_version" in metadata_cols:
+            select_cols.append("schema_version")
         row = self.con.execute(
-            "SELECT geac_version, created_at FROM geac_metadata LIMIT 1"
+            f"SELECT {', '.join(select_cols)} FROM geac_metadata LIMIT 1"
         ).fetchone()
         if row:
-            self.db_version, self.db_created = row
+            self.db_version = row[0]
+            self.db_created = row[1]
+            if len(row) > 2:
+                self.db_schema_version = row[2]
 
     def table_exists(self, table: str) -> bool:
         return table in self.available_tables
