@@ -550,6 +550,18 @@ WHERE c.frac_mapq0 > 0.3;
 - [ ] Document panel config schema (`config/panel_example.toml`)
 - [ ] Design longitudinal tracking — `run_id` / `run_date` provenance in coverage schema
   to support tracking coverage stability across instrument runs and reagent lots
+- [ ] Expand DuckDB provenance metadata:
+  - Extend `geac_metadata` from `(geac_version, created_at)` to a one-row database header
+    with: `schema_version`, `command_line`, platform/OS/arch, input file counts by type,
+    sample count, row counts per table, and optional reference/targets/gene-annotation
+    path + hash fields
+  - Add a new `geac_inputs` table with one row per source artifact merged into the DB:
+    `input_path`, `input_kind`, `source_kind`, `file_size_bytes`, `modified_at`,
+    optional `checksum_sha256`, and optional per-input `sample_count` / `row_count`
+  - Keep `geac_metadata` database-level and `geac_inputs` file-level so provenance stays
+    queryable without making the header table too wide
+  - Add `schema_version` so future DuckDB layout changes are explicit and
+    backward-compatible
 
 ## Fragmentomics (long-term, low priority)
 

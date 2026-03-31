@@ -6,8 +6,7 @@ import geac_config
 import json
 import streamlit.components.v1 as components
 from igv_helpers import load_manifest, resolve_index_uri
-
-GEAC_VERSION = "0.3.15"
+from explorer import COVERAGE_FILTER_STATE, GEAC_VERSION, DataSource
 
 st.set_page_config(page_title="GEAC Coverage Explorer", layout="wide")
 st.title("GEAC Coverage Explorer")
@@ -35,34 +34,18 @@ if not path or not path.strip():
 path = path.strip()
 
 try:
-    if path.endswith(".duckdb"):
-        con = duckdb.connect(path, read_only=True)
-        table_expr = "coverage"
-        try:
-            con.execute("SELECT 1 FROM coverage LIMIT 1")
-        except Exception:
-            st.error(
-                "No `coverage` table found in this DuckDB. "
-                "Run `geac merge` with `.coverage.parquet` files to create it."
-            )
-            st.stop()
-    else:
-        con = duckdb.connect()
-        table_expr = f"read_parquet('{path}', union_by_name=true)"
+    data_source = DataSource.open_coverage(path)
 except Exception as e:
     st.error(f"Could not open file: {e}")
     st.stop()
 
-# ── Version metadata (DuckDB only) ────────────────────────────────────────────
-if path.endswith(".duckdb"):
-    try:
-        _meta = con.execute("SELECT geac_version, created_at FROM geac_metadata LIMIT 1").fetchone()
-        _db_version = _meta[0] if _meta else None
-        _db_created = _meta[1] if _meta else None
-    except Exception:
-        _db_version = None
-        _db_created = None
+con = data_source.con
+table_expr = data_source.table_expr
 
+# ── Version metadata (DuckDB only) ────────────────────────────────────────────
+if data_source.is_duckdb:
+    _db_version = data_source.db_version
+    _db_created = data_source.db_created
     if _db_version is not None and _db_version != GEAC_VERSION:
         st.warning(
             f"Version mismatch: database was created with geac v{_db_version}, "
@@ -73,11 +56,16 @@ if path.endswith(".duckdb"):
     if _db_created is not None:
         st.sidebar.caption(str(_db_created)[:10])
 
+_missing_required_cols = data_source.required_columns_missing()
+if _missing_required_cols:
+    st.warning(
+        "This dataset is missing required `coverage` columns expected by the current Explorer: "
+        + ", ".join(sorted(_missing_required_cols)),
+        icon="⚠️",
+    )
+
 # ── Detect optional columns ────────────────────────────────────────────────────
-_cols = {
-    row[0]
-    for row in con.execute(f"DESCRIBE SELECT * FROM {table_expr} LIMIT 0").fetchall()
-}
+_cols = set(data_source.schema_cols)
 _has_gene      = "gene" in _cols
 _has_on_target = "on_target" in _cols
 _has_bin_n     = "bin_n" in _cols
@@ -85,27 +73,16 @@ _has_bin_n     = "bin_n" in _cols
 # ── Sidebar filters ────────────────────────────────────────────────────────────
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
 _hdr_col.header("Filters")
-_FILTER_KEYS = ["sample_sel", "chrom_sel", "gene_text", "on_target_sel"]
 if _btn_col.button("Clear", help="Reset all filters"):
-    for k in _FILTER_KEYS:
-        if k in st.session_state:
-            del st.session_state[k]
+    COVERAGE_FILTER_STATE.clear(st.session_state)
     st.rerun()
 
-all_samples = (
-    con.execute(f"SELECT DISTINCT sample_id FROM {table_expr} ORDER BY sample_id")
-    .df()["sample_id"]
-    .tolist()
-)
+all_samples = data_source.distinct_values("sample_id")
 sample_sel = st.sidebar.multiselect(
     "Samples", all_samples, default=all_samples, key="sample_sel"
 )
 
-all_chroms = (
-    con.execute(f"SELECT DISTINCT chrom FROM {table_expr} ORDER BY chrom")
-    .df()["chrom"]
-    .tolist()
-)
+all_chroms = data_source.distinct_values("chrom")
 chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + all_chroms, key="chrom_sel")
 
 if _has_gene:
@@ -166,11 +143,20 @@ def where(extra: list[str] | None = None) -> str:
 
 # ── IGV.js component ───────────────────────────────────────────────────────────
 @st.cache_data(ttl=2700, show_spinner=False)  # refresh well before the 60-min token expiry
-def _gcs_access_token() -> str | None:
-    """Return a GCS read-only access token from ADC, or None if unavailable."""
+def _gcs_access_token() -> tuple[str | None, str | None]:
+    """Return (token, error_message) from ADC.
+
+    error_message is None on success.  On failure it is a human-readable string
+    suitable for display in the UI.  Two distinct failure modes are reported:
+    - 'not_installed': google-auth package is absent
+    - other: credentials exist but refresh failed
+    """
     try:
         import google.auth
         import google.auth.transport.requests
+    except ModuleNotFoundError:
+        return None, "not_installed"
+    try:
         credentials, project = google.auth.default(
             scopes=["https://www.googleapis.com/auth/devstorage.read_only"]
         )
@@ -181,11 +167,16 @@ def _gcs_access_token() -> str | None:
         print(f"[IGV] token obtained  : {bool(token)}", flush=True)
         print(f"[IGV] token prefix    : {token[:20] if token else 'None'}...", flush=True)
         print(f"[IGV] token expiry    : {getattr(credentials, 'expiry', 'unknown')}", flush=True)
-        return token
+        return token, None
     except Exception as e:
         print(f"[IGV] token error: {e}", flush=True)
-        return None
-def _igv_tracks(sample_ids: tuple[str, ...], manifest_json: str, oauth_token: str | None = None) -> list[dict]:
+        return None, str(e)
+def _igv_tracks(
+    sample_ids: tuple[str, ...],
+    manifest_json: str,
+    oauth_token: str | None = None,
+    track_height: int = 250,
+) -> list[dict]:
     """Build IGV track dicts for *sample_ids*, passing URIs (including gs://) directly."""
     manifest = json.loads(manifest_json)
     tracks = []
@@ -198,7 +189,7 @@ def _igv_tracks(sample_ids: tuple[str, ...], manifest_json: str, oauth_token: st
         track: dict = {
             "name": sid,
             "url": bam_uri,
-            "height": 100,
+            "height": track_height,
             "colorBy": "strand",
         }
         if index_uri:
@@ -522,6 +513,7 @@ with tab_low:
             width="stretch",
             on_select="rerun",
             selection_mode="single-row",
+            key="low_coverage_table",
         )
         _low_rows = (_low_event.selection or {}).get("rows", [])
         if _low_rows:
@@ -558,21 +550,25 @@ with tab_low:
                 .add_params(_gene_sel)
                 .properties(height=max(120, 22 * len(by_gene)))
             )
-            event = st.altair_chart(gene_bar, width="stretch", on_select="rerun")
+            event = st.altair_chart(
+                gene_bar, width="stretch", on_select="rerun", key="low_coverage_gene_bar"
+            )
             # event.selection is an AttributeDictionary keyed by the Altair param name;
-            # find the first non-empty list value regardless of key
+            # find the first non-empty list value regardless of key.
+            # Only update persisted state when the event actually carries a selection;
+            # leave it alone on reruns where selection is absent (e.g. filter change).
             pts = []
             if event.selection:
                 for v in event.selection.values():
                     if isinstance(v, list) and v:
                         pts = v
                         break
+                # A non-empty selection dict with no populated list means the user
+                # explicitly deselected (clicked the same bar again).
+                if not pts:
+                    st.session_state.pop("_low_selected_gene", None)
             if pts:
                 st.session_state["_low_selected_gene"] = pts[0].get("gene")
-            elif event.selection is not None and not any(
-                isinstance(v, list) and v for v in event.selection.values()
-            ):
-                st.session_state.pop("_low_selected_gene", None)
 
             selected_gene = st.session_state.get("_low_selected_gene")
             if selected_gene and selected_gene in low_df["gene"].values:
@@ -611,14 +607,39 @@ with tab_igv:
         if not _igv_samples:
             st.info("No selected samples found in manifest.")
         else:
+            _track_height = st.slider(
+                "Track height (px)", min_value=100, max_value=600,
+                value=250, step=50, key="igv_track_height",
+            )
+
             if st.button("Load IGV", type="primary"):
                 st.session_state["_igv_loaded"] = True
 
             if st.session_state.get("_igv_loaded"):
-                _token = _gcs_access_token()
-                st.caption(f"Auth token: {'✓ obtained' if _token else '✗ not available'}")
-                tracks = _igv_tracks(_igv_samples, json.dumps(_manifest), oauth_token=_token)
-                component_height = 300 + 110 * len(tracks)
+                _needs_gcs = any(
+                    str(_manifest.get(str(s), {}).get("bam", "")).startswith("gs://")
+                    for s in _igv_samples
+                )
+                _token: str | None = None
+                if _needs_gcs:
+                    _token, _token_err = _gcs_access_token()
+                    if _token_err == "not_installed":
+                        st.warning(
+                            "GCS BAMs detected but the `google-auth` package is not installed. "
+                            "Install it with `pip install google-auth` and restart the app.",
+                            icon="⚠️",
+                        )
+                    elif _token_err:
+                        st.warning(f"GCS auth failed: {_token_err}", icon="⚠️")
+                    else:
+                        st.caption("Auth token: ✓ obtained")
+                tracks = _igv_tracks(
+                    _igv_samples, json.dumps(_manifest),
+                    oauth_token=_token, track_height=_track_height,
+                )
+                # IGV browser chrome (toolbar + cytoband + reference track) is ~180px;
+                # each BAM/CRAM track adds track_height + ~30px for its header.
+                component_height = 180 + (_track_height + 30) * len(tracks)
                 components.html(
                     _igv_html(igv_locus or "chr20", tracks, oauth_token=_token),
                     height=component_height,

@@ -1,4 +1,8 @@
-use rust_htslib::bam::{self, Read, record::{Cigar, CigarString, Record}};
+use rust_htslib::bam::{
+    self,
+    record::{Cigar, CigarString, Record},
+    Read,
+};
 use std::path::{Path, PathBuf};
 
 // ── Reference helpers ─────────────────────────────────────────────────────────
@@ -7,8 +11,10 @@ use std::path::{Path, PathBuf};
 /// The filename is derived from the base character (e.g. 'C' → "ref_C.fa").
 pub fn write_reference_with_base(dir: &Path, len: usize, base: u8) -> PathBuf {
     let name = format!("ref_{}.fa", base as char);
-    let fa  = dir.join(&name);
-    let seq = std::iter::repeat(base as char).take(len).collect::<String>();
+    let fa = dir.join(&name);
+    let seq = std::iter::repeat(base as char)
+        .take(len)
+        .collect::<String>();
     std::fs::write(&fa, format!(">chr1\n{seq}\n")).unwrap();
     let fai = dir.join(format!("{name}.fai"));
     std::fs::write(&fai, format!("chr1\t{len}\t6\t{len}\t{}\n", len + 1)).unwrap();
@@ -31,31 +37,55 @@ pub fn write_bed(dir: &Path, filename: &str, intervals: &[(u32, u32)]) -> PathBu
 /// Per-read specification for `write_coverage_bam`.
 pub struct CovRead {
     /// 0-based start position of the read on chr1
-    pub pos:         i64,
+    pub pos: i64,
     /// SAM flags (e.g. 0 = normal, 0x400 = duplicate, 0x1|0x2|0x40 = proper-pair R1)
-    pub flags:       u16,
+    pub flags: u16,
     /// Mapping quality
-    pub mapq:        u8,
+    pub mapq: u8,
     /// SAM TLEN (0 = not set; positive on R1, negative on R2)
     pub insert_size: i32,
     /// Mate position (only used when insert_size != 0)
-    pub mate_pos:    i64,
+    pub mate_pos: i64,
 }
 
 impl CovRead {
     pub fn regular(pos: i64) -> Self {
-        Self { pos, flags: 0, mapq: 60, insert_size: 0, mate_pos: 0 }
+        Self {
+            pos,
+            flags: 0,
+            mapq: 60,
+            insert_size: 0,
+            mate_pos: 0,
+        }
     }
     pub fn duplicate(pos: i64) -> Self {
-        Self { pos, flags: 0x400, mapq: 60, insert_size: 0, mate_pos: 0 }
+        Self {
+            pos,
+            flags: 0x400,
+            mapq: 60,
+            insert_size: 0,
+            mate_pos: 0,
+        }
     }
     pub fn mapq0(pos: i64) -> Self {
-        Self { pos, flags: 0, mapq: 0, insert_size: 0, mate_pos: 0 }
+        Self {
+            pos,
+            flags: 0,
+            mapq: 0,
+            insert_size: 0,
+            mate_pos: 0,
+        }
     }
     /// Proper-pair R1 read with the given insert size (TLEN = +insert_size).
     pub fn r1_paired(pos: i64, insert_size: i32) -> Self {
         let mate_pos = pos + insert_size as i64 - 1; // approximate mate start
-        Self { pos, flags: 0x1 | 0x2 | 0x40, mapq: 60, insert_size, mate_pos }
+        Self {
+            pos,
+            flags: 0x1 | 0x2 | 0x40,
+            mapq: 60,
+            insert_size,
+            mate_pos,
+        }
     }
 }
 
@@ -87,10 +117,9 @@ pub fn write_coverage_bam(
     rg.push_tag(b"SM", sample_id);
     header.push_record(&rg);
 
-    let mut writer =
-        bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
+    let mut writer = bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
 
-    let seq   = vec![b'A'; read_len];
+    let seq = vec![b'A'; read_len];
     let quals = vec![40u8; read_len];
     let cigar = CigarString(vec![Cigar::Match(read_len as u32)]);
 
@@ -106,7 +135,8 @@ pub fn write_coverage_bam(
             rec.set_mpos(r.mate_pos);
             rec.set_insert_size(r.insert_size as i64);
         }
-        rec.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+        rec.push_aux(b"RG", bam::record::Aux::String("rg1"))
+            .unwrap();
         writer.write(&rec).unwrap();
     }
 
@@ -114,7 +144,12 @@ pub fn write_coverage_bam(
 
     let sorted = dir.join(format!("{filename}.sorted.bam"));
     let status = std::process::Command::new("samtools")
-        .args(["sort", "-o", sorted.to_str().unwrap(), bam_path.to_str().unwrap()])
+        .args([
+            "sort",
+            "-o",
+            sorted.to_str().unwrap(),
+            bam_path.to_str().unwrap(),
+        ])
         .status()
         .expect("samtools sort failed");
     assert!(status.success(), "samtools sort failed");
@@ -184,8 +219,7 @@ pub fn write_bam(
     rg.push_tag(b"SM", sample_id);
     header.push_record(&rg);
 
-    let mut writer =
-        bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
+    let mut writer = bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
     let quals = vec![40u8; read_len];
     let cigar = CigarString(vec![Cigar::Match(read_len as u32)]);
 
@@ -198,24 +232,36 @@ pub fn write_bam(
 
         for i in 0..*n_alt {
             let mut rec = Record::new();
-            rec.set(format!("alt_{}_{i}", alt_pos).as_bytes(), Some(&cigar), &alt_seq, &quals);
+            rec.set(
+                format!("alt_{}_{i}", alt_pos).as_bytes(),
+                Some(&cigar),
+                &alt_seq,
+                &quals,
+            );
             rec.set_flags(0); // explicitly mark as mapped, forward strand, primary
             rec.set_tid(0);
             rec.set_pos(read_start);
             rec.set_mapq(60);
-            rec.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+            rec.push_aux(b"RG", bam::record::Aux::String("rg1"))
+                .unwrap();
             writer.write(&rec).unwrap();
         }
 
         let ref_seq = vec![b'A'; read_len];
         for i in 0..*n_ref {
             let mut rec = Record::new();
-            rec.set(format!("ref_{}_{i}", alt_pos).as_bytes(), Some(&cigar), &ref_seq, &quals);
+            rec.set(
+                format!("ref_{}_{i}", alt_pos).as_bytes(),
+                Some(&cigar),
+                &ref_seq,
+                &quals,
+            );
             rec.set_flags(0); // explicitly mark as mapped, forward strand, primary
             rec.set_tid(0);
             rec.set_pos(read_start);
             rec.set_mapq(60);
-            rec.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+            rec.push_aux(b"RG", bam::record::Aux::String("rg1"))
+                .unwrap();
             writer.write(&rec).unwrap();
         }
     }
@@ -225,7 +271,12 @@ pub fn write_bam(
     // Use samtools to sort and index so the BAM and BAI are standard-compliant.
     let sorted = dir.join(format!("{}.sorted.bam", filename));
     let status = std::process::Command::new("samtools")
-        .args(["sort", "-o", sorted.to_str().unwrap(), bam_path.to_str().unwrap()])
+        .args([
+            "sort",
+            "-o",
+            sorted.to_str().unwrap(),
+            bam_path.to_str().unwrap(),
+        ])
         .status()
         .expect("samtools sort failed");
     assert!(status.success(), "samtools sort failed");
@@ -341,7 +392,12 @@ pub fn write_paired_bam(
 
     let sorted = dir.join(format!("{}.sorted.bam", filename));
     let status = std::process::Command::new("samtools")
-        .args(["sort", "-o", sorted.to_str().unwrap(), bam_path.to_str().unwrap()])
+        .args([
+            "sort",
+            "-o",
+            sorted.to_str().unwrap(),
+            bam_path.to_str().unwrap(),
+        ])
         .status()
         .expect("samtools sort failed");
     assert!(status.success(), "samtools sort failed");
@@ -406,18 +462,28 @@ pub fn write_cycle_bam(
     for (i, r) in reads.iter().enumerate() {
         let match_len = r.seq.len() as u32;
         let mut ops = Vec::new();
-        if r.leading_hard_clips > 0  { ops.push(Cigar::HardClip(r.leading_hard_clips)); }
+        if r.leading_hard_clips > 0 {
+            ops.push(Cigar::HardClip(r.leading_hard_clips));
+        }
         ops.push(Cigar::Match(match_len));
-        if r.trailing_hard_clips > 0 { ops.push(Cigar::HardClip(r.trailing_hard_clips)); }
+        if r.trailing_hard_clips > 0 {
+            ops.push(Cigar::HardClip(r.trailing_hard_clips));
+        }
         let cigar = CigarString(ops);
 
         let mut rec = Record::new();
-        rec.set(format!("cycle_read_{i}").as_bytes(), Some(&cigar), &r.seq, &r.quals);
+        rec.set(
+            format!("cycle_read_{i}").as_bytes(),
+            Some(&cigar),
+            &r.seq,
+            &r.quals,
+        );
         rec.set_flags(r.flags);
         rec.set_tid(0);
         rec.set_pos(r.pos);
         rec.set_mapq(60);
-        rec.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+        rec.push_aux(b"RG", bam::record::Aux::String("rg1"))
+            .unwrap();
         writer.write(&rec).unwrap();
     }
 
@@ -425,7 +491,12 @@ pub fn write_cycle_bam(
 
     let sorted = dir.join(format!("{filename}.sorted.bam"));
     let status = std::process::Command::new("samtools")
-        .args(["sort", "-o", sorted.to_str().unwrap(), bam_path.to_str().unwrap()])
+        .args([
+            "sort",
+            "-o",
+            sorted.to_str().unwrap(),
+            bam_path.to_str().unwrap(),
+        ])
         .status()
         .expect("samtools sort failed");
     assert!(status.success(), "samtools sort failed");
@@ -495,18 +566,15 @@ pub fn count_bam_reads(bam_path: &Path) -> usize {
 /// Check whether a table exists in a DuckDB file.
 pub fn duckdb_table_exists(db: &Path, table: &str) -> bool {
     let conn = duckdb::Connection::open(db).unwrap();
-    conn.execute_batch(&format!("SELECT 1 FROM {} LIMIT 0", table)).is_ok()
+    conn.execute_batch(&format!("SELECT 1 FROM {} LIMIT 0", table))
+        .is_ok()
 }
 
 /// Count rows in a DuckDB table.
 pub fn duckdb_count(db: &Path, table: &str) -> i64 {
     let conn = duckdb::Connection::open(db).unwrap();
-    conn.query_row(
-        &format!("SELECT COUNT(*) FROM {}", table),
-        [],
-        |r| r.get(0),
-    )
-    .unwrap()
+    conn.query_row(&format!("SELECT COUNT(*) FROM {}", table), [], |r| r.get(0))
+        .unwrap()
 }
 
 /// Fetch a single i64 column from a Parquet file with the given WHERE clause.
@@ -549,4 +617,31 @@ pub fn parquet_query_str(path: &Path, column: &str, where_clause: &str) -> Strin
         |row| row.get(0),
     )
     .unwrap()
+}
+
+/// Return the column names in a Parquet file.
+pub fn parquet_columns(path: &Path) -> Vec<String> {
+    let conn = duckdb::Connection::open_in_memory().unwrap();
+    let mut stmt = conn
+        .prepare(&format!(
+            "DESCRIBE SELECT * FROM read_parquet('{}')",
+            path.display()
+        ))
+        .unwrap();
+    stmt.query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<Vec<String>, _>>()
+        .unwrap()
+}
+
+/// Return the column names in a DuckDB table.
+pub fn duckdb_columns(db: &Path, table: &str) -> Vec<String> {
+    let conn = duckdb::Connection::open(db).unwrap();
+    let mut stmt = conn
+        .prepare(&format!("DESCRIBE SELECT * FROM {}", table))
+        .unwrap();
+    stmt.query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<Vec<String>, _>>()
+        .unwrap()
 }
