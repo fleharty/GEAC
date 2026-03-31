@@ -619,6 +619,20 @@ pub fn parquet_query_str(path: &Path, column: &str, where_clause: &str) -> Strin
     .unwrap()
 }
 
+/// Fetch a single nullable string column from a Parquet file with the given WHERE clause.
+pub fn parquet_query_opt_str(path: &Path, column: &str, where_clause: &str) -> Option<String> {
+    let conn = duckdb::Connection::open_in_memory().unwrap();
+    conn.query_row(
+        &format!(
+            "SELECT {column} FROM read_parquet('{}') WHERE {where_clause} LIMIT 1",
+            path.display()
+        ),
+        [],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
 /// Return the column names in a Parquet file.
 pub fn parquet_columns(path: &Path) -> Vec<String> {
     let conn = duckdb::Connection::open_in_memory().unwrap();

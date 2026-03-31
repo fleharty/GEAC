@@ -102,6 +102,8 @@ pub struct AltBase {
     pub label2: Option<String>,
     /// Generic sample label 3 (user-defined; e.g. sequencer type).
     pub label3: Option<String>,
+    /// SHA-256 of the input BAM/CRAM when collect was run with --input-checksum-sha256.
+    pub input_checksum_sha256: Option<String>,
 
     // Variant calling annotation (None if no VCF was provided)
     pub variant_called: Option<bool>,
@@ -143,19 +145,19 @@ pub struct AltBase {
 /// Positions are 0-based.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalEvidence {
-    pub tumor_sample_id:   String,
-    pub chrom:             String,
+    pub tumor_sample_id: String,
+    pub chrom: String,
     /// 0-based position
-    pub pos:               i64,
-    pub tumor_alt_allele:  String,
-    pub normal_sample_id:  String,
+    pub pos: i64,
+    pub tumor_alt_allele: String,
+    pub normal_sample_id: String,
     /// `None` = anchor row (no alt evidence in normal, or indel position).
     /// `Some(allele)` = a non-ref allele observed in the normal.
     pub normal_alt_allele: Option<String>,
     /// Total fragment depth in the normal at this position (reads passing filters).
-    pub normal_depth:      i32,
+    pub normal_depth: i32,
     /// Fragments in normal supporting `normal_alt_allele`; 0 for anchor rows.
-    pub normal_alt_count:  i32,
+    pub normal_alt_count: i32,
 }
 
 /// PoN cross-annotation for a tumor alt locus.
@@ -163,19 +165,19 @@ pub struct NormalEvidence {
 /// Positions are 0-based.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PonEvidence {
-    pub tumor_sample_id:   String,
-    pub chrom:             String,
+    pub tumor_sample_id: String,
+    pub chrom: String,
     /// 0-based position
-    pub pos:               i64,
-    pub tumor_alt_allele:  String,
+    pub pos: i64,
+    pub tumor_alt_allele: String,
     /// Number of PoN samples carrying this exact alt allele at this locus
-    pub n_pon_samples:     i64,
+    pub n_pon_samples: i64,
     /// Total samples in the PoN database (denominator for fraction)
     pub pon_total_samples: i64,
     /// Max(alt_count/total_depth) across PoN samples; None if locus absent from PoN
-    pub max_pon_vaf:       Option<f64>,
+    pub max_pon_vaf: Option<f64>,
     /// Mean(alt_count/total_depth) across PoN samples; None if locus absent from PoN
-    pub mean_pon_vaf:      Option<f64>,
+    pub mean_pon_vaf: Option<f64>,
 }
 
 /// Per-position coverage record produced by `geac coverage`.
@@ -193,28 +195,28 @@ pub struct CoverageRecord {
     // ── Fragment depth ─────────────────────────────────────────────────────────
     // Unique fragments (duplicates excluded, overlapping pairs collapsed to 1)
     // passing --min-map-qual.
-    pub total_depth:   i32,
-    pub min_depth:     i32,
-    pub max_depth:     i32,
-    pub fwd_depth:     i32,
-    pub rev_depth:     i32,
+    pub total_depth: i32,
+    pub min_depth: i32,
+    pub max_depth: i32,
+    pub fwd_depth: i32,
+    pub rev_depth: i32,
 
     // ── Duplicate metrics ──────────────────────────────────────────────────────
     /// All reads at this position (excluding secondary/supplementary), including dups
     pub raw_read_depth: i32,
     /// Fraction of raw reads flagged BAM_FDUP (0x400)
-    pub frac_dup:       f32,
+    pub frac_dup: f32,
 
     // ── Overlap metrics ────────────────────────────────────────────────────────
     /// Fragment pairs where both reads cover this position
-    pub overlap_depth:  i32,
+    pub overlap_depth: i32,
     /// overlap_depth / total_depth (0.0 when total_depth = 0)
-    pub frac_overlap:   f32,
+    pub frac_overlap: f32,
 
     // ── Mappability signals (non-dup reads, before --min-map-qual filter) ──────
-    pub mean_mapq:      f32,
-    pub frac_mapq0:     f32,
-    pub frac_low_mapq:  f32,
+    pub mean_mapq: f32,
+    pub frac_mapq0: f32,
+    pub frac_low_mapq: f32,
 
     // ── Base quality signals (non-dup, passing --min-map-qual) ─────────────────
     pub mean_base_qual: f32,
@@ -223,12 +225,12 @@ pub struct CoverageRecord {
     /// Highest base quality observed
     pub max_base_qual_obs: i32,
     /// Fraction of bases below --min-base-qual (default 20)
-    pub frac_low_bq:    f32,
+    pub frac_low_bq: f32,
 
     // ── Insert size (properly paired, non-dup, passing --min-map-qual, R1) ──────
-    pub mean_insert_size:  f32,
-    pub min_insert_size:   i32,
-    pub max_insert_size:   i32,
+    pub mean_insert_size: f32,
+    pub min_insert_size: i32,
+    pub max_insert_size: i32,
     pub n_insert_size_obs: i32,
 
     // ── GC content ─────────────────────────────────────────────────────────────
@@ -237,12 +239,12 @@ pub struct CoverageRecord {
 
     // ── Annotations ────────────────────────────────────────────────────────────
     pub on_target: Option<bool>,
-    pub gene:      Option<String>,
+    pub gene: Option<String>,
 
     // ── Provenance ─────────────────────────────────────────────────────────────
     pub read_type: ReadType,
-    pub pipeline:  Pipeline,
-    pub batch:     Option<String>,
+    pub pipeline: Pipeline,
+    pub batch: Option<String>,
 }
 
 /// One record per alt-supporting read at a locus.
@@ -272,4 +274,6 @@ pub struct AltRead {
     /// SAM TLEN field (template length / insert size). None when TLEN is 0
     /// (unpaired reads or reads where the mate is unmapped).
     pub insert_size: Option<i32>,
+    /// SHA-256 of the input BAM/CRAM when collect was run with --input-checksum-sha256.
+    pub input_checksum_sha256: Option<String>,
 }

@@ -3,11 +3,15 @@ mod common;
 use common::{
     assert_geac_success, count_bam_reads, duckdb_columns, duckdb_count, duckdb_table_exists,
     parquet_columns, parquet_count, parquet_query_f32, parquet_query_i32, parquet_query_i64,
-    parquet_query_str, write_bam, write_bed, write_coverage_bam, write_cycle_bam, write_paired_bam,
-    write_reference, write_reference_with_base, CovRead, CycleTestRead,
+    parquet_query_opt_str, parquet_query_str, write_bam, write_bed, write_coverage_bam,
+    write_cycle_bam, write_paired_bam, write_reference, write_reference_with_base, CovRead,
+    CycleTestRead,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::io::Read as _;
+use std::path::Path;
 use tempfile::TempDir;
 
 fn schema_required_columns(table: &str) -> Vec<String> {
@@ -33,6 +37,20 @@ fn assert_schema_columns_present(actual: &[String], table: &str) {
         missing.is_empty(),
         "schema contract missing columns for {table}: {missing:?}"
     );
+}
+
+fn sha256_hex(path: &Path) -> String {
+    let mut file = std::fs::File::open(path).expect("open file for sha256");
+    let mut hasher = Sha256::new();
+    let mut buf = [0_u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).expect("read file for sha256");
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 /// Sanity check: verify the BAM helper writes the expected number of reads.
@@ -89,6 +107,61 @@ fn collect_writes_valid_parquet() {
     assert_eq!(parquet_query_i32(&out, "total_depth", "pos = 50"), 15);
     assert_eq!(parquet_query_str(&out, "alt_allele", "pos = 50"), "T");
     assert_eq!(parquet_query_str(&out, "sample_id", "pos = 50"), "sample1");
+}
+
+#[test]
+fn collect_optionally_records_input_checksum_sha256() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 200);
+    let bam = write_bam(
+        dir.path(),
+        "checksum.bam",
+        "sample1",
+        200,
+        vec![(50, b'T', 5, 10)],
+        20,
+    );
+
+    let out_default = dir.path().join("checksum_default.parquet");
+    assert_geac_success(&[
+        "collect",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        out_default.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
+    ]);
+    assert_eq!(
+        parquet_query_opt_str(&out_default, "input_checksum_sha256", "pos = 50"),
+        None,
+        "checksum should be null by default"
+    );
+
+    let out_hashed = dir.path().join("checksum_hashed.parquet");
+    assert_geac_success(&[
+        "collect",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        out_hashed.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
+        "--input-checksum-sha256",
+    ]);
+    assert_eq!(
+        parquet_query_opt_str(&out_hashed, "input_checksum_sha256", "pos = 50"),
+        Some(sha256_hex(&bam)),
+        "checksum should match the input BAM when enabled"
+    );
 }
 
 /// `--sample-id` flag overrides the SM tag read from the BAM header.

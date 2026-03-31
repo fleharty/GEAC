@@ -24,6 +24,7 @@ pub(super) struct LocusContext {
     label1: Option<String>,
     label2: Option<String>,
     label3: Option<String>,
+    input_checksum_sha256: Option<String>,
     on_target: Option<bool>,
     gene: Option<String>,
     homopolymer_len: i32,
@@ -49,6 +50,7 @@ impl LocusContext {
         gene: Option<String>,
         repeat: &RepeatMetrics,
         trinuc_context: Option<String>,
+        input_checksum_sha256: Option<String>,
     ) -> Self {
         Self {
             sample_id: sample_id.to_string(),
@@ -69,6 +71,7 @@ impl LocusContext {
             label1: args.label1.clone(),
             label2: args.label2.clone(),
             label3: args.label3.clone(),
+            input_checksum_sha256,
             on_target,
             gene,
             homopolymer_len: repeat.homopolymer_len,
@@ -119,6 +122,7 @@ impl LocusContext {
             label1: self.label1.clone(),
             label2: self.label2.clone(),
             label3: self.label3.clone(),
+            input_checksum_sha256: self.input_checksum_sha256.clone(),
             variant_called,
             variant_filter,
             on_target: self.on_target,
@@ -151,6 +155,7 @@ impl LocusContext {
             base_qual: detail.base_qual as i32,
             map_qual: detail.map_qual as i32,
             insert_size: detail.insert_size,
+            input_checksum_sha256: self.input_checksum_sha256.clone(),
         }
     }
 

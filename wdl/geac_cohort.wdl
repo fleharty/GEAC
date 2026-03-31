@@ -36,6 +36,7 @@ version 1.0
 ##   include_secondary     - include secondary alignments (FLAG 0x100); default false
 ##   include_supplementary - include supplementary alignments (FLAG 0x800); default false
 ##   reads_output          - also write per-read detail Parquets and merge into alt_reads table (default false)
+##   input_checksum_sha256 - compute SHA-256 for each input BAM/CRAM during collect and store it in output Parquet provenance columns (default false)
 ##   cohort_name           - Base name for the output DuckDB file (default: cohort)
 ##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##
@@ -80,6 +81,7 @@ workflow GeacCohort {
         Boolean include_secondary     = false
         Boolean include_supplementary = false
         Boolean reads_output  = false
+        Boolean input_checksum_sha256 = false
         Int     threads       = 1
 
         String cohort_name = "cohort"
@@ -154,6 +156,7 @@ workflow GeacCohort {
                 include_secondary     = include_secondary,
                 include_supplementary = include_supplementary,
                 reads_output          = reads_output,
+                input_checksum_sha256 = input_checksum_sha256,
                 threads               = threads,
                 docker_image          = docker_image,
                 memory_gb             = collect_memory_gb,
@@ -217,6 +220,7 @@ task Collect {
         Boolean include_secondary
         Boolean include_supplementary
         Boolean reads_output
+        Boolean input_checksum_sha256
         Int     threads
 
         String docker_image
@@ -256,6 +260,7 @@ task Collect {
             ~{if include_duplicates    then "--include-duplicates"    else ""} \
             ~{if include_secondary     then "--include-secondary"     else ""} \
             ~{if include_supplementary then "--include-supplementary" else ""} \
+            ~{if input_checksum_sha256 then "--input-checksum-sha256" else ""} \
             ~{if reads_output then "--reads-output" else ""}
     >>>
 

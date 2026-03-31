@@ -129,9 +129,37 @@ if data_source.is_duckdb:
             icon="⚠️",
         )
 
-    if _db_created is not None:
-        _created_str = str(_db_created)[:10]  # YYYY-MM-DD
-        st.sidebar.caption(f"DB created {_created_str}")
+if _db_created is not None:
+    _created_str = str(_db_created)[:10]  # YYYY-MM-DD
+    st.sidebar.caption(f"DB created {_created_str}")
+
+if data_source.is_duckdb:
+    with st.sidebar.expander("Advanced", expanded=False):
+        st.caption("Database metadata")
+        _meta_header = data_source.metadata_header()
+        if _meta_header.empty:
+            st.caption("No `geac_metadata` table found.")
+        else:
+            _meta_row = _meta_header.iloc[0]
+            for _col in _meta_header.columns:
+                _val = _meta_row[_col]
+                if pd.isna(_val):
+                    _display = "NULL"
+                elif isinstance(_val, float):
+                    _display = f"{_val:g}"
+                else:
+                    _display = str(_val)
+                st.caption(f"{_col}: {_display}")
+
+        _meta_inputs = data_source.metadata_inputs()
+        if not _meta_inputs.empty:
+            st.caption("Merged inputs")
+            st.dataframe(
+                _meta_inputs,
+                use_container_width=True,
+                hide_index=True,
+                key="advanced_metadata_inputs",
+            )
 
 _missing_required_cols = data_source.required_columns_missing()
 if _missing_required_cols:

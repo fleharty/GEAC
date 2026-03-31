@@ -35,6 +35,7 @@ version 1.0
 ##   include_secondary    - include secondary alignments (FLAG 0x100); default false
 ##   include_supplementary - include supplementary alignments (FLAG 0x800); default false
 ##   reads_output         - also write per-read detail Parquet (default false)
+##   input_checksum_sha256 - compute SHA-256 for the input BAM/CRAM and store it in output Parquet provenance columns (default false)
 ##   threads              - CPU threads for geac (default 4)
 ##   docker_image         - geac Docker image, e.g. ghcr.io/fleharty/geac:0.3.7
 ##   memory_gb            - memory in GB (default 8)
@@ -78,6 +79,7 @@ workflow GeacCollect {
         Boolean include_secondary     = false
         Boolean include_supplementary = false
         Boolean reads_output   = false
+        Boolean input_checksum_sha256 = false
         Int     threads        = 1
 
         String docker_image
@@ -115,6 +117,7 @@ workflow GeacCollect {
             include_secondary     = include_secondary,
             include_supplementary = include_supplementary,
             reads_output          = reads_output,
+            input_checksum_sha256 = input_checksum_sha256,
             threads               = threads,
             docker_image          = docker_image,
             memory_gb             = memory_gb,
@@ -160,6 +163,7 @@ task Collect {
         Boolean include_secondary
         Boolean include_supplementary
         Boolean reads_output
+        Boolean input_checksum_sha256
         Int     threads
 
         String docker_image
@@ -201,6 +205,7 @@ task Collect {
             ~{if include_duplicates    then "--include-duplicates"    else ""} \
             ~{if include_secondary     then "--include-secondary"     else ""} \
             ~{if include_supplementary then "--include-supplementary" else ""} \
+            ~{if input_checksum_sha256 then "--input-checksum-sha256" else ""} \
             ~{if reads_output then "--reads-output" else ""}
     >>>
 

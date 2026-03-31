@@ -5,9 +5,11 @@ mod ref_utils;
 
 use std::sync::atomic::Ordering;
 use std::time::Instant;
+use std::{fs::File, io::Read as _, path::Path};
 
 use anyhow::{Context, Result};
 use rust_htslib::bam::Read;
+use sha2::{Digest, Sha256};
 
 use crate::cli::CollectArgs;
 use crate::gene_annotations::GeneAnnotations;
@@ -37,6 +39,12 @@ pub fn collect_alt_bases(
     gene_annots: Option<&GeneAnnotations>,
     mut gnomad: Option<&mut GnomadIndex>,
 ) -> Result<(Vec<AltBase>, Vec<AltRead>)> {
+    let input_checksum_sha256 = if args.input_checksum_sha256 {
+        Some(compute_input_sha256(&args.input)?)
+    } else {
+        None
+    };
+
     let mut bam = open_bam(&args.input, &args.reference)?;
     let mut ref_cache = RefCache::new(&args.reference)?;
 
@@ -147,6 +155,7 @@ pub fn collect_alt_bases(
             gene,
             &repeat,
             trinuc_context,
+            input_checksum_sha256.clone(),
         );
 
         for (base, tally) in &bases {
@@ -229,6 +238,25 @@ pub fn collect_alt_bases(
 
     reporter.finish(start);
     Ok((records, read_records))
+}
+
+fn compute_input_sha256(path: &Path) -> Result<String> {
+    let mut file = File::open(path)
+        .with_context(|| format!("failed to open input for SHA-256: {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+
+    loop {
+        let read_n = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to read input for SHA-256: {}", path.display()))?;
+        if read_n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read_n]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn vcf_annotation(

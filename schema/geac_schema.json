@@ -35,6 +35,7 @@
         "label1",
         "label2",
         "label3",
+        "input_checksum_sha256",
         "variant_called",
         "variant_filter",
         "on_target",
@@ -62,7 +63,8 @@
         "ab_count",
         "ba_count",
         "family_size",
-        "insert_size"
+        "insert_size",
+        "input_checksum_sha256"
       ]
     },
     "normal_evidence": {

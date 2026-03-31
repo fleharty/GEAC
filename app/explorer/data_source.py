@@ -162,3 +162,19 @@ class DataSource:
             FROM {self.table_expr}
             """
         ).df()
+
+    def metadata_header(self) -> pd.DataFrame:
+        if not self.is_duckdb or "geac_metadata" not in self.available_tables:
+            return pd.DataFrame()
+        return self.con.execute("SELECT * FROM geac_metadata LIMIT 1").df()
+
+    def metadata_inputs(self) -> pd.DataFrame:
+        if not self.is_duckdb or "geac_inputs" not in self.available_tables:
+            return pd.DataFrame()
+        return self.con.execute(
+            """
+            SELECT *
+            FROM geac_inputs
+            ORDER BY input_kind, input_path
+            """
+        ).df()

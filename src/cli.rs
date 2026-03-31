@@ -88,6 +88,11 @@ pub struct CollectArgs {
     #[arg(long)]
     pub reads_output: bool,
 
+    /// Compute SHA-256 for the input BAM/CRAM and store it in output Parquet provenance columns.
+    /// Disabled by default because hashing large alignment files adds I/O and wall time.
+    #[arg(long, default_value_t = false)]
+    pub input_checksum_sha256: bool,
+
     /// Read type: raw, simplex, or duplex
     #[arg(long, default_value = "duplex")]
     pub read_type: ReadType,
@@ -371,7 +376,10 @@ impl std::str::FromStr for ReadType {
             "raw" => Ok(ReadType::Raw),
             "simplex" => Ok(ReadType::Simplex),
             "duplex" => Ok(ReadType::Duplex),
-            _ => anyhow::bail!("invalid read-type '{}': expected raw, simplex, or duplex", s),
+            _ => anyhow::bail!(
+                "invalid read-type '{}': expected raw, simplex, or duplex",
+                s
+            ),
         }
     }
 }
