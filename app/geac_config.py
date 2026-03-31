@@ -14,6 +14,7 @@ Supported keys (all optional):
     genome           = "hg19"                     # alias for genome_build (kept for compatibility)
     auto_launch_igv  = false                      # auto-launch IGV when a session is created
     target_regions   = "/path/to/targets.bed"     # BED or interval list added as a track in IGV sessions
+    gnomad_track     = "/path/to/gnomad.vcf.gz"   # optional VCF/BCF added as a track in IGV sessions
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ except ImportError:
         tomllib = None  # type: ignore[assignment]
 
 
-_STRING_KEYS = {"data", "manifest", "cosmic", "genome", "genome_build", "target_regions"}
+_STRING_KEYS = {"data", "manifest", "cosmic", "genome", "genome_build", "target_regions", "gnomad_track"}
 _BOOL_KEYS   = {"auto_launch_igv"}
 _KNOWN_KEYS  = _STRING_KEYS | _BOOL_KEYS
 

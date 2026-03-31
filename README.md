@@ -252,17 +252,23 @@ geac merge --output cohort.duckdb batch1.duckdb batch2/*.parquet
 The `samples` summary table is always rebuilt from the merged `alt_bases` at the end —
 it is never copied from source DuckDB files so counts are always accurate.
 
-A `geac_metadata` table is always written with the version of geac that performed the
-merge and the timestamp:
+A `geac_metadata` table is always written as a one-row database header, and a
+`geac_inputs` table records one row per merged source artifact.  Together they
+capture the merge tool version, schema version, command line, platform, input
+counts, output row counts, and per-input file metadata:
 
 ```sql
 SELECT * FROM geac_metadata;
--- geac_version  created_at
--- 0.3.14        2025-01-15 10:30:00+00
+
+SELECT * FROM geac_inputs;
 ```
 
-The Explorer checks this version at load time and warns if it differs from the version
-it was built alongside.
+The Explorer checks the database version at load time and warns if it differs from the
+version it was built alongside. The sidebar `Advanced` expander also shows the current
+`geac_metadata` header and the `geac_inputs` table for quick inspection without a manual
+SQL query.
+
+See [docs/provenance.md](docs/provenance.md) for the full provenance schema.
 
 The output file must not already exist (use a new path or delete the old file first).
 
@@ -488,9 +494,15 @@ manifest         = "/path/to/manifest.tsv"           # pre-fill the manifest pat
 cosmic           = "/path/to/COSMIC_v3.4_SBS_GRCh38.txt"
 genome_build     = "hg38"                            # hg19 | hg38 | mm10 | mm39 | <any IGV ID>
 auto_launch_igv  = false                             # auto-load sessions into running IGV
+target_regions   = "/path/to/targets.bed"            # optional track added to IGV sessions
+gnomad_track     = "/path/to/gnomad.vcf.gz"          # optional gnomAD VCF/BCF track for IGV sessions
 ```
 
 All keys are optional. `genome_build` accepts any IGV genome identifier — known values (`hg19`, `hg38`, `mm10`, `mm39`) are selected directly from the dropdown; anything else selects "other" and pre-fills the custom genome ID text box. `auto_launch_igv = true` checks the "Auto-launch IGV" checkbox by default, so every session is automatically sent to IGV via its REST API (port 60151) or launched as a subprocess if IGV is not already running.
+
+If `gnomad_track` points to a `*.vcf.gz`, `*.vcf.bgz`, or `*.bcf`, the Explorer infers the
+matching index path automatically (`.tbi` for VCF, `.csi` for BCF). The index file must still
+exist and be readable by IGV.
 
 ### Manifest format
 

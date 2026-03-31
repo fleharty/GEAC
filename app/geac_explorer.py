@@ -18,7 +18,12 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-from igv_helpers import query_distinct_samples, per_read_warning_note, insert_size_active_part
+from igv_helpers import (
+    query_distinct_samples,
+    per_read_warning_note,
+    insert_size_active_part,
+    resolve_index_uri,
+)
 import geac_config
 from explorer import GEAC_VERSION, MAIN_FILTER_KEYS, MAIN_FILTER_STATE, DataSource
 from explorer.main_table import (
@@ -650,6 +655,14 @@ target_regions = st.sidebar.text_input(
     value=_cfg.get("target_regions", ""),
     help="Path to a BED or interval list file. When set, it is added as a track in every IGV session.",
 )
+if _has_data("gnomad_af"):
+    gnomad_track = st.sidebar.text_input(
+        "gnomAD track (optional)",
+        value=_cfg.get("gnomad_track", ""),
+        help="Path or URI to a gnomAD VCF/BCF. When set, it is added as a track in IGV sessions.",
+    )
+else:
+    gnomad_track = ""
 _genome_options = ["hg19", "hg38", "mm10", "mm39", "other"]
 _cfg_genome = _cfg.get("genome_build") or _cfg.get("genome", "hg19")
 if _cfg_genome in _genome_options:
@@ -777,7 +790,13 @@ def launch_igv_session(session_xml: str, bed: str, sort_locus: str = "") -> str:
     )
 
 
-def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str, target_regions: str = "") -> tuple[str, str]:
+def make_igv_session(
+    df: pd.DataFrame,
+    manifest: dict,
+    genome: str,
+    target_regions: str = "",
+    gnomad_track: str = "",
+) -> tuple[str, str]:
     """Build an IGV session XML and return (xml, sort_locus).
 
     *sort_locus* is ``"chrom:pos"`` (1-based) for the first locus — used by
@@ -795,6 +814,13 @@ def make_igv_session(df: pd.DataFrame, manifest: dict, genome: str, target_regio
         tr = target_regions.strip()
         resources.append(f'        <Resource path="{tr}" name="Target regions"/>')
         tracks.append(f'        <Track id="{tr}" name="Target regions" color="0,100,200" height="40" featureVisibilityWindow="-1"/>')
+
+    if gnomad_track and gnomad_track.strip():
+        gt = gnomad_track.strip()
+        gt_index = resolve_index_uri(gt, None)
+        index_attr = f' index="{gt_index}"' if gt_index else ""
+        resources.append(f'        <Resource path="{gt}" name="gnomAD"{index_attr}/>')
+        tracks.append('        <Track id="{0}" name="gnomAD" height="60"/>'.format(gt))
 
     sort_pos = int(first["pos"]) + 1  # IGV is 1-based; GEAC pos is 0-based
     sort_locus = f"{first['chrom']}:{sort_pos}"
@@ -921,7 +947,13 @@ def igv_buttons(
 
         igv_df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
         bed = make_bed(igv_df)
-        session, sort_locus = make_igv_session(igv_df, manifest, genome, target_regions)
+        session, sort_locus = make_igv_session(
+            igv_df,
+            manifest,
+            genome,
+            target_regions,
+            gnomad_track,
+        )
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("session.xml", session)

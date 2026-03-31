@@ -78,6 +78,10 @@ def resolve_index_uri(bam_uri: str, explicit_index: str | None) -> str | None:
         return bam_uri + ".bai"
     if lower.endswith(".cram"):
         return bam_uri + ".crai"
+    if lower.endswith(".vcf.gz") or lower.endswith(".vcf.bgz"):
+        return bam_uri + ".tbi"
+    if lower.endswith(".bcf"):
+        return bam_uri + ".csi"
     return None
 
 

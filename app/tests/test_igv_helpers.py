@@ -11,7 +11,7 @@ import duckdb
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from igv_helpers import query_distinct_samples
+from igv_helpers import query_distinct_samples, resolve_index_uri
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -99,3 +99,15 @@ class TestQueryDistinctSamples:
         con = _make_db(n_samples=3, rows_per_sample=1)
         result = query_distinct_samples(con, "alt_bases", "sample_id = 'DOES_NOT_EXIST'")
         assert result == []
+
+
+class TestResolveIndexUri:
+
+    def test_infers_bam_and_cram_indexes(self):
+        assert resolve_index_uri("sample.bam", None) == "sample.bam.bai"
+        assert resolve_index_uri("sample.cram", None) == "sample.cram.crai"
+
+    def test_infers_variant_indexes(self):
+        assert resolve_index_uri("gnomad.vcf.gz", None) == "gnomad.vcf.gz.tbi"
+        assert resolve_index_uri("gnomad.vcf.bgz", None) == "gnomad.vcf.bgz.tbi"
+        assert resolve_index_uri("gnomad.bcf", None) == "gnomad.bcf.csi"
