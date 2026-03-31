@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, MutableMapping
+from typing import Any, Mapping, MutableMapping
 
 
 @dataclass(frozen=True)
@@ -24,15 +24,6 @@ class FilterState:
     def clear(self, session_state: MutableMapping[str, Any]) -> None:
         for key in self.keys:
             session_state.pop(key, None)
-
-    @staticmethod
-    def preserve(
-        session_state: MutableMapping[str, Any],
-        keys: Iterable[str],
-    ) -> None:
-        for key in keys:
-            if key in session_state:
-                session_state[key] = session_state[key]
 
 
 MAIN_FILTER_KEYS = (

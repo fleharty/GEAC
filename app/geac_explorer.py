@@ -20,7 +20,7 @@ warnings.filterwarnings(
 
 from igv_helpers import query_distinct_samples, per_read_warning_note, insert_size_active_part
 import geac_config
-from explorer import GEAC_VERSION, MAIN_FILTER_KEYS, MAIN_FILTER_STATE, MAIN_TAB_UI_KEYS, DataSource
+from explorer import GEAC_VERSION, MAIN_FILTER_KEYS, MAIN_FILTER_STATE, DataSource
 from explorer.main_table import (
     render_position_drilldown,
     render_records_table,
@@ -174,10 +174,6 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
             "insert_size_range": (_IS_MIN, _IS_MAX),
         },
     )
-    # Preserve in-tab UI state (plot controls, not sidebar filters).
-    # Explicitly re-writing these into session state before st.rerun() prevents
-    # Streamlit from resetting them to widget defaults on the forced rerun.
-    MAIN_FILTER_STATE.preserve(st.session_state, MAIN_TAB_UI_KEYS)
     # Clear drill-down state — the underlying data is changing.
     st.session_state.pop("_drill_locus", None)
     st.rerun()
@@ -213,9 +209,17 @@ else:
 
 _schema_cols = set(data_source.schema_cols)
 
+# Probe all optional columns in a single query rather than N+1 individual queries.
+_optional_cols = data_source.has_non_null_batch([
+    "batch", "label1", "label2", "label3", "gene",
+    "variant_filter", "gnomad_af", "homopolymer_len",
+    "trinuc_context", "on_target", "variant_called",
+    "overlap_alt_agree",
+])
+
 def _has_data(col: str) -> bool:
     """True iff col exists in the schema AND has at least one non-null value."""
-    return data_source.has_non_null(col)
+    return _optional_cols.get(col, data_source.has_non_null(col))
 
 if _has_data("batch"):
     _batches = con.execute(f"SELECT DISTINCT batch FROM {table_expr} WHERE batch IS NOT NULL ORDER BY batch").df()["batch"].tolist()

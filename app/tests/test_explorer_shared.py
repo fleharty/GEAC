@@ -2,14 +2,17 @@
 
 import os
 import sys
+import tempfile
 
 import duckdb
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from explorer import COVERAGE_FILTER_STATE, MAIN_FILTER_STATE, load_schema_manifest
 from explorer.data_source import DataSource
-from explorer.tab_context import TabContext
 from explorer.tabs import TAB_MODULES
 
 
@@ -171,10 +174,68 @@ class TestFilterState:
 
 
 class TestTabModules:
-    def test_each_tab_module_dispatches_render_body(self):
-        calls = []
-
+    def test_each_tab_module_has_non_empty_label(self):
         for module in TAB_MODULES:
-            module.render(TabContext(render_body=lambda label=module.LABEL: calls.append(label)))
+            assert hasattr(module, "LABEL"), f"{module.__name__} missing LABEL"
+            assert isinstance(module.LABEL, str) and module.LABEL.strip(), (
+                f"{module.__name__}.LABEL must be a non-empty string"
+            )
 
-        assert calls == [module.LABEL for module in TAB_MODULES]
+    def test_tab_module_labels_are_unique(self):
+        labels = [module.LABEL for module in TAB_MODULES]
+        assert len(labels) == len(set(labels)), "Duplicate LABEL values in TAB_MODULES"
+
+
+def _write_alt_parquet(path: str) -> None:
+    table = pa.table(
+        {
+            "sample_id":             ["sample1"],
+            "chrom":                 ["chr1"],
+            "pos":                   pa.array([10], type=pa.int64()),
+            "ref_allele":            ["A"],
+            "alt_allele":            ["T"],
+            "variant_type":          ["SNV"],
+            "total_depth":           pa.array([100], type=pa.int32()),
+            "alt_count":             pa.array([3], type=pa.int32()),
+            "ref_count":             pa.array([97], type=pa.int32()),
+            "fwd_depth":             pa.array([50], type=pa.int32()),
+            "rev_depth":             pa.array([50], type=pa.int32()),
+            "fwd_alt_count":         pa.array([2], type=pa.int32()),
+            "rev_alt_count":         pa.array([1], type=pa.int32()),
+            "fwd_ref_count":         pa.array([48], type=pa.int32()),
+            "rev_ref_count":         pa.array([49], type=pa.int32()),
+            "overlap_depth":         pa.array([10], type=pa.int32()),
+            "overlap_alt_agree":     pa.array([1], type=pa.int32()),
+            "overlap_alt_disagree":  pa.array([0], type=pa.int32()),
+            "overlap_ref_agree":     pa.array([9], type=pa.int32()),
+            "read_type":             ["raw"],
+            "pipeline":              ["raw"],
+            "variant_called":        pa.array([True], type=pa.bool_()),
+        }
+    )
+    pq.write_table(table, path)
+
+
+class TestDataSourceParquet:
+    def test_parquet_mode_detects_columns_and_queries(self, tmp_path):
+        parquet_path = str(tmp_path / "cohort.alt_bases.parquet")
+        _write_alt_parquet(parquet_path)
+
+        ds = DataSource.open_alt_bases(parquet_path)
+
+        assert ds.is_duckdb is False
+        assert ds.has_column("variant_type") is True
+        assert ds.has_column("nonexistent_col") is False
+        assert ds.distinct_values("sample_id") == ["sample1"]
+        assert ds.db_version is None  # no metadata in parquet mode
+        assert ds.required_columns_missing() == []
+
+    def test_parquet_has_non_null_batch(self, tmp_path):
+        parquet_path = str(tmp_path / "cohort.alt_bases.parquet")
+        _write_alt_parquet(parquet_path)
+
+        ds = DataSource.open_alt_bases(parquet_path)
+        result = ds.has_non_null_batch(["variant_called", "nonexistent_col"])
+
+        assert result["variant_called"] is True
+        assert result["nonexistent_col"] is False

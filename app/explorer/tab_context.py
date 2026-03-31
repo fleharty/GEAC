@@ -1,9 +1,4 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Callable
-
-
-@dataclass(frozen=True)
-class TabContext:
-    render_body: Callable[[], None]
+# Reserved for future tab extraction.
+# Each tab currently renders inline in geac_explorer.py using `with tab_n:` blocks.
+# This module will hold shared context passed to tab render functions once that
+# extraction is completed.

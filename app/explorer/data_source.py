@@ -87,6 +87,28 @@ class DataSource:
         ).fetchone()[0]
         return count > 0
 
+    def has_non_null_batch(self, columns: Iterable[str]) -> dict[str, bool]:
+        """Check multiple columns for non-null values in a single query.
+
+        More efficient than calling has_non_null() repeatedly when many optional
+        columns need to be probed at startup.
+        """
+        columns = list(columns)
+        present = [c for c in columns if c in self.schema_cols]
+        result: dict[str, bool] = {c: False for c in columns}
+        if not present:
+            return result
+        parts = [
+            f"COUNT(*) FILTER (WHERE {c} IS NOT NULL) > 0 AS \"{c}\""
+            for c in present
+        ]
+        row = self.con.execute(
+            f"SELECT {', '.join(parts)} FROM {self.table_expr}"
+        ).fetchone()
+        for col, val in zip(present, row):
+            result[col] = bool(val)
+        return result
+
     def distinct_values(
         self,
         column: str,
