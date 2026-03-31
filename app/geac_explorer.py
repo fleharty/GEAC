@@ -20,11 +20,15 @@ warnings.filterwarnings(
 
 from igv_helpers import query_distinct_samples, per_read_warning_note, insert_size_active_part
 import geac_config
+from explorer import GEAC_VERSION, MAIN_FILTER_KEYS, MAIN_FILTER_STATE, MAIN_TAB_UI_KEYS, DataSource
+from explorer.main_table import (
+    render_position_drilldown,
+    render_records_table,
+    render_summary_metrics,
+)
+from explorer.tabs import TAB_MODULES
 
 _IS_MIN, _IS_MAX = 20, 500  # insert size slider bounds
-
-# Version of geac this Explorer was built alongside.
-GEAC_VERSION = "0.3.15"
 
 
 def _sql_str(value: str) -> str:
@@ -93,46 +97,23 @@ if not path or not path.strip():
 path = path.strip()
 
 try:
-    if path.endswith(".duckdb"):
-        con = duckdb.connect(path, read_only=True)
-        table_expr = "alt_bases"
-    else:
-        con = duckdb.connect()
-        table_expr = f"read_parquet('{path}', union_by_name=true)"
+    data_source = DataSource.open_alt_bases(path)
 except Exception as e:
     st.error(f"Could not open file: {e}")
     st.stop()
 
+con = data_source.con
+table_expr = data_source.table_expr
+
 # Detect whether optional tables are available (only possible in DuckDB mode).
-_has_alt_reads       = False
-_has_normal_evidence = False
-_has_pon_evidence    = False
-if path.endswith(".duckdb"):
-    try:
-        con.execute("SELECT 1 FROM alt_reads LIMIT 1")
-        _has_alt_reads = True
-    except Exception:
-        _has_alt_reads = False
-    try:
-        con.execute("SELECT 1 FROM normal_evidence LIMIT 1")
-        _has_normal_evidence = True
-    except Exception:
-        _has_normal_evidence = False
-    try:
-        con.execute("SELECT 1 FROM pon_evidence LIMIT 1")
-        _has_pon_evidence = True
-    except Exception:
-        _has_pon_evidence = False
+_has_alt_reads = data_source.has_optional_table("alt_reads")
+_has_normal_evidence = data_source.has_optional_table("normal_evidence")
+_has_pon_evidence = data_source.has_optional_table("pon_evidence")
 
-    # ── Version check ─────────────────────────────────────────────────────────
-    try:
-        _meta = con.execute("SELECT geac_version, created_at FROM geac_metadata LIMIT 1").fetchone()
-        _db_version = _meta[0] if _meta else None
-        _db_created = _meta[1] if _meta else None
-    except Exception:
-        _db_version = None
-        _db_created = None
-
+# ── Version check ─────────────────────────────────────────────────────────────
+if data_source.is_duckdb:
+    _db_version = data_source.db_version
+    _db_created = data_source.db_created
     if _db_version is None:
         st.warning(
             f"This database was created with a version of geac older than v0.3.14 "
@@ -152,98 +133,51 @@ if path.endswith(".duckdb"):
         _created_str = str(_db_created)[:10]  # YYYY-MM-DD
         st.sidebar.caption(f"DB created {_created_str}")
 
+_missing_required_cols = data_source.required_columns_missing()
+if _missing_required_cols:
+    st.warning(
+        "This dataset is missing required `alt_bases` columns expected by the current Explorer: "
+        + ", ".join(sorted(_missing_required_cols)),
+        icon="⚠️",
+    )
+
 # ── Summary stats ─────────────────────────────────────────────────────────────
-stats = con.execute(f"""
-    SELECT
-        COUNT(*)                                        AS n_records,
-        COUNT(DISTINCT sample_id)                       AS n_samples,
-        SUM(alt_count)                                  AS total_alt_bases,
-        ROUND(AVG(alt_count * 1.0 / total_depth), 4)   AS mean_vaf,
-        ROUND(AVG(total_depth), 1)                      AS mean_depth,
-        COUNT(*) FILTER (WHERE variant_called IS NOT NULL) AS n_annotated,
-        COUNT(*) FILTER (WHERE variant_called = true)   AS n_called
-    FROM {table_expr}
-""").df()
+stats = data_source.summary_stats()
 
 n_annotated = int(stats["n_annotated"][0])
 n_called    = int(stats["n_called"][0])
 pct_called  = f"{100 * n_called / n_annotated:.1f}%" if n_annotated > 0 else "N/A"
 
 # ── Filters (sidebar) ─────────────────────────────────────────────────────────
-_FILTER_KEYS = [
-    "chrom_sel", "sample_sel", "sample_recurrence", "batch_sel", "label1_sel", "label2_sel", "label3_sel",
-    "gene_text", "variant_sel", "vaf_range",
-    "min_alt", "min_fwd_alt", "min_rev_alt",
-    "min_overlap_agree", "min_overlap_disagree",
-    "variant_called_sel", "variant_filter_sel", "on_target_sel",
-    "gnomad_af_range", "gnomad_include_null",
-    "homopolymer_range", "str_len_range", "min_depth", "max_depth",
-    "table_limit_sel", "recompute_vaf",
-]
+_FILTER_KEYS = list(MAIN_FILTER_KEYS)
 
 _sidebar_logo = _LOGO_COMPACT if _LOGO_COMPACT.exists() else _LOGO
 if _sidebar_logo.exists():
     st.sidebar.image(str(_sidebar_logo), width="stretch")
 
-chroms  = con.execute(f"SELECT DISTINCT chrom     FROM {table_expr} ORDER BY chrom").df()["chrom"].tolist()
-samples = con.execute(f"SELECT DISTINCT sample_id FROM {table_expr} ORDER BY sample_id").df()["sample_id"].tolist()
+chroms = data_source.distinct_values("chrom")
+samples = data_source.distinct_values("sample_id")
 
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
 _hdr_col.header("🔧 Filters")
 if _btn_col.button("Clear all", help="Reset all filters to defaults"):
-    st.session_state["chrom_sel"]          = "All"
-    st.session_state["sample_sel"]         = []
-    st.session_state["sample_recurrence"]  = (1, len(samples))
-    st.session_state["batch_sel"]          = []
-    st.session_state["label1_sel"]         = []
-    st.session_state["label2_sel"]         = []
-    st.session_state["label3_sel"]         = []
-    st.session_state["gene_text"]          = ""
-    st.session_state["variant_sel"]        = ["SNV", "insertion", "deletion"]
-    st.session_state["vaf_range"]          = (0.0, 1.0)
-    st.session_state["min_alt"]            = 1
-    st.session_state["max_alt"]            = 0
-    st.session_state["min_fwd_alt"]        = 0
-    st.session_state["min_rev_alt"]        = 0
-    st.session_state["min_overlap_agree"]   = 0
-    st.session_state["min_overlap_disagree"] = 0
-    st.session_state["variant_called_sel"]  = "All"
-    st.session_state["variant_filter_sel"] = []
-    st.session_state["on_target_sel"]      = "All"
-    st.session_state["gnomad_af_range"]    = ("0", "1.0")
-    st.session_state["gnomad_include_null"] = True
-    st.session_state["homopolymer_range"]  = (0, 20)
-    st.session_state["str_len_range"]      = (0, 50)
-    st.session_state["min_depth"]          = 0
-    st.session_state["max_depth"]          = 0
-    st.session_state["table_limit_sel"]    = 500
-    st.session_state["recompute_vaf"]      = False
     _r_fs_max  = st.session_state.get("_cached_fs_max", 0)
     _r_cycle_max = st.session_state.get("_cached_cycle_max", 300)
     _r_mq_max    = st.session_state.get("_cached_mq_max", 60)
-    st.session_state["family_size_range"] = (0, _r_fs_max)
-    st.session_state["cycle_range"]       = (1, _r_cycle_max)
-    st.session_state["map_qual_range"]    = (0, _r_mq_max)
-    st.session_state["insert_size_range"] = (_IS_MIN, _IS_MAX)
-    st.session_state["fs_exclude_mode"]    = False
-    st.session_state["cycle_exclude_mode"] = False
-    st.session_state["mq_exclude_mode"]    = False
-    st.session_state["read_strand_sel"]    = "All"
+    MAIN_FILTER_STATE.reset(
+        st.session_state,
+        overrides={
+            "sample_recurrence": (1, len(samples)),
+            "family_size_range": (0, _r_fs_max),
+            "cycle_range": (1, _r_cycle_max),
+            "map_qual_range": (0, _r_mq_max),
+            "insert_size_range": (_IS_MIN, _IS_MAX),
+        },
+    )
     # Preserve in-tab UI state (plot controls, not sidebar filters).
     # Explicitly re-writing these into session state before st.rerun() prevents
     # Streamlit from resetting them to widget defaults on the forced rerun.
-    _TAB_UI_KEYS = [
-        "sb_scale", "sb_color_by", "sb_show_all",
-        "dfe_color_by", "dfe_y_mode", "dfe_show_r1r2",
-        "bq_color_by", "bq_show_r1r2",
-        "ins_color_by", "ins_y_mode",
-        "af_ins_color_by", "af_ins_y_mode",
-        "fs_color_by", "fs_y_mode", "fs_x_range",
-        "sbs_y_mode", "top_n_sig", "cmp_top_n",
-    ]
-    for _k in _TAB_UI_KEYS:
-        if _k in st.session_state:
-            st.session_state[_k] = st.session_state[_k]
+    MAIN_FILTER_STATE.preserve(st.session_state, MAIN_TAB_UI_KEYS)
     # Clear drill-down state — the underlying data is changing.
     st.session_state.pop("_drill_locus", None)
     st.rerun()
@@ -277,13 +211,11 @@ if _n_samples_total > 1:
 else:
     sample_recurrence = (1, 1)
 
-_schema_cols = set(con.execute(f"DESCRIBE SELECT * FROM {table_expr} LIMIT 0").df()["column_name"].tolist())
+_schema_cols = set(data_source.schema_cols)
 
 def _has_data(col: str) -> bool:
     """True iff col exists in the schema AND has at least one non-null value."""
-    if col not in _schema_cols:
-        return False
-    return con.execute(f"SELECT COUNT(*) FROM {table_expr} WHERE {col} IS NOT NULL").fetchone()[0] > 0
+    return data_source.has_non_null(col)
 
 if _has_data("batch"):
     _batches = con.execute(f"SELECT DISTINCT batch FROM {table_expr} WHERE batch IS NOT NULL ORDER BY batch").df()["batch"].tolist()
@@ -1108,23 +1040,7 @@ fn_annotated = int(fstats["n_annotated"][0])
 fn_called    = int(fstats["n_called"][0])
 fpct_called  = f"{100 * fn_called / fn_annotated:.1f}%" if fn_annotated > 0 else "N/A"
 
-st.caption("Overall")
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Alt records",      f"{int(stats['n_records'][0]):,}")
-c2.metric("Samples",          f"{int(stats['n_samples'][0]):,}")
-c3.metric("Total alt bases",  f"{int(stats['total_alt_bases'][0]):,}")
-c4.metric("Mean VAF",         str(stats["mean_vaf"][0]))
-c5.metric("Mean depth",       str(stats["mean_depth"][0]))
-c6.metric("% variant called", pct_called)
-
-st.caption("Filtered")
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Alt records",      f"{int(fstats['n_records'][0]):,}")
-c2.metric("Samples",          f"{int(fstats['n_samples'][0]):,}")
-c3.metric("Total alt bases",  f"{int(fstats['total_alt_bases'][0]):,}")
-c4.metric("Mean VAF",         str(fstats["mean_vaf"][0]))
-c5.metric("Mean depth",       str(fstats["mean_depth"][0]))
-c6.metric("% variant called", fpct_called)
+render_summary_metrics(stats, fstats, pct_called, fpct_called)
 
 def query_records(extra: list[str] = [], limit: int | None = None) -> pd.DataFrame:
     """Query records with current filters plus any extra conditions."""
@@ -1191,21 +1107,13 @@ _table_cols = [
     if c in df.columns
 ]
 
-with st.expander("Data table", expanded=True):
-    _tbl_caption = (
-        f"Showing {len(df):,} of {total_count:,} rows. Increase the table row limit above to see more."
-        if len(df) < total_count else
-        f"Showing all {total_count:,} rows."
-    )
-    st.caption(_tbl_caption)
-    _tbl_event = st.dataframe(
-        df[_table_cols],
-        width="stretch",
-        on_select="rerun",
-        selection_mode="single-row",
-        key="main_data_table",
-    )
-    igv_buttons([], df, key="main")
+_tbl_event = render_records_table(
+    df,
+    total_count,
+    _table_cols,
+    igv_buttons=igv_buttons,
+    key="main",
+)
 
 # ── Position-level drill-down ──────────────────────────────────────────────────
 _selected_rows = (_tbl_event.selection or {}).get("rows", [])
@@ -1217,121 +1125,17 @@ if _selected_rows:
 
 if "_drill_locus" in st.session_state:
     _chrom, _pos, _selected_alt = st.session_state["_drill_locus"]
-
-    # Query ALL samples/alleles at this locus, ignoring current filters.
-    _drill_df = con.execute(f"""
-        SELECT
-            sample_id,
-            ref_allele,
-            alt_allele,
-            variant_type,
-            alt_count,
-            ref_count,
-            total_depth,
-            ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-            fwd_alt_count,
-            rev_alt_count,
-            overlap_alt_agree,
-            overlap_alt_disagree,
-            variant_called,
-            variant_filter
-        FROM {table_expr}
-        WHERE chrom = '{_chrom}' AND pos = {_pos}
-        ORDER BY sample_id, alt_allele
-    """).df()
-
-    # Extract locus-level annotations from the first row (same for all samples).
-    _locus_cols = ["ref_allele"] + [
-        c for c in ["gene", "on_target", "homopolymer_len", "str_period", "str_len", "trinuc_context"]
-        if c in _schema_cols
-    ]
-    _locus_row = con.execute(f"""
-        SELECT {", ".join(_locus_cols)}
-        FROM {table_expr}
-        WHERE chrom = '{_chrom}' AND pos = {_pos}
-        LIMIT 1
-    """).df()
-
-    st.subheader(f"🔍 Position drill-down: {_chrom}:{_pos}")
-
-    # Option to restrict to the exact alt allele from the selected row.
-    _match_alt = st.checkbox(
-        f"Same alt allele only ({_selected_alt})",
-        value=False,
-        key=f"drill_match_alt_{_chrom}_{_pos}",
+    render_position_drilldown(
+        con=con,
+        table_expr=table_expr,
+        schema_cols=_schema_cols,
+        chrom=_chrom,
+        pos=_pos,
+        selected_alt=_selected_alt,
+        has_alt_reads=_has_alt_reads,
+        sql_str=_sql_str,
+        igv_buttons=igv_buttons,
     )
-    if _match_alt:
-        _drill_df = _drill_df[_drill_df["alt_allele"] == _selected_alt].reset_index(drop=True)
-
-    # Locus-level info as metrics
-    _info_cols = st.columns(6)
-    _info_cols[0].metric("Ref allele", str(_locus_row["ref_allele"].iloc[0]))
-    _info_cols[1].metric("Samples with alt", str(_drill_df["sample_id"].nunique()))
-    if "gene" in _locus_row.columns:
-        _info_cols[2].metric("Gene", str(_locus_row["gene"].iloc[0] or "intergenic"))
-    if "on_target" in _locus_row.columns:
-        _info_cols[3].metric("On target", str(_locus_row["on_target"].iloc[0]))
-    if "homopolymer_len" in _locus_row.columns:
-        _info_cols[4].metric("Homopolymer len", str(_locus_row["homopolymer_len"].iloc[0]))
-    if "trinuc_context" in _locus_row.columns:
-        _info_cols[5].metric("Trinuc context", str(_locus_row["trinuc_context"].iloc[0] or ""))
-
-    st.dataframe(_drill_df, width="stretch", hide_index=True)
-
-    _drill_igv_conditions = [f"chrom = '{_chrom}'", f"pos = {_pos}"]
-    if _match_alt:
-        _drill_igv_conditions.append(f"alt_allele = '{_sql_str(_selected_alt)}'")
-    igv_buttons(
-        _drill_igv_conditions,
-        _drill_df,
-        key=f"drill_{_chrom}_{_pos}",
-        use_global_filters=False,
-    )
-
-    # ── Per-read detail (only when alt_reads table is present) ────────────────
-    if _has_alt_reads:
-        _reads_alt_clause = f" AND alt_allele = '{_sql_str(_selected_alt)}'" if _match_alt else ""
-        _reads_df = con.execute(f"""
-            SELECT
-                sample_id,
-                alt_allele,
-                cycle,
-                read_length,
-                is_read1,
-                ab_count,
-                ba_count,
-                family_size,
-                base_qual,
-                map_qual
-            FROM alt_reads
-            WHERE chrom = '{_chrom}' AND pos = {_pos}{_reads_alt_clause}
-            ORDER BY sample_id, alt_allele, family_size DESC NULLS LAST
-        """).df()
-
-        if _reads_df.empty:
-            st.caption("No per-read detail available for this locus.")
-        else:
-            st.markdown(f"**Per-read detail** — {len(_reads_df):,} alt-supporting reads across {_reads_df['sample_id'].nunique()} sample(s)")
-
-            _reads_summary = (
-                _reads_df
-                .groupby(["sample_id", "alt_allele"])
-                .agg(
-                    n_reads=("cycle", "count"),
-                    median_cycle=("cycle", "median"),
-                    median_family_size=("family_size", "median"),
-                    min_family_size=("family_size", "min"),
-                    max_family_size=("family_size", "max"),
-                    mean_base_qual=("base_qual", "mean"),
-                )
-                .reset_index()
-                .round(1)
-            )
-            st.caption("Summary by sample / allele")
-            st.dataframe(_reads_summary, width="stretch", hide_index=True)
-
-            with st.expander("📖 Individual reads"):
-                st.dataframe(_reads_df, width="stretch", hide_index=True)
 
 # ── Shared alt_reads join subquery (used by Duplex/Simplex and Reads tabs) ────
 # Joins alt_reads to the current filtered locus set so all reads plots respect
@@ -1351,7 +1155,10 @@ _r_join = f"""
 """
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon = st.tabs(["📊 VAF distribution", "🧬 Error spectrum", "↕️ Strand bias", "🤝 Overlap agreement", "👥 Cohort", "📖 Reads", "🔁 Duplex/Simplex", "🔬 Tumor/Normal", "🛡️ Panel of Normals"], key="main_tabs")
+tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon = st.tabs(
+    [module.LABEL for module in TAB_MODULES],
+    key="main_tabs",
+)
 
 with tab1:
     for vtype, color in [
