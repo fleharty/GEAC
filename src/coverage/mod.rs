@@ -8,7 +8,7 @@ use tracing::info;
 use crate::bam::{open_bam, read_group_sample_id, RefCache};
 use crate::cli::CoverageArgs;
 use crate::gene_annotations::GeneAnnotations;
-use crate::record::CoverageRecord;
+use crate::record::{CoverageRecord, IntervalRecord};
 use crate::targets::TargetIntervals;
 use crate::writer::parquet_coverage::CoverageWriter;
 
@@ -17,12 +17,16 @@ use crate::writer::parquet_coverage::CoverageWriter;
 /// When `--targets` is provided, zero-depth positions within target intervals are
 /// included in the output (so dropout is captured). Without targets, only positions
 /// covered by at least one read are emitted.
+///
+/// When `args.intervals_output` is set and `target_intervals` is provided, also
+/// computes per-interval aggregate stats and returns them as `Vec<IntervalRecord>`.
+/// Otherwise returns an empty Vec.
 pub fn collect_coverage(
     args: &CoverageArgs,
     target_intervals: Option<&TargetIntervals>,
     gene_annots: Option<&GeneAnnotations>,
     writer: &mut CoverageWriter,
-) -> Result<()> {
+) -> Result<Vec<IntervalRecord>> {
     let mut reader = open_bam(&args.input, &args.reference)?;
     let mut ref_cache = RefCache::new(&args.reference)?;
 
@@ -55,6 +59,15 @@ pub fn collect_coverage(
     // When targets are provided, track which positions had reads so we can fill zeros.
     let mut seen: HashSet<(String, i64)> = HashSet::new();
 
+    // Per-interval accumulators — one per named interval, only when intervals output is requested.
+    let do_intervals = args.intervals_output.is_some() && target_intervals.is_some();
+    let mut interval_accs: Vec<IntervalAccumulator> = if do_intervals {
+        let n = target_intervals.map_or(0, |ti| ti.n_named_intervals());
+        vec![IntervalAccumulator::default(); n]
+    } else {
+        Vec::new()
+    };
+
     let mut positions_written: u64 = 0;
     let mut positions_seen: u64 = 0;
     let start = std::time::Instant::now();
@@ -78,6 +91,17 @@ pub fn collect_coverage(
 
         let tally = tally_coverage(&pileup, args.min_map_qual);
 
+        let gc = compute_gc_content(ref_cache.current_seq(), pos as usize, args.gc_window);
+        let gene = gene_annots.and_then(|g| g.get(&chrom, pos).map(str::to_owned));
+
+        // Update interval accumulator before the min_depth gate so that low-depth
+        // positions still contribute to per-interval stats.
+        if do_intervals {
+            if let Some(idx) = target_intervals.and_then(|ti| ti.interval_index(&chrom, pos)) {
+                interval_accs[idx].push_tally(&tally, gc, gene.clone(), args);
+            }
+        }
+
         if tally.total_depth < args.min_depth {
             if has_targets {
                 seen.insert((chrom.clone(), pos));
@@ -85,9 +109,7 @@ pub fn collect_coverage(
             continue;
         }
 
-        let gc = compute_gc_content(ref_cache.current_seq(), pos as usize, args.gc_window);
         let on_target = target_intervals.map(|ti| ti.contains(&chrom, pos));
-        let gene = gene_annots.and_then(|g| g.get(&chrom, pos).map(str::to_owned));
 
         if has_targets {
             seen.insert((chrom.clone(), pos));
@@ -173,8 +195,38 @@ pub fn collect_coverage(
         }
     }
 
+    // Zero-depth fill for interval accumulators.
+    // This is needed for positions not seen in the pileup, regardless of min_depth.
+    if do_intervals {
+        if let Some(ti) = target_intervals {
+            let mut zero_ref = ZeroDepthRefReader::open(&args.reference)?;
+            ti.for_each_named_position(|idx, chrom, pos| {
+                if !seen.contains(&(chrom.to_string(), pos)) {
+                    let gc = zero_ref.gc_content(chrom, pos, args.gc_window);
+                    let gene = gene_annots.and_then(|g| g.get(chrom, pos).map(str::to_owned));
+                    interval_accs[idx].push_zero(gc, gene);
+                }
+            });
+        }
+    }
+
+    // Build interval records from accumulators.
+    let interval_records: Vec<IntervalRecord> = if do_intervals {
+        if let Some(ti) = target_intervals {
+            interval_accs
+                .iter()
+                .enumerate()
+                .map(|(i, acc)| acc.build(&ti.named_intervals()[i], &sample_id, args))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
     info!(positions_written, "coverage collection complete");
-    Ok(())
+    Ok(interval_records)
 }
 
 // ── Bin accumulator ───────────────────────────────────────────────────────────
@@ -366,6 +418,152 @@ impl BinAccumulator {
             batch: self.batch.clone(),
         }
     }
+}
+
+// ── Interval accumulator ──────────────────────────────────────────────────────
+
+/// Accumulates per-position stats for a single target interval.
+/// Updated during both the pileup loop and the zero-depth fill pass.
+#[derive(Default, Clone)]
+struct IntervalAccumulator {
+    /// Depth at every position in the interval (including zero-depth positions).
+    depths:        Vec<i32>,
+    sum_gc:        f64,
+    sum_mean_mapq: f64,
+    sum_frac_mapq0: f64,
+    sum_frac_dup:  f64,
+    sum_frac_overlap: f64,
+    sum_mean_bq:   f64,
+    sum_mean_ins:  f64,
+    /// Number of positions where insert size data was available.
+    n_ins_pos:     u32,
+    /// First non-None gene seen in this interval.
+    gene:          Option<String>,
+}
+
+impl IntervalAccumulator {
+    fn push_tally(
+        &mut self,
+        tally: &CoverageTally,
+        gc: f32,
+        gene: Option<String>,
+        args: &CoverageArgs,
+    ) {
+        self.depths.push(tally.total_depth);
+        self.sum_gc += gc as f64;
+
+        let (mean_mapq, frac_mapq0, _) = mapq_stats(&tally.mapqs_non_dup, args.min_map_qual);
+        let (mean_bq, _, _, _) = base_qual_stats(&tally.base_quals, args.min_base_qual);
+        let frac_dup = if tally.raw_read_depth > 0 {
+            tally.dup_count as f32 / tally.raw_read_depth as f32
+        } else {
+            0.0
+        };
+        let frac_overlap = if tally.total_depth > 0 {
+            tally.overlap_depth as f32 / tally.total_depth as f32
+        } else {
+            0.0
+        };
+        let (mean_ins, _, _, n_ins) = insert_size_stats(&tally.insert_sizes);
+
+        self.sum_mean_mapq   += mean_mapq as f64;
+        self.sum_frac_mapq0  += frac_mapq0 as f64;
+        self.sum_frac_dup    += frac_dup as f64;
+        self.sum_frac_overlap += frac_overlap as f64;
+        self.sum_mean_bq     += mean_bq as f64;
+        if n_ins > 0 {
+            self.sum_mean_ins += mean_ins as f64;
+            self.n_ins_pos    += 1;
+        }
+        if self.gene.is_none() {
+            self.gene = gene;
+        }
+    }
+
+    fn push_zero(&mut self, gc: f32, gene: Option<String>) {
+        self.depths.push(0);
+        self.sum_gc += gc as f64;
+        // All QC sums remain 0 for zero-depth positions.
+        if self.gene.is_none() {
+            self.gene = gene;
+        }
+    }
+
+    fn build(
+        &self,
+        named: &crate::targets::NamedInterval,
+        sample_id: &str,
+        args: &CoverageArgs,
+    ) -> IntervalRecord {
+        let n = self.depths.len();
+        let n_f = n as f64;
+        let n_bases = (named.end - named.start) as i32;
+
+        let (mean_depth, median_depth, min_depth, max_depth) = depth_stats(&self.depths);
+
+        IntervalRecord {
+            sample_id:    sample_id.to_string(),
+            chrom:        named.chrom.clone(),
+            start:        named.start as i64,
+            end:          named.end as i64,
+            interval_name: named.name.clone(),
+            gene:         self.gene.clone(),
+            n_bases,
+            mean_depth,
+            median_depth,
+            min_depth,
+            max_depth,
+            frac_at_1x:   frac_at_threshold(&self.depths, 1),
+            frac_at_10x:  frac_at_threshold(&self.depths, 10),
+            frac_at_20x:  frac_at_threshold(&self.depths, 20),
+            frac_at_30x:  frac_at_threshold(&self.depths, 30),
+            frac_at_50x:  frac_at_threshold(&self.depths, 50),
+            frac_at_100x: frac_at_threshold(&self.depths, 100),
+            mean_gc_content:   (self.sum_gc / n_f) as f32,
+            mean_mapq:         (self.sum_mean_mapq / n_f) as f32,
+            mean_frac_mapq0:   (self.sum_frac_mapq0 / n_f) as f32,
+            mean_frac_dup:     (self.sum_frac_dup / n_f) as f32,
+            mean_frac_overlap: (self.sum_frac_overlap / n_f) as f32,
+            mean_base_qual:    (self.sum_mean_bq / n_f) as f32,
+            mean_insert_size:  if self.n_ins_pos > 0 {
+                (self.sum_mean_ins / self.n_ins_pos as f64) as f32
+            } else {
+                0.0
+            },
+            read_type: args.read_type,
+            pipeline:  args.pipeline,
+            batch:     args.batch.clone(),
+        }
+    }
+}
+
+fn depth_stats(depths: &[i32]) -> (f32, f32, i32, i32) {
+    if depths.is_empty() {
+        return (0.0, 0.0, 0, 0);
+    }
+    let n = depths.len() as f64;
+    let mean = depths.iter().map(|&d| d as f64).sum::<f64>() / n;
+    let min_d = *depths.iter().min().unwrap();
+    let max_d = *depths.iter().max().unwrap();
+
+    // Median via sorted copy.
+    let mut sorted = depths.to_vec();
+    sorted.sort_unstable();
+    let median = if sorted.len() % 2 == 1 {
+        sorted[sorted.len() / 2] as f32
+    } else {
+        let mid = sorted.len() / 2;
+        (sorted[mid - 1] + sorted[mid]) as f32 / 2.0
+    };
+
+    (mean as f32, median, min_d, max_d)
+}
+
+fn frac_at_threshold(depths: &[i32], threshold: i32) -> f32 {
+    if depths.is_empty() {
+        return 0.0;
+    }
+    depths.iter().filter(|&&d| d >= threshold).count() as f32 / depths.len() as f32
 }
 
 // ── Pileup tallying ───────────────────────────────────────────────────────────

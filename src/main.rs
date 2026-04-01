@@ -207,9 +207,13 @@ fn main() -> Result<()> {
                 })
                 .transpose()?;
 
+            if args.intervals_output.is_some() && target_intervals.is_none() {
+                anyhow::bail!("--intervals-output requires --targets");
+            }
+
             let mut cov_writer = writer::parquet_coverage::CoverageWriter::new(&args.output)?;
 
-            coverage::collect_coverage(
+            let interval_records = coverage::collect_coverage(
                 &args,
                 target_intervals.as_ref().map(|t| t as &_),
                 gene_annots.as_ref(),
@@ -217,6 +221,21 @@ fn main() -> Result<()> {
             )?;
 
             cov_writer.close()?;
+
+            if let Some(ref intervals_path) = args.intervals_output {
+                info!(
+                    n_intervals = interval_records.len(),
+                    output = %intervals_path.display(),
+                    "writing per-interval summary"
+                );
+                let mut iv_writer =
+                    writer::parquet_coverage_intervals::CoverageIntervalsWriter::new(intervals_path)?;
+                for record in interval_records {
+                    iv_writer.push(record)?;
+                }
+                iv_writer.close()?;
+            }
+
             info!("done");
         }
     }

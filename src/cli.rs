@@ -365,6 +365,11 @@ pub struct CoverageArgs {
     /// Progress reporting interval in seconds (0 to disable)
     #[arg(long, default_value_t = 20)]
     pub progress_interval: u64,
+
+    /// Output path for per-interval summary Parquet (should end in .coverage.intervals.parquet).
+    /// Requires --targets. When omitted, no interval file is written.
+    #[arg(long)]
+    pub intervals_output: Option<PathBuf>,
 }
 
 // Allow clap to parse ReadType and Pipeline from strings

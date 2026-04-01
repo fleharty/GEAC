@@ -1566,6 +1566,136 @@ fn merge_routes_coverage_parquet_to_coverage_table() {
     assert!(duckdb_count(&db, "coverage") > 0, "coverage table is empty");
 }
 
+/// Two named intervals: one covered by reads, one at zero depth.
+/// Verifies n_bases, mean_depth, frac_at_1x, interval_name, and that the
+/// interval accumulator counts zero-depth positions correctly.
+#[test]
+fn coverage_intervals_basic() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 400);
+
+    // 5 reads of length 20 all starting at pos=100; covers [100, 120) at depth 5.
+    // Interval chr1:200-220 receives no reads → zero depth.
+    let reads: Vec<CovRead> = (0..5).map(|_| CovRead::regular(100)).collect();
+    let bam = write_coverage_bam(dir.path(), "s1.bam", "sample1", 400, reads, 20);
+
+    // BED with two named intervals.
+    let bed = dir.path().join("targets.bed");
+    std::fs::write(
+        &bed,
+        "chr1\t100\t120\texon1\nchr1\t200\t220\texon2\n",
+    )
+    .unwrap();
+
+    let cov_pq  = dir.path().join("s1.coverage.parquet");
+    let iv_pq   = dir.path().join("s1.coverage.intervals.parquet");
+
+    assert_geac_success(&[
+        "coverage",
+        "--input",       bam.to_str().unwrap(),
+        "--reference",   fa.to_str().unwrap(),
+        "--output",      cov_pq.to_str().unwrap(),
+        "--targets",     bed.to_str().unwrap(),
+        "--intervals-output", iv_pq.to_str().unwrap(),
+        "--read-type",   "raw",
+        "--pipeline",    "raw",
+    ]);
+
+    assert!(iv_pq.exists(), "intervals Parquet not created");
+    assert_eq!(parquet_count(&iv_pq), 2, "expected 2 interval rows");
+
+    // exon1: 20 positions all at depth 5 → frac_at_1x = 1.0, mean_depth = 5.0
+    let n_bases_exon1 = parquet_query_i32(&iv_pq, "n_bases", "interval_name = 'exon1'");
+    assert_eq!(n_bases_exon1, 20, "exon1 n_bases should be 20");
+
+    let mean_depth_exon1 = parquet_query_f32(&iv_pq, "mean_depth", "interval_name = 'exon1'");
+    assert!(
+        (mean_depth_exon1 - 5.0).abs() < 0.01,
+        "exon1 mean_depth should be 5.0, got {mean_depth_exon1}"
+    );
+
+    let frac_1x_exon1 = parquet_query_f32(&iv_pq, "frac_at_1x", "interval_name = 'exon1'");
+    assert!(
+        (frac_1x_exon1 - 1.0).abs() < 0.01,
+        "exon1 frac_at_1x should be 1.0, got {frac_1x_exon1}"
+    );
+
+    // exon2: 20 positions all at depth 0 → frac_at_1x = 0.0, mean_depth = 0.0
+    let n_bases_exon2 = parquet_query_i32(&iv_pq, "n_bases", "interval_name = 'exon2'");
+    assert_eq!(n_bases_exon2, 20, "exon2 n_bases should be 20");
+
+    let mean_depth_exon2 = parquet_query_f32(&iv_pq, "mean_depth", "interval_name = 'exon2'");
+    assert!(
+        mean_depth_exon2.abs() < 0.01,
+        "exon2 mean_depth should be 0.0, got {mean_depth_exon2}"
+    );
+
+    let frac_1x_exon2 = parquet_query_f32(&iv_pq, "frac_at_1x", "interval_name = 'exon2'");
+    assert!(
+        frac_1x_exon2.abs() < 0.01,
+        "exon2 frac_at_1x should be 0.0, got {frac_1x_exon2}"
+    );
+}
+
+/// .coverage.intervals.parquet files are routed to the coverage_intervals table by geac merge.
+#[test]
+fn merge_routes_coverage_intervals_parquet_to_coverage_intervals_table() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 400);
+
+    // Locus parquet (needed so merge has a primary table to anchor on).
+    let locus_bam = write_bam(
+        dir.path(),
+        "locus.bam",
+        "sample1",
+        400,
+        vec![(50, b'T', 5, 10)],
+        20,
+    );
+    let locus_pq = dir.path().join("locus.parquet");
+    assert_geac_success(&[
+        "collect",
+        "--input",     locus_bam.to_str().unwrap(),
+        "--reference", fa.to_str().unwrap(),
+        "--output",    locus_pq.to_str().unwrap(),
+        "--read-type", "raw",
+        "--pipeline",  "raw",
+    ]);
+
+    let reads: Vec<CovRead> = (0..5).map(|_| CovRead::regular(100)).collect();
+    let bam = write_coverage_bam(dir.path(), "cov.bam", "sample1", 400, reads, 20);
+    let bed = dir.path().join("targets.bed");
+    std::fs::write(&bed, "chr1\t100\t120\texon1\nchr1\t200\t220\texon2\n").unwrap();
+
+    let cov_pq = dir.path().join("sample1.coverage.parquet");
+    let iv_pq  = dir.path().join("sample1.coverage.intervals.parquet");
+    assert_geac_success(&[
+        "coverage",
+        "--input",            bam.to_str().unwrap(),
+        "--reference",        fa.to_str().unwrap(),
+        "--output",           cov_pq.to_str().unwrap(),
+        "--targets",          bed.to_str().unwrap(),
+        "--intervals-output", iv_pq.to_str().unwrap(),
+        "--read-type",        "raw",
+        "--pipeline",         "raw",
+    ]);
+
+    let db = dir.path().join("cohort.duckdb");
+    assert_geac_success(&[
+        "merge",
+        "--output",        db.to_str().unwrap(),
+        locus_pq.to_str().unwrap(),
+        cov_pq.to_str().unwrap(),
+        iv_pq.to_str().unwrap(),
+    ]);
+
+    assert!(
+        duckdb_table_exists(&db, "coverage_intervals"),
+        "coverage_intervals table not created"
+    );
+    assert_eq!(duckdb_count(&db, "coverage_intervals"), 2, "expected 2 rows in coverage_intervals");
+}
+
 // ── fwd/rev alt count read-level semantics ────────────────────────────────────
 
 /// For overlapping pairs where both R1 (forward) and R2 (reverse) carry the alt,

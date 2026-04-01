@@ -7,6 +7,16 @@ use anyhow::{Context, Result};
 /// All coordinates are stored as 0-based half-open [start, end).
 type Intervals = Vec<(u32, u32)>;
 
+/// A single target interval with its optional name, in original (unmerged) form.
+/// Coordinates are 0-based half-open [start, end).
+#[derive(Debug, Clone)]
+pub struct NamedInterval {
+    pub chrom: String,
+    pub start: u32,
+    pub end:   u32,
+    pub name:  Option<String>,
+}
+
 /// Pre-loaded target region lookup built from a BED file or a Picard interval list.
 ///
 /// Auto-detects format: if the file contains lines starting with `@` it is
@@ -15,8 +25,16 @@ type Intervals = Vec<(u32, u32)>;
 ///
 /// Overlapping intervals within each chromosome are merged on load so that
 /// binary search is always correct.
+///
+/// The original (unmerged) intervals with their names are preserved separately
+/// for per-interval summary output.
 pub struct TargetIntervals {
+    /// Merged intervals per chromosome, used for fast containment queries.
     by_chrom: HashMap<String, Intervals>,
+    /// Original intervals in sorted (chrom, start) order, with names.
+    named: Vec<NamedInterval>,
+    /// Maps chrom → (start, end) range into `named` for fast lookup.
+    named_range: HashMap<String, (usize, usize)>,
 }
 
 impl TargetIntervals {
@@ -31,6 +49,7 @@ impl TargetIntervals {
         let is_interval_list = content.lines().any(|l| l.starts_with('@'));
 
         let mut raw: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
+        let mut named_raw: Vec<NamedInterval> = Vec::new();
 
         for line in content.lines() {
             if line.starts_with('@') || line.trim().is_empty() {
@@ -42,27 +61,34 @@ impl TargetIntervals {
                 continue;
             }
 
-            let (start, end) = if is_interval_list {
+            let chrom = fields[0].to_string();
+
+            let (start, end, name) = if is_interval_list {
                 // Picard: 1-based, end-inclusive → convert to 0-based half-open
+                // col 4 (index 4) is the interval name
                 let s: u32 = fields[1].parse().with_context(|| {
                     format!("invalid start coordinate in interval list: '{}'", fields[1])
                 })?;
                 let e: u32 = fields[2].parse().with_context(|| {
                     format!("invalid end coordinate in interval list: '{}'", fields[2])
                 })?;
-                (s.saturating_sub(1), e)
+                let name = fields.get(4).map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+                (s.saturating_sub(1), e, name)
             } else {
                 // BED: 0-based, end-exclusive — use as-is
+                // col 3 (index 3) is the interval name
                 let s: u32 = fields[1].parse().with_context(|| {
                     format!("invalid start coordinate in BED: '{}'", fields[1])
                 })?;
                 let e: u32 = fields[2].parse().with_context(|| {
                     format!("invalid end coordinate in BED: '{}'", fields[2])
                 })?;
-                (s, e)
+                let name = fields.get(3).map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+                (s, e, name)
             };
 
-            raw.entry(fields[0].to_string()).or_default().push((start, end));
+            raw.entry(chrom.clone()).or_default().push((start, end));
+            named_raw.push(NamedInterval { chrom, start, end, name });
         }
 
         // Sort and merge overlapping intervals per chromosome for efficient lookup.
@@ -74,7 +100,22 @@ impl TargetIntervals {
             })
             .collect();
 
-        Ok(Self { by_chrom })
+        // Sort named intervals by (chrom, start) and build per-chrom range index.
+        named_raw.sort_unstable_by(|a, b| {
+            a.chrom.cmp(&b.chrom).then(a.start.cmp(&b.start))
+        });
+        let mut named_range: HashMap<String, (usize, usize)> = HashMap::new();
+        let mut i = 0;
+        while i < named_raw.len() {
+            let chrom = named_raw[i].chrom.clone();
+            let start = i;
+            while i < named_raw.len() && named_raw[i].chrom == chrom {
+                i += 1;
+            }
+            named_range.insert(chrom, (start, i));
+        }
+
+        Ok(Self { by_chrom, named: named_raw, named_range })
     }
 
     /// Returns `true` if the 0-based position `pos` falls within any target interval.
@@ -118,6 +159,45 @@ impl TargetIntervals {
             .flat_map(|ivs| ivs.iter())
             .map(|(s, e)| (e - s) as usize)
             .sum()
+    }
+
+    /// All named intervals in sorted (chrom, start) order.
+    pub fn named_intervals(&self) -> &[NamedInterval] {
+        &self.named
+    }
+
+    /// Number of named (original, unmerged) intervals.
+    pub fn n_named_intervals(&self) -> usize {
+        self.named.len()
+    }
+
+    /// Returns the index of the named interval containing `pos` (0-based), or None.
+    /// For non-overlapping intervals this is exact. For overlapping intervals,
+    /// returns the last interval whose start ≤ pos and end > pos.
+    pub fn interval_index(&self, chrom: &str, pos: i64) -> Option<usize> {
+        let &(range_start, range_end) = self.named_range.get(chrom)?;
+        let slice = &self.named[range_start..range_end];
+        let pos = pos as u32;
+        let idx = slice.partition_point(|iv| iv.start <= pos);
+        if idx == 0 {
+            return None;
+        }
+        let candidate = &slice[idx - 1];
+        if candidate.end > pos {
+            Some(range_start + idx - 1)
+        } else {
+            None
+        }
+    }
+
+    /// Iterate every named interval's (index, chrom, pos) triple.
+    /// Each position within each named interval is visited exactly once.
+    pub fn for_each_named_position<F: FnMut(usize, &str, i64)>(&self, mut f: F) {
+        for (i, iv) in self.named.iter().enumerate() {
+            for pos in iv.start..iv.end {
+                f(i, &iv.chrom, pos as i64);
+            }
+        }
     }
 }
 

@@ -74,6 +74,15 @@ const TABLE_SPECS: &[TableSpec] = &[
         ),
         rebuild_samples_summary: false,
     },
+    TableSpec {
+        table: "coverage_intervals",
+        suffix: Some(".coverage.intervals.parquet"),
+        index_sql: Some(
+            "CREATE INDEX IF NOT EXISTS idx_coverage_intervals_locus \
+             ON coverage_intervals (sample_id, chrom, start, \"end\");",
+        ),
+        rebuild_samples_summary: false,
+    },
 ];
 
 fn escape_path(path: &Path) -> String {
@@ -116,7 +125,7 @@ fn modified_at_epoch_seconds(path: &Path) -> Option<f64> {
 
 fn sample_id_column(table: &str) -> Option<&'static str> {
     match table {
-        "alt_bases" | "alt_reads" | "coverage" => Some("sample_id"),
+        "alt_bases" | "alt_reads" | "coverage" | "coverage_intervals" => Some("sample_id"),
         "normal_evidence" | "pon_evidence" => Some("tumor_sample_id"),
         _ => None,
     }

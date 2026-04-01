@@ -195,6 +195,7 @@ Audit document: `docs/per-read-filter-audit.md`.
   - [x] Step 4: SNV count bar chart — n_snv per sample, stacked/colored by SBS6 substitution type breakdown
   - [x] Step 5: SBS96 heatmap — samples as rows, 96 trinucleotide contexts as columns, color = normalized count; reveals samples with unusual mutational profiles
 - [x] NMF decomposition — fit the per-sample SBS96 spectrum against COSMIC reference signatures using NNLS; show the largest contributing signatures and their weights
+- [ ] Save/load filter state — allow users to export the current sidebar filter state to a JSON file and reload it in a future session; covers all locus-level filters (variant type, VAF range, depth range, strand balance, repeat filters, on-target, gene, sample selection) and per-read filters (family size, cycle, MAPQ, insert size) when `alt_reads` is present; saved state should be human-readable and editable; load via sidebar file uploader with validation that required columns exist in the loaded DB
 
 ## Coverage Analysis
 
@@ -515,7 +516,7 @@ WHERE c.frac_mapq0 > 0.3;
   (raw → de-dup → de-overlap → total_depth); all BAM-derived signals (mapq, base qual,
   insert size, GC content, overlap, dup fraction); zero-depth fill-in for target positions;
   `compute_gc_content` from reference cache
-- [ ] Step 5: Add per-interval aggregation pass in `src/coverage/mod.rs` — after the
+- [x] Step 5: Add per-interval aggregation pass in `src/coverage/mod.rs` — after the
   per-position pass, group positions by target interval and compute the interval summary
   schema; emit as a separate `Vec<IntervalRecord>`
 - [x] Step 6: Add `src/writer/parquet_coverage.rs` — fixed Arrow schema matching
