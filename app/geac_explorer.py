@@ -8,7 +8,14 @@ import duckdb
 import altair as alt
 import pandas as pd
 from scipy.optimize import nnls
-from signature_nmf import compare_signatures_to_cosmic, fit_sbs_nmf
+from signature_nmf import (
+    build_signature_download_zip,
+    build_signature_exposure_download_table,
+    build_signature_download_table,
+    compare_signatures_to_cosmic,
+    fit_cosmic_augmented_nmf,
+    fit_sbs_nmf,
+)
 
 # Altair emits a spurious "Automatically deduplicated selection parameter" UserWarning
 # when a shared cross-panel selection param is present in multiple sub-charts.  The
@@ -1180,6 +1187,156 @@ if _reads_active:
         f"{per_read_warning_note(recompute_vaf)}"
     )
 
+
+def _append_provenance_row(
+    rows: list[dict[str, str]],
+    section: str,
+    name: str,
+    value,
+    *,
+    active: bool = True,
+) -> None:
+    if not active:
+        return
+    if isinstance(value, bool):
+        value_str = "true" if value else "false"
+    elif isinstance(value, (list, tuple)):
+        value_str = ", ".join(str(v) for v in value)
+    else:
+        value_str = str(value)
+    rows.append({"section": section, "name": name, "value": value_str})
+
+
+def _build_active_filter_provenance(
+    *,
+    discovery_mode: str,
+    discovery_items: list[tuple[str, object]] | None = None,
+) -> pd.DataFrame:
+    rows: list[dict[str, str]] = []
+    _append_provenance_row(rows, "data", "data_file", path)
+    _append_provenance_row(rows, "query", "where_sql", where)
+    _append_provenance_row(rows, "filters", "chromosome", chrom_sel, active=chrom_sel != "All")
+    _append_provenance_row(rows, "filters", "samples", sample_sel, active=bool(sample_sel))
+    _append_provenance_row(
+        rows,
+        "filters",
+        "sample_recurrence",
+        f"{_sr_lo}-{_sr_hi}",
+        active=_n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total),
+    )
+    _append_provenance_row(rows, "filters", "batch", batch_sel, active=bool(batch_sel))
+    _append_provenance_row(rows, "filters", "label1", label1_sel, active=bool(label1_sel))
+    _append_provenance_row(rows, "filters", "label2", label2_sel, active=bool(label2_sel))
+    _append_provenance_row(rows, "filters", "label3", label3_sel, active=bool(label3_sel))
+    _append_provenance_row(
+        rows,
+        "filters",
+        "gene",
+        gene_text.strip(),
+        active=bool(gene_text.strip()) and "gene" in _schema_cols,
+    )
+    _append_provenance_row(
+        rows,
+        "filters",
+        "variant_type",
+        variant_sel,
+        active=bool(variant_sel) and set(variant_sel) != {"SNV", "insertion", "deletion"},
+    )
+    _append_provenance_row(rows, "filters", "vaf_range", f"{vaf_range[0]}-{vaf_range[1]}", active=vaf_range != (0.0, 1.0))
+    _append_provenance_row(rows, "filters", "min_alt_count", min_alt, active=min_alt > 1)
+    _append_provenance_row(rows, "filters", "max_alt_count", max_alt, active=max_alt > 0)
+    _append_provenance_row(rows, "filters", "min_fwd_alt_count", min_fwd_alt, active=min_fwd_alt > 0)
+    _append_provenance_row(rows, "filters", "min_rev_alt_count", min_rev_alt, active=min_rev_alt > 0)
+    _append_provenance_row(rows, "filters", "min_overlap_alt_agree", min_overlap_agree, active=min_overlap_agree > 0)
+    _append_provenance_row(rows, "filters", "min_overlap_alt_disagree", min_overlap_disagree, active=min_overlap_disagree > 0)
+    _append_provenance_row(rows, "filters", "min_depth", min_depth, active=min_depth > 0)
+    _append_provenance_row(rows, "filters", "max_depth", max_depth, active=max_depth > 0)
+    _append_provenance_row(rows, "filters", "variant_called", variant_called_sel, active=variant_called_sel != "All")
+    _append_provenance_row(rows, "filters", "variant_filter", variant_filter_sel, active=bool(variant_filter_sel))
+    _append_provenance_row(rows, "filters", "target_bases", on_target_sel, active=on_target_sel != "All")
+    _append_provenance_row(
+        rows,
+        "filters",
+        "gnomad_af_range",
+        f"{gnomad_af_range[0]}-{gnomad_af_range[1]}",
+        active=("gnomad_af" in _schema_cols) and gnomad_af_range != ("0", "1.0"),
+    )
+    _append_provenance_row(
+        rows,
+        "filters",
+        "include_sites_absent_from_gnomad",
+        gnomad_include_null,
+        active=("gnomad_af" in _schema_cols) and (gnomad_af_range != ("0", "1.0") or not gnomad_include_null),
+    )
+    _append_provenance_row(
+        rows,
+        "filters",
+        "homopolymer_length_range",
+        f"{homopolymer_range[0]}-{homopolymer_range[1]}",
+        active=_repeat_cols_present and homopolymer_range != (0, 20),
+    )
+    _append_provenance_row(
+        rows,
+        "filters",
+        "str_length_range",
+        f"{str_len_range[0]}-{str_len_range[1]}",
+        active=_repeat_cols_present and str_len_range != (0, 50),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "application_mode",
+        "recompute alt count from filtered reads" if recompute_vaf else "hide loci with no passing reads",
+        active=_reads_active,
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "family_size",
+        f"{_fs_lo}-{_fs_hi} ({'exclude' if fs_exclude_mode else 'include'})",
+        active=_has_alt_reads and _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "cycle_number",
+        f"{_cycle_lo}-{_cycle_hi} ({'exclude' if cycle_exclude_mode else 'include'})",
+        active=_has_alt_reads and (_cycle_lo > 1 or _cycle_hi < _cycle_max),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "mapping_quality",
+        f"{_mq_lo}-{_mq_hi} ({'exclude' if mq_exclude_mode else 'include'})",
+        active=_has_alt_reads and (_mq_lo > 0 or _mq_hi < _mq_max),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "insert_size",
+        f"{_is_lo}-{_is_hi} ({'exclude' if is_exclude_mode else 'include'})",
+        active=_has_alt_reads and _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "read",
+        read_strand_sel,
+        active=_has_alt_reads and read_strand_sel != "All",
+    )
+    _append_provenance_row(rows, "signature_discovery", "discovery_mode", discovery_mode)
+    if discovery_items:
+        for _name, _value in discovery_items:
+            _append_provenance_row(
+                rows,
+                "signature_discovery",
+                _name,
+                _value,
+                active=_value not in (None, "", [], ()),
+            )
+
+    return pd.DataFrame(rows, columns=["section", "name", "value"])
+
 # ── Data table ────────────────────────────────────────────────────────────────
 _tbl_limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
 _tbl_limit_sel = st.selectbox(
@@ -1962,128 +2119,344 @@ with tab2:
                     if _n_samples_nmf < 2:
                         st.info("NMF requires at least two samples with SNVs in the current selection.")
                     else:
-                        _nmf_max = min(8, _n_samples_nmf)
-                        _nmf_default = min(3, _nmf_max)
-                        _nmf_components = st.slider(
-                            "Number of discovered signatures",
-                            2,
-                            _nmf_max,
-                            _nmf_default,
-                            key="nmf_components",
+                        _hybrid_available = (
+                            _cosmic_aligned is not None
+                            and sig_df is not None
+                            and not sig_df.empty
                         )
-
-                        try:
-                            _nmf_result = fit_sbs_nmf(_sample_matrix, _nmf_components)
-                        except Exception as exc:
-                            st.error(f"Could not run NMF signature discovery: {exc}")
+                        if _hybrid_available:
+                            _nmf_mode = st.radio(
+                                "Discovery mode",
+                                ["COSMIC-guided + one learned signature", "De novo NMF"],
+                                horizontal=True,
+                                key="nmf_mode",
+                                help="Use top COSMIC signatures as fixed basis functions and learn one additional non-negative signature, or run fully de novo NMF.",
+                            )
                         else:
-                            _nmf_profiles = _nmf_result["profiles"]
-                            _nmf_exposure_fractions = _nmf_result["exposure_fractions"]
-                            _nmf_matrix_cosine = _nmf_result["matrix_cosine"]
-                            _nmf_relative_error_pct = _nmf_result["relative_error_pct"]
-                            _nmf_iter = _nmf_result["n_iter"]
+                            _nmf_mode = "De novo NMF"
 
-                            _m1, _m2, _m3, _m4 = st.columns(4)
-                            _m1.metric("Samples", f"{_n_samples_nmf:,}")
-                            _m2.metric("Signatures", str(_nmf_components))
-                            _m3.metric("Matrix cosine", f"{_nmf_matrix_cosine:.4f}")
-                            _m4.metric("Relative error", f"{_nmf_relative_error_pct:.1f}%")
+                        if _nmf_mode == "De novo NMF":
+                            _nmf_max = min(8, _n_samples_nmf)
+                            _nmf_default = min(3, _nmf_max)
+                            _nmf_components = st.slider(
+                                "Number of discovered signatures",
+                                2,
+                                _nmf_max,
+                                _nmf_default,
+                                key="nmf_components",
+                            )
+
+                            try:
+                                _nmf_result = fit_sbs_nmf(_sample_matrix, _nmf_components)
+                            except Exception as exc:
+                                st.error(f"Could not run NMF signature discovery: {exc}")
+                            else:
+                                _nmf_profiles = _nmf_result["profiles"]
+                                _nmf_exposure_fractions = _nmf_result["exposure_fractions"]
+                                _nmf_matrix_cosine = _nmf_result["matrix_cosine"]
+                                _nmf_relative_error_pct = _nmf_result["relative_error_pct"]
+                                _nmf_iter = _nmf_result["n_iter"]
+
+                                _m1, _m2, _m3, _m4 = st.columns(4)
+                                _m1.metric("Samples", f"{_n_samples_nmf:,}")
+                                _m2.metric("Signatures", str(_nmf_components))
+                                _m3.metric("Matrix cosine", f"{_nmf_matrix_cosine:.4f}")
+                                _m4.metric("Relative error", f"{_nmf_relative_error_pct:.1f}%")
+                                st.caption(
+                                    f"NMF converged in {_nmf_iter} iteration(s). "
+                                    "Signatures are shown as normalized SBS96 profiles."
+                                )
+
+                                _nmf_long = (
+                                    _nmf_exposure_fractions.reset_index(names="sample_label")
+                                    .melt(id_vars="sample_label", var_name="signature", value_name="exposure")
+                                )
+                                _sig_order = _nmf_profiles.index.tolist()
+                                _sample_order = sorted(_nmf_exposure_fractions.index.tolist())
+                                _nmf_chart = (
+                                    alt.Chart(_nmf_long)
+                                    .mark_rect()
+                                    .encode(
+                                        alt.X("signature:N", sort=_sig_order, title="Discovered signature"),
+                                        alt.Y("sample_label:N", sort=_sample_order, title="Sample"),
+                                        alt.Color("exposure:Q", title="Exposure",
+                                                  scale=alt.Scale(scheme="oranges"),
+                                                  legend=alt.Legend(format=".0%")),
+                                        tooltip=[
+                                            "sample_label:N",
+                                            "signature:N",
+                                            alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
+                                        ],
+                                    )
+                                    .properties(
+                                        title="Per-sample NMF signature exposures",
+                                        height=max(150, 22 * len(_sample_order)),
+                                    )
+                                )
+                                st.altair_chart(_nmf_chart, width="stretch")
+
+                                _nmf_match_df = None
+                                if _cosmic_aligned is not None:
+                                    try:
+                                        _nmf_match_df, _ = compare_signatures_to_cosmic(
+                                            _nmf_profiles,
+                                            _cosmic_aligned,
+                                        )
+                                    except Exception as exc:
+                                        st.warning(f"Could not compare NMF signatures to COSMIC: {exc}")
+                                    else:
+                                        _nmf_match_df["etiology"] = _nmf_match_df["most_similar_cosmic_signature"].map(
+                                            lambda s: _SBS_ETIOLOGY.get(s, "")
+                                        )
+                                        _display = _nmf_match_df.copy()
+                                        _display["most_similar_cosine_similarity"] = _display[
+                                            "most_similar_cosine_similarity"
+                                        ].map("{:.3f}".format)
+                                        st.markdown("**Best COSMIC match for each discovered signature**")
+                                        st.dataframe(_display, width="stretch", hide_index=True)
+                                elif cosmic_path and cosmic_path.strip():
+                                    st.info(
+                                        "COSMIC comparison is unavailable because the matrix did not load successfully."
+                                    )
+                                else:
+                                    st.info(
+                                        "Provide a COSMIC SBS matrix path above to compare discovered signatures."
+                                    )
+
+                                _sig_tabs = st.tabs(_sig_order)
+                                for _tab, _sig_name in zip(_sig_tabs, _sig_order):
+                                    with _tab:
+                                        _sig_spec = _profile_to_spec96(
+                                            _nmf_profiles.loc[_sig_name],
+                                            value_name="fraction",
+                                        )
+                                        _overlay_spec = None
+                                        _overlay_label = None
+                                        _caption = "De novo SBS96 signature learned by NMF."
+                                        if _nmf_match_df is not None and not _nmf_match_df.empty:
+                                            _match_row = (
+                                                _nmf_match_df[_nmf_match_df["signature"] == _sig_name]
+                                                .iloc[0]
+                                            )
+                                            _cosmic_sig = _match_row["most_similar_cosmic_signature"]
+                                            _overlay_spec = _profile_to_spec96(
+                                                _cosmic_aligned[_cosmic_sig],
+                                                value_name="fraction",
+                                            )
+                                            _overlay_label = _cosmic_sig
+                                            _caption = (
+                                                f"Best COSMIC match: {_cosmic_sig} "
+                                                f"(cosine {_match_row['most_similar_cosine_similarity']:.3f})."
+                                            )
+                                        st.altair_chart(
+                                            _signature_profile_chart(
+                                                _sig_spec,
+                                                _sig_name,
+                                                overlay_df=_overlay_spec,
+                                                overlay_label=_overlay_label,
+                                            ),
+                                            width="stretch",
+                                        )
+                                        st.caption(_caption)
+                        else:
+                            _fixed_max = min(10, len(sig_df))
+                            _fixed_default = min(4, _fixed_max)
+                            _n_fixed = st.slider(
+                                "Number of fixed COSMIC signatures",
+                                1,
+                                _fixed_max,
+                                _fixed_default,
+                                key="nmf_fixed_cosmic",
+                                help="Use the top N COSMIC signatures from the current cohort-level fit as fixed basis signatures, then learn one additional non-negative residual signature.",
+                            )
+                            _fixed_signature_names = sig_df.head(_n_fixed)["signature"].tolist()
                             st.caption(
-                                f"NMF converged in {_nmf_iter} iteration(s). "
-                                "Signatures are shown as normalized SBS96 profiles."
+                                "Fixed COSMIC signatures: " + ", ".join(_fixed_signature_names)
                             )
 
-                            _nmf_long = (
-                                _nmf_exposure_fractions.reset_index(names="sample_label")
-                                .melt(id_vars="sample_label", var_name="signature", value_name="exposure")
-                            )
-                            _sig_order = _nmf_profiles.index.tolist()
-                            _sample_order = sorted(_nmf_exposure_fractions.index.tolist())
-                            _nmf_chart = (
-                                alt.Chart(_nmf_long)
-                                .mark_rect()
-                                .encode(
-                                    alt.X("signature:N", sort=_sig_order, title="Discovered signature"),
-                                    alt.Y("sample_label:N", sort=_sample_order, title="Sample"),
-                                    alt.Color("exposure:Q", title="Exposure",
-                                              scale=alt.Scale(scheme="oranges"),
-                                              legend=alt.Legend(format=".0%")),
-                                    tooltip=[
-                                        "sample_label:N",
-                                        "signature:N",
-                                        alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
-                                    ],
+                            try:
+                                _guided_result = fit_cosmic_augmented_nmf(
+                                    _sample_matrix,
+                                    _cosmic_aligned,
+                                    _fixed_signature_names,
                                 )
-                                .properties(
-                                    title="Per-sample NMF signature exposures",
-                                    height=max(150, 22 * len(_sample_order)),
-                                )
-                            )
-                            st.altair_chart(_nmf_chart, width="stretch")
+                            except Exception as exc:
+                                st.error(f"Could not run COSMIC-guided NMF discovery: {exc}")
+                            else:
+                                _guided_profiles = _guided_result["profiles"]
+                                _guided_exposure_fractions = _guided_result["exposure_fractions"]
+                                _guided_iter = _guided_result["n_iter"]
+                                _guided_matrix_cosine = _guided_result["matrix_cosine"]
+                                _guided_relative_error_pct = _guided_result["relative_error_pct"]
+                                _guided_fixed_relative_error_pct = _guided_result[
+                                    "fixed_only_relative_error_pct"
+                                ]
+                                _guided_improvement_pct = _guided_result[
+                                    "relative_error_improvement_pct"
+                                ]
+                                _learned_names = list(_guided_result["learned_signature_names"])
 
-                            _nmf_match_df = None
-                            if _cosmic_aligned is not None:
+                                _m1, _m2, _m3, _m4 = st.columns(4)
+                                _m1.metric("Samples", f"{_n_samples_nmf:,}")
+                                _m2.metric("Fixed COSMIC", str(_n_fixed))
+                                _m3.metric("Matrix cosine", f"{_guided_matrix_cosine:.4f}")
+                                _m4.metric("Residual improvement", f"{_guided_improvement_pct:.2f}%")
+                                st.caption(
+                                    f"Alternating constrained fit converged in {_guided_iter} iteration(s). "
+                                    f"Fixed-only relative error was {_guided_fixed_relative_error_pct:.2f}%; "
+                                    f"adding the learned signature reduced it to {_guided_relative_error_pct:.2f}%."
+                                )
+
+                                _guided_long = (
+                                    _guided_exposure_fractions.reset_index(names="sample_label")
+                                    .melt(id_vars="sample_label", var_name="signature", value_name="exposure")
+                                )
+                                _guided_order = _guided_profiles.index.tolist()
+                                _sample_order = sorted(_guided_exposure_fractions.index.tolist())
+                                _guided_chart = (
+                                    alt.Chart(_guided_long)
+                                    .mark_rect()
+                                    .encode(
+                                        alt.X("signature:N", sort=_guided_order, title="Signature component"),
+                                        alt.Y("sample_label:N", sort=_sample_order, title="Sample"),
+                                        alt.Color("exposure:Q", title="Exposure",
+                                                  scale=alt.Scale(scheme="oranges"),
+                                                  legend=alt.Legend(format=".0%")),
+                                        tooltip=[
+                                            "sample_label:N",
+                                            "signature:N",
+                                            alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
+                                        ],
+                                    )
+                                    .properties(
+                                        title="Per-sample COSMIC-guided signature exposures",
+                                        height=max(150, 22 * len(_sample_order)),
+                                    )
+                                )
+                                st.altair_chart(_guided_chart, width="stretch")
+
+                                _guided_match_df = None
                                 try:
-                                    _nmf_match_df, _ = compare_signatures_to_cosmic(
-                                        _nmf_profiles,
+                                    _guided_match_df, _ = compare_signatures_to_cosmic(
+                                        _guided_profiles.loc[_learned_names],
                                         _cosmic_aligned,
                                     )
                                 except Exception as exc:
-                                    st.warning(f"Could not compare NMF signatures to COSMIC: {exc}")
+                                    st.warning(f"Could not compare the learned signature to COSMIC: {exc}")
                                 else:
-                                    _nmf_match_df["etiology"] = _nmf_match_df["best_cosmic_signature"].map(
+                                    _guided_match_df["etiology"] = _guided_match_df["most_similar_cosmic_signature"].map(
                                         lambda s: _SBS_ETIOLOGY.get(s, "")
                                     )
-                                    _display = _nmf_match_df.copy()
-                                    _display["best_cosine_similarity"] = _display[
-                                        "best_cosine_similarity"
+                                    _display = _guided_match_df.copy()
+                                    _display["most_similar_cosine_similarity"] = _display[
+                                        "most_similar_cosine_similarity"
                                     ].map("{:.3f}".format)
-                                    st.markdown("**Best COSMIC match for each discovered signature**")
+                                    st.markdown("**Best COSMIC match for the learned residual signature**")
                                     st.dataframe(_display, width="stretch", hide_index=True)
-                            elif cosmic_path and cosmic_path.strip():
-                                st.info(
-                                    "COSMIC comparison is unavailable because the matrix did not load successfully."
+
+                                _novel_sig_name = _learned_names[0]
+                                _novel_match_row = None
+                                if _guided_match_df is not None and not _guided_match_df.empty:
+                                    _novel_match_row = (
+                                        _guided_match_df[_guided_match_df["signature"] == _novel_sig_name]
+                                        .iloc[0]
+                                    )
+                                _novel_download_df = build_signature_download_table(
+                                    _profile_to_spec96(
+                                        _guided_profiles.loc[_novel_sig_name],
+                                        value_name="fraction",
+                                    ),
+                                    signature_name=_novel_sig_name,
+                                    most_similar_cosmic_signature=(
+                                        None
+                                        if _novel_match_row is None
+                                        else _novel_match_row["most_similar_cosmic_signature"]
+                                    ),
+                                    most_similar_cosine_similarity=(
+                                        None
+                                        if _novel_match_row is None
+                                        else float(_novel_match_row["most_similar_cosine_similarity"])
+                                    ),
+                                    fixed_signature_names=_fixed_signature_names,
                                 )
-                            else:
-                                st.info(
-                                    "Provide a COSMIC SBS matrix path above to compare discovered signatures."
+                                _novel_provenance_df = _build_active_filter_provenance(
+                                    discovery_mode="COSMIC-guided + one learned signature",
+                                    discovery_items=[
+                                        ("cosmic_matrix_path", cosmic_path.strip()),
+                                        ("fixed_cosmic_count", _n_fixed),
+                                        ("fixed_cosmic_signatures", _fixed_signature_names),
+                                        (
+                                            "most_similar_cosmic_signature",
+                                            None if _novel_match_row is None else _novel_match_row["most_similar_cosmic_signature"],
+                                        ),
+                                        (
+                                            "most_similar_cosine_similarity",
+                                            None
+                                            if _novel_match_row is None
+                                            else f"{float(_novel_match_row['most_similar_cosine_similarity']):.6f}",
+                                        ),
+                                    ],
+                                )
+                                _novel_exposures_df = build_signature_exposure_download_table(
+                                    _guided_exposure_fractions
+                                )
+                                _novel_bundle = build_signature_download_zip(
+                                    _novel_download_df,
+                                    _novel_provenance_df,
+                                    signature_name=_novel_sig_name,
+                                    sample_exposures_df=_novel_exposures_df,
+                                )
+                                st.download_button(
+                                    "Download novel signature bundle (.zip)",
+                                    data=_novel_bundle,
+                                    file_name=f"{_novel_sig_name.lower()}_signature_bundle.zip",
+                                    mime="application/zip",
+                                    key="nmf_download_novel_signature",
+                                    help="Download a zip containing the learned SBS96 signature, the per-sample guided exposure table, and a provenance table of active filters and discovery settings.",
                                 )
 
-                            _sig_tabs = st.tabs(_sig_order)
-                            for _tab, _sig_name in zip(_sig_tabs, _sig_order):
-                                with _tab:
-                                    _sig_spec = _profile_to_spec96(
-                                        _nmf_profiles.loc[_sig_name],
-                                        value_name="fraction",
-                                    )
-                                    _overlay_spec = None
-                                    _overlay_label = None
-                                    _caption = "De novo SBS96 signature learned by NMF."
-                                    if _nmf_match_df is not None and not _nmf_match_df.empty:
-                                        _match_row = (
-                                            _nmf_match_df[_nmf_match_df["signature"] == _sig_name]
-                                            .iloc[0]
-                                        )
-                                        _cosmic_sig = _match_row["best_cosmic_signature"]
-                                        _overlay_spec = _profile_to_spec96(
-                                            _cosmic_aligned[_cosmic_sig],
+                                _sig_tabs = st.tabs(_guided_order)
+                                for _tab, _sig_name in zip(_sig_tabs, _guided_order):
+                                    with _tab:
+                                        _sig_spec = _profile_to_spec96(
+                                            _guided_profiles.loc[_sig_name],
                                             value_name="fraction",
                                         )
-                                        _overlay_label = _cosmic_sig
-                                        _caption = (
-                                            f"Best COSMIC match: {_cosmic_sig} "
-                                            f"(cosine {_match_row['best_cosine_similarity']:.3f})."
-                                        )
-                                    st.altair_chart(
-                                        _signature_profile_chart(
-                                            _sig_spec,
-                                            _sig_name,
-                                            overlay_df=_overlay_spec,
-                                            overlay_label=_overlay_label,
-                                        ),
-                                        width="stretch",
-                                    )
-                                    st.caption(_caption)
+                                        if _sig_name in _fixed_signature_names:
+                                            st.altair_chart(
+                                                _signature_profile_chart(_sig_spec, _sig_name),
+                                                width="stretch",
+                                            )
+                                            st.caption("Fixed COSMIC signature used in the constrained fit.")
+                                        else:
+                                            _overlay_spec = None
+                                            _overlay_label = None
+                                            _caption = "Learned non-negative residual signature."
+                                            if _guided_match_df is not None and not _guided_match_df.empty:
+                                                _match_row = (
+                                                    _guided_match_df[_guided_match_df["signature"] == _sig_name]
+                                                    .iloc[0]
+                                                )
+                                                _cosmic_sig = _match_row["most_similar_cosmic_signature"]
+                                                _overlay_spec = _profile_to_spec96(
+                                                    _cosmic_aligned[_cosmic_sig],
+                                                    value_name="fraction",
+                                                )
+                                                _overlay_label = _cosmic_sig
+                                                _caption = (
+                                                    f"Best COSMIC match: {_cosmic_sig} "
+                                                    f"(cosine {_match_row['most_similar_cosine_similarity']:.3f})."
+                                                )
+                                            st.altair_chart(
+                                                _signature_profile_chart(
+                                                    _sig_spec,
+                                                    _sig_name,
+                                                    overlay_df=_overlay_spec,
+                                                    overlay_label=_overlay_label,
+                                                ),
+                                                width="stretch",
+                                            )
+                                            st.caption(_caption)
 
             # ── Called vs Uncalled Comparison ─────────────────────────────────
             if _has_data("variant_called"):

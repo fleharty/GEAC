@@ -423,8 +423,9 @@ Features:
     exposures with etiology annotations, cosine similarity, and residual percentage. Also
     includes: per-sample signature exposure heatmap (DuckDB only); optional de novo NMF
     signature discovery across the selected cohort with per-sample exposure heatmap and
-    best-COSMIC-match comparison; Called vs Uncalled comparison (butterfly chart + grouped
-    signature bar, requires VCF annotation);
+    best-COSMIC-match comparison; optional COSMIC-guided discovery that fixes the top-N
+    COSMIC signatures and learns one additional non-negative residual signature; Called
+    vs Uncalled comparison (butterfly chart + grouped signature bar, requires VCF annotation);
     VAF-stratified spectra (germline VAF > 30% vs somatic VAF ≤ 30%); family-size
     stratified spectra (singleton vs multi-member families, requires `--reads-output`);
     SBS96 heatmap across samples (DuckDB only)
