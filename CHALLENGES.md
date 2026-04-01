@@ -595,6 +595,33 @@ the matrix, digest upload/download, and `imagetools create` merge step entirely.
 
 ---
 
+### `vec![AccumulatorType::default(); n]` requires `Clone`
+**Problem:** During `geac coverage` per-interval accumulation, `IntervalAccumulator`
+was initialized with `vec![IntervalAccumulator::default(); n]`. The Rust compiler
+rejected this because the repeat-count form of `vec![]` requires the element type to
+implement `Clone` (it clones the initial value to fill the remaining slots).
+**Root cause:** `IntervalAccumulator` had `#[derive(Default)]` but not `#[derive(Clone)]`.
+The compiler error was `the trait Clone is not implemented for IntervalAccumulator`.
+**Fix:** Add `Clone` to the derive list: `#[derive(Default, Clone)]`.
+**Lesson:** `vec![value; n]` always needs `Clone`. Either derive it or initialise with
+`(0..n).map(|_| T::default()).collect()` to avoid the requirement.
+
+---
+
+### DuckDB rejects SQL reserved word `end` in an index definition
+**Problem:** Adding a `CREATE INDEX` on `coverage_intervals` with the column list
+`(sample_id, chrom, start, end)` caused a DuckDB parser error at runtime.
+**Root cause:** `end` is a reserved keyword in SQL/DuckDB. It was accepted as a
+column name in `CREATE TABLE` (DuckDB is lenient there) but rejected unquoted inside
+an index definition.
+**Fix:** Quote the column name: `\"end\"` in the Rust string literal, which renders as
+`"end"` in the emitted SQL.
+**Lesson:** Avoid reserved words as column names. If you must use them, always
+double-quote them everywhere — `CREATE TABLE`, `SELECT`, `JOIN ON`, index definitions.
+DuckDB's leniency in `CREATE TABLE` can mask the problem until an index or query hits it.
+
+---
+
 ## v0.4.0 Agenda
 
 ### Stream `alt_bases`/`alt_reads` to Parquet instead of buffering in memory

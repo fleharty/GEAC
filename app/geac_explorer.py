@@ -1,4 +1,5 @@
 import io
+import json
 import warnings
 import zipfile
 from pathlib import Path
@@ -727,6 +728,38 @@ if data_source.is_duckdb:
                 hide_index=True,
                 key="advanced_metadata_inputs",
             )
+
+st.sidebar.divider()
+with st.sidebar.expander("Filter state", expanded=False):
+    st.caption("Save the current sidebar filters to a JSON file, or reload a previously saved state.")
+    # ── Save ──────────────────────────────────────────────────────────────────
+    _filter_json = MAIN_FILTER_STATE.to_json(st.session_state)
+    st.download_button(
+        "Save filter state",
+        data=_filter_json,
+        file_name="geac_filters.json",
+        mime="application/json",
+        help="Download all current sidebar filter values as a JSON file.",
+        use_container_width=True,
+    )
+    # ── Load ──────────────────────────────────────────────────────────────────
+    st.markdown("**Load filter state**")
+    _uploaded_filter = st.file_uploader(
+        "Upload filter JSON",
+        type=["json"],
+        key="filter_state_upload",
+        label_visibility="collapsed",
+    )
+    if _uploaded_filter is not None:
+        _raw = _uploaded_filter.read()
+        _upload_hash = hash(_raw)
+        # Only apply once per distinct uploaded file (avoid re-applying on every rerun).
+        if st.session_state.get("_filter_upload_hash") != _upload_hash:
+            st.session_state["_filter_upload_hash"] = _upload_hash
+            _apply_warns = MAIN_FILTER_STATE.apply_json(_raw.decode(), st.session_state)
+            for _w in _apply_warns:
+                st.warning(_w)
+            st.rerun()
 
 # ── IGV helper functions ───────────────────────────────────────────────────────
 def make_bed(df: pd.DataFrame) -> str:

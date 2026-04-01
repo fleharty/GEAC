@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Mapping, MutableMapping
@@ -9,6 +10,8 @@ from typing import Any, Mapping, MutableMapping
 class FilterState:
     keys: tuple[str, ...]
     defaults: Mapping[str, Any] = field(default_factory=dict)
+    # Keys whose values are tuples in session_state (JSON round-trips them as lists).
+    tuple_keys: frozenset[str] = field(default_factory=frozenset)
 
     def reset(
         self,
@@ -24,6 +27,59 @@ class FilterState:
     def clear(self, session_state: MutableMapping[str, Any]) -> None:
         for key in self.keys:
             session_state.pop(key, None)
+
+    def to_json(self, session_state: Mapping[str, Any]) -> str:
+        """Serialize the current filter state to a JSON string."""
+        filters: dict[str, Any] = {}
+        for key in self.keys:
+            if key not in session_state:
+                continue
+            val = session_state[key]
+            # JSON has no tuple type; convert to list for portability.
+            if isinstance(val, tuple):
+                val = list(val)
+            filters[key] = val
+        return json.dumps({"geac_filter_version": 1, "filters": filters}, indent=2)
+
+    def apply_json(
+        self, json_str: str, session_state: MutableMapping[str, Any]
+    ) -> list[str]:
+        """Parse *json_str* and apply recognized filter keys to *session_state*.
+
+        Returns a list of warning strings (empty on clean success).
+        """
+        warnings_out: list[str] = []
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError as exc:
+            return [f"Invalid JSON: {exc}"]
+
+        version = data.get("geac_filter_version")
+        if version != 1:
+            warnings_out.append(
+                f"Unknown filter version {version!r}. Attempting to load anyway."
+            )
+
+        raw_filters = data.get("filters", {})
+        if not isinstance(raw_filters, dict):
+            return ["Filter state JSON is missing the 'filters' object."]
+
+        known = set(self.keys)
+        n_applied = 0
+        for key, val in raw_filters.items():
+            if key not in known:
+                warnings_out.append(f"Unrecognized filter key {key!r} — skipped.")
+                continue
+            # Restore tuples that were serialized as lists.
+            if key in self.tuple_keys and isinstance(val, list):
+                val = tuple(val)
+            session_state[key] = val
+            n_applied += 1
+
+        if n_applied == 0:
+            warnings_out.append("No recognized filter keys found in the uploaded file.")
+
+        return warnings_out
 
 
 MAIN_FILTER_KEYS = (
@@ -87,6 +143,17 @@ MAIN_TAB_UI_KEYS = (
 
 MAIN_FILTER_STATE = FilterState(
     keys=MAIN_FILTER_KEYS,
+    tuple_keys=frozenset({
+        "vaf_range",
+        "gnomad_af_range",
+        "homopolymer_range",
+        "str_len_range",
+        "sample_recurrence",
+        "family_size_range",
+        "cycle_range",
+        "map_qual_range",
+        "insert_size_range",
+    }),
     defaults={
         "chrom_sel": "All",
         "sample_sel": [],

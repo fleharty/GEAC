@@ -69,6 +69,7 @@ _cols = set(data_source.schema_cols)
 _has_gene      = "gene" in _cols
 _has_on_target = "on_target" in _cols
 _has_bin_n     = "bin_n" in _cols
+_has_intervals = data_source.is_duckdb and "coverage_intervals" in data_source.available_tables
 
 # ── Sidebar filters ────────────────────────────────────────────────────────────
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
@@ -267,9 +268,12 @@ def _igv_html(locus: str, tracks: list[dict], genome: str = "hg38", oauth_token:
 
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-tab_summary, tab_depth, tab_gc, tab_low, tab_igv = st.tabs(
-    ["Summary", "Depth Distribution", "GC Bias", "Low Coverage", "IGV"]
-)
+_tab_names = ["Summary", "Depth Distribution", "GC Bias", "Low Coverage", "IGV"]
+if _has_intervals:
+    _tab_names.append("Intervals")
+_tabs = st.tabs(_tab_names)
+tab_summary, tab_depth, tab_gc, tab_low, tab_igv = _tabs[:5]
+tab_intervals = _tabs[5] if _has_intervals else None
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Tab 1 — Per-sample summary
@@ -674,3 +678,229 @@ with tab_igv:
                     height=component_height,
                     scrolling=False,
                 )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tab 6 — Intervals  (DuckDB only, gated on coverage_intervals table)
+# ──────────────────────────────────────────────────────────────────────────────
+if _has_intervals and tab_intervals is not None:
+    with tab_intervals:
+        st.subheader("Per-interval coverage")
+
+        # ── Detect columns available in coverage_intervals ────────────────────
+        _iv_cols = set(
+            con.execute("DESCRIBE SELECT * FROM coverage_intervals LIMIT 0")
+            .df()["column_name"]
+            .tolist()
+        )
+        _iv_has_gene = "gene" in _iv_cols
+
+        # Sample filter clause for coverage_intervals (no chrom/gene/on_target filter)
+        def _iv_where(extra: list[str] | None = None) -> str:
+            clauses: list[str] = []
+            if sample_sel:
+                ids = ", ".join(f"'{s.replace(chr(39), chr(39)*2)}'" for s in sample_sel)
+                clauses.append(f"sample_id IN ({ids})")
+            if extra:
+                clauses.extend(extra)
+            return ("WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        # ── View 1: Undercovered intervals ────────────────────────────────────
+        st.markdown("#### Undercovered intervals")
+        iv_col1, iv_col2 = st.columns(2)
+        iv_depth_thresh = iv_col1.slider(
+            "Mean depth threshold", 1, 500, 30, key="iv_depth_thresh",
+            help="Flag intervals whose mean depth falls below this value.",
+        )
+        iv_min_frac = iv_col2.slider(
+            "Min fraction of samples below threshold", 0.0, 1.0, 0.5, step=0.05,
+            key="iv_min_frac",
+            help="Only show intervals undercovered in this fraction of selected samples.",
+        )
+        iv_n_selected = max(1, len(sample_sel)) if sample_sel else 1
+        iv_min_count = max(1, int(iv_min_frac * iv_n_selected))
+
+        _iv_gene_col = "gene," if _iv_has_gene else ""
+        _iv_gene_grp = ", gene" if _iv_has_gene else ""
+
+        undercov_df = con.execute(f"""
+            SELECT
+                chrom,
+                start,
+                "end",
+                interval_name,
+                {_iv_gene_col}
+                COUNT(DISTINCT sample_id)              AS n_samples_below,
+                ROUND(AVG(mean_depth), 1)              AS mean_depth,
+                ROUND(MIN(mean_depth), 1)              AS min_mean_depth,
+                ROUND(AVG(frac_at_20x), 3)             AS mean_frac_at_20x,
+                ROUND(AVG(frac_at_30x), 3)             AS mean_frac_at_30x,
+                ROUND(AVG(mean_gc_content), 3)         AS mean_gc_content,
+                ROUND(AVG(mean_frac_mapq0), 3)         AS mean_frac_mapq0
+            FROM coverage_intervals
+            {_iv_where([f"mean_depth < {iv_depth_thresh}"])}
+            GROUP BY chrom, start, "end", interval_name{_iv_gene_grp}
+            HAVING COUNT(DISTINCT sample_id) >= {iv_min_count}
+            ORDER BY n_samples_below DESC, mean_depth
+            LIMIT 500
+        """).df()
+
+        st.caption(
+            f"Intervals with `mean_depth < {iv_depth_thresh}` in ≥ {iv_min_frac:.0%} of samples "
+            f"({iv_min_count}/{iv_n_selected}). Showing up to 500 rows."
+        )
+        if undercov_df.empty:
+            st.success("No undercovered intervals for the current filters.")
+        else:
+            st.dataframe(undercov_df, width="stretch", hide_index=True)
+
+        st.divider()
+
+        # ── View 2: GC bias scatter per interval ──────────────────────────────
+        st.markdown("#### GC bias: mean depth vs GC content per interval")
+        st.caption(
+            "Each point is one interval (averaged across selected samples). "
+            "Colour = mean fraction of reads with MAPQ=0 (mappability proxy)."
+        )
+
+        gc_scatter_df = con.execute(f"""
+            SELECT
+                interval_name,
+                {_iv_gene_col}
+                ROUND(AVG(mean_gc_content), 3)  AS mean_gc_content,
+                ROUND(AVG(mean_depth), 2)        AS mean_depth,
+                ROUND(AVG(mean_frac_mapq0), 4)   AS mean_frac_mapq0,
+                COUNT(DISTINCT sample_id)        AS n_samples
+            FROM coverage_intervals
+            {_iv_where()}
+            GROUP BY interval_name{_iv_gene_grp}
+            ORDER BY mean_gc_content
+        """).df()
+
+        if gc_scatter_df.empty:
+            st.info("No data for current sample selection.")
+        else:
+            _tooltip = [
+                "interval_name",
+                alt.Tooltip("mean_gc_content:Q", title="GC content", format=".2f"),
+                alt.Tooltip("mean_depth:Q", title="Mean depth", format=".1f"),
+                alt.Tooltip("mean_frac_mapq0:Q", title="Frac MAPQ=0", format=".3f"),
+                "n_samples",
+            ]
+            if _iv_has_gene:
+                _tooltip.insert(1, "gene")
+
+            gc_scatter = (
+                alt.Chart(gc_scatter_df)
+                .mark_circle(opacity=0.7, size=60)
+                .encode(
+                    x=alt.X(
+                        "mean_gc_content:Q",
+                        title="Mean GC content",
+                        scale=alt.Scale(domain=[0, 1]),
+                        axis=alt.Axis(format=".0%"),
+                    ),
+                    y=alt.Y("mean_depth:Q", title="Mean depth"),
+                    color=alt.Color(
+                        "mean_frac_mapq0:Q",
+                        title="Frac MAPQ=0",
+                        scale=alt.Scale(scheme="orangered"),
+                    ),
+                    tooltip=_tooltip,
+                )
+                .properties(width=700, height=400)
+                .interactive()
+            )
+            st.altair_chart(gc_scatter, width="stretch")
+
+        st.divider()
+
+        # ── View 3: Per-exon heatmap ──────────────────────────────────────────
+        if _iv_has_gene:
+            st.markdown("#### Per-exon coverage heatmap (frac at 30×)")
+            st.caption(
+                "Rows = genes, columns = interval names. "
+                "Colour = fraction of bases covered at ≥ 30×, averaged across selected samples. "
+                "Only genes with ≥ 2 intervals are shown."
+            )
+
+            heatmap_col1, heatmap_col2 = st.columns(2)
+            hm_top_n = heatmap_col1.slider(
+                "Max genes to display", 5, 100, 30, key="hm_top_n",
+            )
+            hm_sort_by = heatmap_col2.selectbox(
+                "Sort genes by", ["Min frac_at_30x (worst first)", "Gene name"],
+                key="hm_sort_by",
+            )
+
+            heatmap_df = con.execute(f"""
+                SELECT
+                    gene,
+                    interval_name,
+                    ROUND(AVG(frac_at_30x), 3) AS frac_at_30x
+                FROM coverage_intervals
+                {_iv_where(["gene IS NOT NULL"])}
+                GROUP BY gene, interval_name
+            """).df()
+
+            if heatmap_df.empty:
+                st.info("No gene/interval data for current selection.")
+            else:
+                # Keep only genes with >= 2 intervals
+                gene_counts = heatmap_df.groupby("gene")["interval_name"].nunique()
+                multi_genes = gene_counts[gene_counts >= 2].index
+                heatmap_df = heatmap_df[heatmap_df["gene"].isin(multi_genes)]
+
+                if heatmap_df.empty:
+                    st.info("No genes with multiple intervals found.")
+                else:
+                    # Sort genes
+                    if hm_sort_by.startswith("Min"):
+                        gene_min = (
+                            heatmap_df.groupby("gene")["frac_at_30x"].min()
+                            .sort_values()
+                            .head(hm_top_n)
+                        )
+                    else:
+                        gene_min = (
+                            heatmap_df.groupby("gene")["frac_at_30x"].min()
+                            .loc[sorted(heatmap_df["gene"].unique())]
+                            .head(hm_top_n)
+                        )
+                    heatmap_df = heatmap_df[heatmap_df["gene"].isin(gene_min.index)]
+                    gene_order = list(gene_min.index)
+
+                    heatmap_chart = (
+                        alt.Chart(heatmap_df)
+                        .mark_rect()
+                        .encode(
+                            x=alt.X("interval_name:N", title="Interval", sort=None),
+                            y=alt.Y(
+                                "gene:N",
+                                title="Gene",
+                                sort=gene_order,
+                            ),
+                            color=alt.Color(
+                                "frac_at_30x:Q",
+                                title="Frac at 30×",
+                                scale=alt.Scale(
+                                    domain=[0, 1],
+                                    scheme="redyellowgreen",
+                                ),
+                            ),
+                            tooltip=[
+                                "gene",
+                                "interval_name",
+                                alt.Tooltip("frac_at_30x:Q", title="Frac at 30×", format=".3f"),
+                            ],
+                        )
+                        .properties(
+                            height=max(150, 22 * len(gene_order)),
+                            width=700,
+                        )
+                    )
+                    st.altair_chart(heatmap_chart, width="stretch")
+        else:
+            st.info(
+                "Per-exon heatmap requires a `gene` column in `coverage_intervals`. "
+                "Re-run `geac coverage` with `--gene-annotations` to populate gene names."
+            )
