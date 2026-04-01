@@ -8,6 +8,7 @@ import duckdb
 import altair as alt
 import pandas as pd
 from scipy.optimize import nnls
+from signature_nmf import compare_signatures_to_cosmic, fit_sbs_nmf
 
 # Altair emits a spurious "Automatically deduplicated selection parameter" UserWarning
 # when a shared cross-panel selection param is present in multiple sub-charts.  The
@@ -137,34 +138,6 @@ if data_source.is_duckdb:
 if _db_created is not None:
     _created_str = str(_db_created)[:10]  # YYYY-MM-DD
     st.sidebar.caption(f"DB created {_created_str}")
-
-if data_source.is_duckdb:
-    with st.sidebar.expander("Advanced", expanded=False):
-        st.caption("Database metadata")
-        _meta_header = data_source.metadata_header()
-        if _meta_header.empty:
-            st.caption("No `geac_metadata` table found.")
-        else:
-            _meta_row = _meta_header.iloc[0]
-            for _col in _meta_header.columns:
-                _val = _meta_row[_col]
-                if pd.isna(_val):
-                    _display = "NULL"
-                elif isinstance(_val, float):
-                    _display = f"{_val:g}"
-                else:
-                    _display = str(_val)
-                st.caption(f"{_col}: {_display}")
-
-        _meta_inputs = data_source.metadata_inputs()
-        if not _meta_inputs.empty:
-            st.caption("Merged inputs")
-            st.dataframe(
-                _meta_inputs,
-                width="stretch",
-                hide_index=True,
-                key="advanced_metadata_inputs",
-            )
 
 _missing_required_cols = data_source.required_columns_missing()
 if _missing_required_cols:
@@ -634,7 +607,7 @@ st.sidebar.divider()
 st.sidebar.header("🧭 IGV Integration")
 auto_launch_igv = st.sidebar.checkbox(
     "Auto-launch IGV",
-    value=_cfg.get("auto_launch_igv", False),
+    value=_cfg.get("auto_launch_igv", True),
     help="Write session files to a temp directory and load them in IGV automatically. "
          "Uses IGV's REST API (port 60151) if IGV is already running, otherwise launches IGV.",
 )
@@ -661,8 +634,36 @@ if _has_data("gnomad_af"):
         value=_cfg.get("gnomad_track", ""),
         help="Path or URI to a gnomAD VCF/BCF. When set, it is added as a track in IGV sessions.",
     )
+    gnomad_track_index = st.sidebar.text_input(
+        "gnomAD track index (optional)",
+        value=_cfg.get("gnomad_track_index", ""),
+        help="Optional explicit .tbi / .csi path or URI for the gnomAD track. Leave blank to infer from the track path.",
+    )
+    _gnomad_index_path = resolve_index_uri(
+        gnomad_track.strip(),
+        gnomad_track_index.strip() or None,
+    ) if gnomad_track.strip() else None
+    if gnomad_track.strip() and _gnomad_index_path:
+        _is_local_index = not (
+            _gnomad_index_path.startswith("gs://")
+            or _gnomad_index_path.startswith("http://")
+            or _gnomad_index_path.startswith("https://")
+        )
+        if _is_local_index and not _os.path.exists(_gnomad_index_path):
+            st.sidebar.warning(
+                f"gnomAD index not found: {_gnomad_index_path}",
+                icon="⚠️",
+            )
+        else:
+            st.sidebar.caption(f"gnomAD index: {_gnomad_index_path}")
+    elif gnomad_track.strip():
+        st.sidebar.warning(
+            "Could not infer a gnomAD index path from the track path. Set 'gnomAD track index' explicitly.",
+            icon="⚠️",
+        )
 else:
     gnomad_track = ""
+    gnomad_track_index = ""
 _genome_options = ["hg19", "hg38", "mm10", "mm39", "other"]
 _cfg_genome = _cfg.get("genome_build") or _cfg.get("genome", "hg19")
 if _cfg_genome in _genome_options:
@@ -690,6 +691,35 @@ if manifest_path and manifest_path.strip():
         st.sidebar.success(f"{len(manifest):,} samples loaded from manifest")
     except Exception as e:
         st.sidebar.error(f"Could not load manifest: {e}")
+
+if data_source.is_duckdb:
+    st.sidebar.divider()
+    with st.sidebar.expander("Advanced", expanded=False):
+        st.caption("Database metadata")
+        _meta_header = data_source.metadata_header()
+        if _meta_header.empty:
+            st.caption("No `geac_metadata` table found.")
+        else:
+            _meta_row = _meta_header.iloc[0]
+            for _col in _meta_header.columns:
+                _val = _meta_row[_col]
+                if pd.isna(_val):
+                    _display = "NULL"
+                elif isinstance(_val, float):
+                    _display = f"{_val:g}"
+                else:
+                    _display = str(_val)
+                st.caption(f"{_col}: {_display}")
+
+        _meta_inputs = data_source.metadata_inputs()
+        if not _meta_inputs.empty:
+            st.caption("Merged inputs")
+            st.dataframe(
+                _meta_inputs,
+                width="stretch",
+                hide_index=True,
+                key="advanced_metadata_inputs",
+            )
 
 # ── IGV helper functions ───────────────────────────────────────────────────────
 def make_bed(df: pd.DataFrame) -> str:
@@ -796,6 +826,7 @@ def make_igv_session(
     genome: str,
     target_regions: str = "",
     gnomad_track: str = "",
+    gnomad_track_index: str = "",
 ) -> tuple[str, str]:
     """Build an IGV session XML and return (xml, sort_locus).
 
@@ -817,7 +848,7 @@ def make_igv_session(
 
     if gnomad_track and gnomad_track.strip():
         gt = gnomad_track.strip()
-        gt_index = resolve_index_uri(gt, None)
+        gt_index = resolve_index_uri(gt, gnomad_track_index.strip() or None)
         index_attr = f' index="{gt_index}"' if gt_index else ""
         resources.append(f'        <Resource path="{gt}" name="gnomAD"{index_attr}/>')
         tracks.append('        <Track id="{0}" name="gnomAD" height="60"/>'.format(gt))
@@ -953,6 +984,7 @@ def igv_buttons(
             genome,
             target_regions,
             gnomad_track,
+            gnomad_track_index,
         )
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1463,6 +1495,103 @@ with tab2:
             chart = chart.add_params(_sel)
         return chart
 
+    def _load_sample_sbs96_matrix():
+        _has_batch = _has_data("batch")
+        _id_sql = "sample_id || ' / ' || batch" if _has_batch else "sample_id"
+        _group_by = "sample_id, batch" if _has_batch else "sample_id"
+        _raw = con.execute(f"""
+            SELECT {_id_sql} AS sample_label,
+                   trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
+            FROM (SELECT * FROM {table_expr}) _t
+            WHERE {where} AND variant_type = 'SNV'
+              AND trinuc_context IS NOT NULL AND length(trinuc_context) = 3
+            GROUP BY {_group_by}, trinuc_context, ref_allele, alt_allele
+        """).df()
+
+        if _raw.empty:
+            return pd.DataFrame(columns=_SBS_ORDER, dtype=float)
+
+        _rows = []
+        for _sid, _grp in _raw.groupby("sample_label"):
+            _grp = _grp.copy()
+            _grp["sbs_label"] = _grp.apply(
+                lambda r: _sbs_label(r["trinuc_context"], r["ref_allele"], r["alt_allele"]),
+                axis=1,
+            )
+            _grp = _grp.dropna(subset=["sbs_label"])
+            _agg = _grp.groupby("sbs_label")["count"].sum()
+            _counts = (
+                pd.Series(0.0, index=_SBS_ORDER)
+                .add(_agg, fill_value=0)
+                .reindex(_SBS_ORDER)
+            )
+            if float(_counts.sum()) > 0:
+                _rows.append(pd.Series(_counts.values, index=_SBS_ORDER, name=_sid))
+
+        if not _rows:
+            return pd.DataFrame(columns=_SBS_ORDER, dtype=float)
+
+        return pd.DataFrame(_rows, dtype=float)
+
+    def _profile_to_spec96(profile, value_name="fraction"):
+        _df = pd.DataFrame({
+            "sbs_label": _SBS_ORDER,
+            "mut_type": [lbl[2:5] for lbl in _SBS_ORDER],
+            value_name: pd.Series(profile, index=_SBS_ORDER).reindex(_SBS_ORDER).values,
+        })
+        return _df
+
+    def _signature_profile_chart(spec_df, title, overlay_df=None, overlay_label=None):
+        _sub_charts = []
+        for _mt in _SBS_MUT_TYPES:
+            _sub = spec_df[spec_df["mut_type"] == _mt]
+            _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+            _bars = (
+                alt.Chart(_sub)
+                .mark_bar(color=_SBS_COLORS[_mt])
+                .encode(
+                    alt.X("sbs_label:N", sort=_order, title=None,
+                          axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
+                    alt.Y("fraction:Q", title="Fraction",
+                          axis=alt.Axis(format=".3f")),
+                    tooltip=[
+                        "sbs_label:N",
+                        alt.Tooltip("fraction:Q", format=".3f", title="Fraction"),
+                    ],
+                )
+            )
+            if overlay_df is not None:
+                _overlay_sub = overlay_df[overlay_df["mut_type"] == _mt]
+                _overlay = (
+                    alt.Chart(_overlay_sub)
+                    .mark_point(color="black", size=14, filled=True, opacity=0.85)
+                    .encode(
+                        alt.X("sbs_label:N", sort=_order),
+                        alt.Y("fraction:Q"),
+                        tooltip=[
+                            "sbs_label:N",
+                            alt.Tooltip("fraction:Q", format=".3f", title=overlay_label or "Overlay"),
+                        ],
+                    )
+                )
+                _panel = alt.layer(_bars, _overlay)
+            else:
+                _panel = _bars
+
+            _sub_charts.append(
+                _panel.properties(
+                    title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt], fontSize=11, fontWeight="bold"),
+                    width=120,
+                    height=110,
+                )
+            )
+
+        return (
+            alt.concat(*_sub_charts, columns=3)
+            .resolve_scale(y="shared")
+            .properties(title=alt.TitleParams(title, fontSize=13))
+        )
+
     _trinuc_available = _has_data("trinuc_context")
 
     if _trinuc_available:
@@ -1727,7 +1856,7 @@ with tab2:
                 st.dataframe(display, width="stretch", hide_index=True)
 
                 # ── Per-sample COSMIC decomposition (cohort stacked bar) ───────
-                if path.endswith(".duckdb"):
+                if data_source.is_duckdb:
                     st.divider()
                     st.subheader("Per-sample Signature Exposures")
                     st.caption(
@@ -1735,38 +1864,14 @@ with tab2:
                         "Signatures with no exposure in any sample are hidden."
                     )
 
-                    _ps_has_batch  = _has_data("batch")
-                    _ps_id_sql     = "sample_id || ' / ' || batch" if _ps_has_batch else "sample_id"
-                    _ps_group_by   = "sample_id, batch" if _ps_has_batch else "sample_id"
-
-                    _ps_raw = con.execute(f"""
-                        SELECT {_ps_id_sql} AS sample_label,
-                               trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
-                        FROM (SELECT * FROM {table_expr}) _t
-                        WHERE {where} AND variant_type = 'SNV'
-                          AND trinuc_context IS NOT NULL AND length(trinuc_context) = 3
-                        GROUP BY {_ps_group_by}, trinuc_context, ref_allele, alt_allele
-                    """).df()
-
-                    if _ps_raw.empty:
+                    _sample_matrix = _load_sample_sbs96_matrix()
+                    if _sample_matrix.empty:
                         st.info("No SNVs with trinucleotide context in current selection.")
                     else:
                         _ps_rows = []
-                        for _sid, _grp in _ps_raw.groupby("sample_label"):
-                            _grp = _grp.copy()
-                            _grp["sbs_label"] = _grp.apply(
-                                lambda r: _sbs_label(r["trinuc_context"], r["ref_allele"], r["alt_allele"]),
-                                axis=1,
-                            )
-                            _grp = _grp.dropna(subset=["sbs_label"])
-                            _agg = _grp.groupby("sbs_label")["count"].sum()
-                            _obs = (
-                                pd.Series(0.0, index=_SBS_ORDER)
-                                .add(_agg, fill_value=0)
-                                .reindex(_SBS_ORDER)
-                                .values.astype(float)
-                            )
-                            _n_snvs = int(_obs.sum())
+                        for _sid, _row in _sample_matrix.iterrows():
+                            _obs = _row.reindex(_SBS_ORDER).values.astype(float)
+                            _n_snvs = int(_row.sum())
                             if _n_snvs == 0:
                                 continue
                             _h, _ = nnls(_cosmic_W, _obs)
@@ -1834,6 +1939,151 @@ with tab2:
                                 "Color intensity = exposure proportion. "
                                 "Signatures with no exposure in any sample are hidden."
                             )
+
+            # ── NMF signature discovery (cohort / DuckDB only) ────────────────
+            if data_source.is_duckdb:
+                st.divider()
+                st.subheader("NMF Signature Discovery")
+                st.caption(
+                    "Learn de novo SBS96 signatures across the currently selected samples. "
+                    "This uses the current sidebar filters and requires at least two samples with SNVs."
+                )
+
+                _enable_nmf = st.checkbox(
+                    "Run NMF signature discovery",
+                    value=False,
+                    key="run_nmf_signatures",
+                )
+
+                if _enable_nmf:
+                    _sample_matrix = _load_sample_sbs96_matrix()
+                    _n_samples_nmf = _sample_matrix.shape[0]
+
+                    if _n_samples_nmf < 2:
+                        st.info("NMF requires at least two samples with SNVs in the current selection.")
+                    else:
+                        _nmf_max = min(8, _n_samples_nmf)
+                        _nmf_default = min(3, _nmf_max)
+                        _nmf_components = st.slider(
+                            "Number of discovered signatures",
+                            2,
+                            _nmf_max,
+                            _nmf_default,
+                            key="nmf_components",
+                        )
+
+                        try:
+                            _nmf_result = fit_sbs_nmf(_sample_matrix, _nmf_components)
+                        except Exception as exc:
+                            st.error(f"Could not run NMF signature discovery: {exc}")
+                        else:
+                            _nmf_profiles = _nmf_result["profiles"]
+                            _nmf_exposure_fractions = _nmf_result["exposure_fractions"]
+                            _nmf_matrix_cosine = _nmf_result["matrix_cosine"]
+                            _nmf_relative_error_pct = _nmf_result["relative_error_pct"]
+                            _nmf_iter = _nmf_result["n_iter"]
+
+                            _m1, _m2, _m3, _m4 = st.columns(4)
+                            _m1.metric("Samples", f"{_n_samples_nmf:,}")
+                            _m2.metric("Signatures", str(_nmf_components))
+                            _m3.metric("Matrix cosine", f"{_nmf_matrix_cosine:.4f}")
+                            _m4.metric("Relative error", f"{_nmf_relative_error_pct:.1f}%")
+                            st.caption(
+                                f"NMF converged in {_nmf_iter} iteration(s). "
+                                "Signatures are shown as normalized SBS96 profiles."
+                            )
+
+                            _nmf_long = (
+                                _nmf_exposure_fractions.reset_index(names="sample_label")
+                                .melt(id_vars="sample_label", var_name="signature", value_name="exposure")
+                            )
+                            _sig_order = _nmf_profiles.index.tolist()
+                            _sample_order = sorted(_nmf_exposure_fractions.index.tolist())
+                            _nmf_chart = (
+                                alt.Chart(_nmf_long)
+                                .mark_rect()
+                                .encode(
+                                    alt.X("signature:N", sort=_sig_order, title="Discovered signature"),
+                                    alt.Y("sample_label:N", sort=_sample_order, title="Sample"),
+                                    alt.Color("exposure:Q", title="Exposure",
+                                              scale=alt.Scale(scheme="oranges"),
+                                              legend=alt.Legend(format=".0%")),
+                                    tooltip=[
+                                        "sample_label:N",
+                                        "signature:N",
+                                        alt.Tooltip("exposure:Q", format=".2%", title="Exposure"),
+                                    ],
+                                )
+                                .properties(
+                                    title="Per-sample NMF signature exposures",
+                                    height=max(150, 22 * len(_sample_order)),
+                                )
+                            )
+                            st.altair_chart(_nmf_chart, width="stretch")
+
+                            _nmf_match_df = None
+                            if _cosmic_aligned is not None:
+                                try:
+                                    _nmf_match_df, _ = compare_signatures_to_cosmic(
+                                        _nmf_profiles,
+                                        _cosmic_aligned,
+                                    )
+                                except Exception as exc:
+                                    st.warning(f"Could not compare NMF signatures to COSMIC: {exc}")
+                                else:
+                                    _nmf_match_df["etiology"] = _nmf_match_df["best_cosmic_signature"].map(
+                                        lambda s: _SBS_ETIOLOGY.get(s, "")
+                                    )
+                                    _display = _nmf_match_df.copy()
+                                    _display["best_cosine_similarity"] = _display[
+                                        "best_cosine_similarity"
+                                    ].map("{:.3f}".format)
+                                    st.markdown("**Best COSMIC match for each discovered signature**")
+                                    st.dataframe(_display, width="stretch", hide_index=True)
+                            elif cosmic_path and cosmic_path.strip():
+                                st.info(
+                                    "COSMIC comparison is unavailable because the matrix did not load successfully."
+                                )
+                            else:
+                                st.info(
+                                    "Provide a COSMIC SBS matrix path above to compare discovered signatures."
+                                )
+
+                            _sig_tabs = st.tabs(_sig_order)
+                            for _tab, _sig_name in zip(_sig_tabs, _sig_order):
+                                with _tab:
+                                    _sig_spec = _profile_to_spec96(
+                                        _nmf_profiles.loc[_sig_name],
+                                        value_name="fraction",
+                                    )
+                                    _overlay_spec = None
+                                    _overlay_label = None
+                                    _caption = "De novo SBS96 signature learned by NMF."
+                                    if _nmf_match_df is not None and not _nmf_match_df.empty:
+                                        _match_row = (
+                                            _nmf_match_df[_nmf_match_df["signature"] == _sig_name]
+                                            .iloc[0]
+                                        )
+                                        _cosmic_sig = _match_row["best_cosmic_signature"]
+                                        _overlay_spec = _profile_to_spec96(
+                                            _cosmic_aligned[_cosmic_sig],
+                                            value_name="fraction",
+                                        )
+                                        _overlay_label = _cosmic_sig
+                                        _caption = (
+                                            f"Best COSMIC match: {_cosmic_sig} "
+                                            f"(cosine {_match_row['best_cosine_similarity']:.3f})."
+                                        )
+                                    st.altair_chart(
+                                        _signature_profile_chart(
+                                            _sig_spec,
+                                            _sig_name,
+                                            overlay_df=_overlay_spec,
+                                            overlay_label=_overlay_label,
+                                        ),
+                                        width="stretch",
+                                    )
+                                    st.caption(_caption)
 
             # ── Called vs Uncalled Comparison ─────────────────────────────────
             if _has_data("variant_called"):

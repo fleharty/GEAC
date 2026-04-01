@@ -116,7 +116,7 @@ def render_position_drilldown(
 
     match_alt = st.checkbox(
         f"Same alt allele only ({selected_alt})",
-        value=False,
+        value=True,
         key=f"drill_match_alt_{chrom}_{pos}",
     )
     if match_alt:

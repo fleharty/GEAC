@@ -111,3 +111,10 @@ class TestResolveIndexUri:
         assert resolve_index_uri("gnomad.vcf.gz", None) == "gnomad.vcf.gz.tbi"
         assert resolve_index_uri("gnomad.vcf.bgz", None) == "gnomad.vcf.bgz.tbi"
         assert resolve_index_uri("gnomad.bcf", None) == "gnomad.bcf.csi"
+
+    def test_prefers_explicit_index_when_provided(self):
+        assert resolve_index_uri("gnomad.vcf.gz", "/tmp/custom.tbi") == "/tmp/custom.tbi"
+
+    def test_infers_absolute_variant_index_when_track_path_is_absolute(self, tmp_path):
+        track = str((tmp_path / "refs" / "gnomad.vcf.gz").resolve())
+        assert resolve_index_uri(track, None) == track + ".tbi"

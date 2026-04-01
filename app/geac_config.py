@@ -15,6 +15,7 @@ Supported keys (all optional):
     auto_launch_igv  = false                      # auto-launch IGV when a session is created
     target_regions   = "/path/to/targets.bed"     # BED or interval list added as a track in IGV sessions
     gnomad_track     = "/path/to/gnomad.vcf.gz"   # optional VCF/BCF added as a track in IGV sessions
+    gnomad_track_index = "/path/to/gnomad.vcf.gz.tbi"  # optional explicit index path for the gnomAD track
 """
 
 from __future__ import annotations
@@ -32,9 +33,27 @@ except ImportError:
         tomllib = None  # type: ignore[assignment]
 
 
-_STRING_KEYS = {"data", "manifest", "cosmic", "genome", "genome_build", "target_regions", "gnomad_track"}
+_STRING_KEYS = {
+    "data",
+    "manifest",
+    "cosmic",
+    "genome",
+    "genome_build",
+    "target_regions",
+    "gnomad_track",
+    "gnomad_track_index",
+}
+_PATH_KEYS = {
+    "data",
+    "manifest",
+    "cosmic",
+    "target_regions",
+    "gnomad_track",
+    "gnomad_track_index",
+}
 _BOOL_KEYS   = {"auto_launch_igv"}
 _KNOWN_KEYS  = _STRING_KEYS | _BOOL_KEYS
+_URI_PREFIXES = ("gs://", "http://", "https://")
 
 
 def load() -> dict:
@@ -71,12 +90,29 @@ def load() -> dict:
         st.warning(f"geac.toml: unknown key(s) ignored: {', '.join(sorted(unknown))}")
 
     result = {}
+    config_dir = os.path.dirname(path)
     for k, v in raw.items():
         if k in _STRING_KEYS:
-            result[k] = str(v)
+            value = str(v)
+            if k in _PATH_KEYS:
+                value = _normalize_local_path(value, config_dir)
+            result[k] = value
         elif k in _BOOL_KEYS:
             result[k] = bool(v)
     return result
+
+
+def _normalize_local_path(value: str, config_dir: str) -> str:
+    """Return *value* resolved relative to *config_dir* when it is local and relative."""
+    lower = value.lower()
+    if lower.startswith(_URI_PREFIXES):
+        return value
+
+    expanded = os.path.expanduser(value)
+    if os.path.isabs(expanded):
+        return expanded
+
+    return os.path.abspath(os.path.join(config_dir, expanded))
 
 
 def _find_config_path() -> str | None:
@@ -87,7 +123,7 @@ def _find_config_path() -> str | None:
         if arg == "--config" and i + 1 < len(args):
             p = args[i + 1]
             if os.path.isfile(p):
-                return p
+                return os.path.abspath(p)
             # File specified but not found — warn but don't crash
             import streamlit as st
             st.warning(f"--config path not found: {p}")

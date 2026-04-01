@@ -23,6 +23,7 @@ class Geac < Formula
 
     resource("geac-apps").stage do
       libexec.install Dir["app/*"]
+      libexec.install "schema"
     end
 
     python = Formula["python@3.12"].opt_bin/"python3.12"
@@ -36,6 +37,7 @@ class Geac < Formula
       "pandas>=2.0",
       "numpy>=1.26",
       "scipy>=1.13",
+      "scikit-learn>=1.5",
       "google-cloud-storage",
       "google-auth"
 

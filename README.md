@@ -421,8 +421,10 @@ Features:
     contexts; drill-down table and IGV session. Optional COSMIC decomposition: provide a
     COSMIC SBS matrix path to overlay a reconstruction (black dots), show top-N signature
     exposures with etiology annotations, cosine similarity, and residual percentage. Also
-    includes: per-sample signature exposure heatmap (DuckDB only); Called vs Uncalled
-    comparison (butterfly chart + grouped signature bar, requires VCF annotation);
+    includes: per-sample signature exposure heatmap (DuckDB only); optional de novo NMF
+    signature discovery across the selected cohort with per-sample exposure heatmap and
+    best-COSMIC-match comparison; Called vs Uncalled comparison (butterfly chart + grouped
+    signature bar, requires VCF annotation);
     VAF-stratified spectra (germline VAF > 30% vs somatic VAF ≤ 30%); family-size
     stratified spectra (singleton vs multi-member families, requires `--reads-output`);
     SBS96 heatmap across samples (DuckDB only)
@@ -496,13 +498,20 @@ genome_build     = "hg38"                            # hg19 | hg38 | mm10 | mm39
 auto_launch_igv  = false                             # auto-load sessions into running IGV
 target_regions   = "/path/to/targets.bed"            # optional track added to IGV sessions
 gnomad_track     = "/path/to/gnomad.vcf.gz"          # optional gnomAD VCF/BCF track for IGV sessions
+gnomad_track_index = "/path/to/gnomad.vcf.gz.tbi"    # optional explicit gnomAD index path
 ```
 
 All keys are optional. `genome_build` accepts any IGV genome identifier — known values (`hg19`, `hg38`, `mm10`, `mm39`) are selected directly from the dropdown; anything else selects "other" and pre-fills the custom genome ID text box. `auto_launch_igv = true` checks the "Auto-launch IGV" checkbox by default, so every session is automatically sent to IGV via its REST API (port 60151) or launched as a subprocess if IGV is not already running.
 
+Local filesystem paths in `geac.toml` may be absolute or relative. Relative paths are
+resolved against the directory containing the `geac.toml` file before the Explorer uses
+them or writes them into IGV session XML. URI-style values such as `gs://`, `http://`,
+and `https://` are preserved as-is.
+
 If `gnomad_track` points to a `*.vcf.gz`, `*.vcf.bgz`, or `*.bcf`, the Explorer infers the
-matching index path automatically (`.tbi` for VCF, `.csi` for BCF). The index file must still
-exist and be readable by IGV.
+matching index path automatically (`.tbi` for VCF, `.csi` for BCF). You can override that
+with `gnomad_track_index` when the index lives somewhere nonstandard. The Explorer shows a
+sidebar warning when a local gnomAD track is configured but the resolved index path is missing.
 
 ### Manifest format
 
@@ -648,8 +657,8 @@ docker run --rm \
 ### Cutting a release
 
 ```bash
-# 1. Bump version in Cargo.toml
-# 2. Update GEAC_VERSION in app/geac_explorer.py and app/geac_coverage_explorer.py
+# 1. Bump version in Cargo.toml and VERSION
+# 2. Update GEAC_VERSION in app/explorer/schema.py
 # 3. Commit, push, then tag:
 git tag v0.X.Y && git push origin v0.X.Y
 ```

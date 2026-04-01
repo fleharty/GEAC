@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 
 
-GEAC_VERSION = "0.3.16"
+GEAC_VERSION = "0.3.17"
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,19 @@ class SchemaManifest:
 
 
 def _schema_path() -> Path:
-    return Path(__file__).resolve().parents[2] / "schema" / "geac_schema.json"
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[2] / "schema" / "geac_schema.json",  # source checkout layout
+        here.parents[1] / "schema" / "geac_schema.json",  # packaged libexec layout
+        here.parent / "geac_schema.json",                 # fallback for direct bundling
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        "Could not find geac_schema.json. Looked in: "
+        + ", ".join(str(path) for path in candidates)
+    )
 
 
 @lru_cache(maxsize=1)

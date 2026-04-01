@@ -56,33 +56,6 @@ if data_source.is_duckdb:
     if _db_created is not None:
         st.sidebar.caption(str(_db_created)[:10])
 
-    with st.sidebar.expander("Advanced", expanded=False):
-        st.caption("Database metadata")
-        _meta_header = data_source.metadata_header()
-        if _meta_header.empty:
-            st.caption("No `geac_metadata` table found.")
-        else:
-            _meta_row = _meta_header.iloc[0]
-            for _col in _meta_header.columns:
-                _val = _meta_row[_col]
-                if pd.isna(_val):
-                    _display = "NULL"
-                elif isinstance(_val, float):
-                    _display = f"{_val:g}"
-                else:
-                    _display = str(_val)
-                st.caption(f"{_col}: {_display}")
-
-        _meta_inputs = data_source.metadata_inputs()
-        if not _meta_inputs.empty:
-            st.caption("Merged inputs")
-            st.dataframe(
-                _meta_inputs,
-                width="stretch",
-                hide_index=True,
-                key="coverage_advanced_metadata_inputs",
-            )
-
 _missing_required_cols = data_source.required_columns_missing()
 if _missing_required_cols:
     st.warning(
@@ -141,6 +114,35 @@ if manifest_path and manifest_path.strip():
         st.sidebar.success(f"{len(_manifest):,} samples loaded")
     except Exception as _e:
         st.sidebar.error(f"Could not load manifest: {_e}")
+
+if data_source.is_duckdb:
+    st.sidebar.divider()
+    with st.sidebar.expander("Advanced", expanded=False):
+        st.caption("Database metadata")
+        _meta_header = data_source.metadata_header()
+        if _meta_header.empty:
+            st.caption("No `geac_metadata` table found.")
+        else:
+            _meta_row = _meta_header.iloc[0]
+            for _col in _meta_header.columns:
+                _val = _meta_row[_col]
+                if pd.isna(_val):
+                    _display = "NULL"
+                elif isinstance(_val, float):
+                    _display = f"{_val:g}"
+                else:
+                    _display = str(_val)
+                st.caption(f"{_col}: {_display}")
+
+        _meta_inputs = data_source.metadata_inputs()
+        if not _meta_inputs.empty:
+            st.caption("Merged inputs")
+            st.dataframe(
+                _meta_inputs,
+                width="stretch",
+                hide_index=True,
+                key="coverage_advanced_metadata_inputs",
+            )
 
 # ── Filter helpers ─────────────────────────────────────────────────────────────
 def _filter_clauses(extra: list[str] | None = None) -> list[str]:

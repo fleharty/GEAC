@@ -4,6 +4,7 @@ altair>=5.3
 pandas>=2.0
 numpy>=1.26
 scipy>=1.13
+scikit-learn>=1.5
 
 # Optional: required only for GCS BAM/CRAM support in the IGV.js viewer
 # pip install google-auth

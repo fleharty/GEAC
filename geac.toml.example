@@ -2,6 +2,8 @@
 # Copy this file to geac.toml and fill in paths for your project.
 # Run the Explorer from the same directory: streamlit run /path/to/geac_explorer.py
 # Or point to a config explicitly:         streamlit run /path/to/geac_explorer.py -- --config /path/to/geac.toml
+# Local filesystem paths below may be absolute or relative; relative paths are interpreted
+# relative to this geac.toml file. Remote URIs such as gs:// and http(s):// are used as-is.
 
 # Path to a per-sample Parquet file or a merged cohort DuckDB database (required)
 data = "/path/to/cohort.duckdb"
@@ -22,3 +24,6 @@ genome = "hg38"
 # gnomAD VCF/BCF — added as a track in IGV sessions when the dataset includes gnomad_af (optional)
 # The matching .tbi / .csi index must exist alongside the file.
 # gnomad_track = "/path/to/gnomad.vcf.gz"
+
+# Optional explicit index path when the gnomAD index does not live at the inferred location.
+# gnomad_track_index = "/path/to/gnomad.vcf.gz.tbi"

@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from explorer import COVERAGE_FILTER_STATE, MAIN_FILTER_STATE, load_schema_manifest
+from explorer import schema as schema_module
 from explorer.data_source import DataSource
 from explorer.tabs import TAB_MODULES
 
@@ -84,7 +85,7 @@ def _write_alt_db(path: str) -> None:
             samples_rows BIGINT
         );
         INSERT INTO geac_metadata VALUES (
-            'duckdb-v2', '0.3.16', current_timestamp, 'geac merge', '/tmp/cohort.duckdb',
+            'duckdb-v2', '0.3.17', current_timestamp, 'geac merge', '/tmp/cohort.duckdb',
             'macos', 'arm64', 'unix',
             1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1
         );
@@ -158,7 +159,7 @@ def _write_coverage_db(path: str) -> None:
             samples_rows BIGINT
         );
         INSERT INTO geac_metadata VALUES (
-            'duckdb-v2', '0.3.16', current_timestamp, 'geac merge', '/tmp/coverage.duckdb',
+            'duckdb-v2', '0.3.17', current_timestamp, 'geac merge', '/tmp/coverage.duckdb',
             'macos', 'arm64', 'unix',
             0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0
         );
@@ -173,6 +174,19 @@ class TestSchemaManifest:
         assert "alt_reads" in manifest.feature_tables
         assert "coverage" in manifest.tables
 
+    def test_schema_path_supports_packaged_libexec_layout(self, tmp_path, monkeypatch):
+        libexec = tmp_path / "libexec"
+        explorer_dir = libexec / "explorer"
+        schema_dir = libexec / "schema"
+        explorer_dir.mkdir(parents=True)
+        schema_dir.mkdir()
+        packaged_schema = schema_dir / "geac_schema.json"
+        packaged_schema.write_text('{"feature_tables":[],"tables":{}}', encoding="utf-8")
+
+        monkeypatch.setattr(schema_module, "__file__", str(explorer_dir / "schema.py"))
+
+        assert schema_module._schema_path() == packaged_schema
+
 
 class TestDataSource:
     def test_open_alt_bases_detects_optional_tables(self, tmp_path):
@@ -186,7 +200,7 @@ class TestDataSource:
         assert ds.has_optional_table("pon_evidence") is False
         assert ds.required_columns_missing() == []
         assert ds.distinct_values("sample_id") == ["sample1"]
-        assert ds.db_version == "0.3.16"
+        assert ds.db_version == "0.3.17"
         assert ds.db_schema_version == "duckdb-v2"
         assert list(ds.metadata_header()["schema_version"]) == ["duckdb-v2"]
         assert list(ds.metadata_inputs().columns) == []
@@ -201,7 +215,7 @@ class TestDataSource:
         assert ds.required_columns_missing() == []
         assert ds.has_column("bin_n") is True
         assert ds.has_non_null("gene") is True
-        assert ds.db_version == "0.3.16"
+        assert ds.db_version == "0.3.17"
         assert ds.db_schema_version == "duckdb-v2"
         assert list(ds.metadata_header()["schema_version"]) == ["duckdb-v2"]
 

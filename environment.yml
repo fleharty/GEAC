@@ -11,3 +11,4 @@ dependencies:
   - altair
   - pyarrow
   - pandas
+  - scikit-learn
