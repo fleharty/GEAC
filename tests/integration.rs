@@ -1637,6 +1637,41 @@ fn coverage_intervals_basic() {
     );
 }
 
+/// --track adds a named nullable Float32 column populated from the BEDGraph file.
+#[test]
+fn coverage_track_column_populated_from_bedgraph() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 200);
+    let reads: Vec<CovRead> = (0..5).map(|_| CovRead::regular(40)).collect();
+    let bam = write_coverage_bam(dir.path(), "track.bam", "sample1", 200, reads, 20);
+
+    // BEDGraph covers [30, 60) with score 0.9 and [60, 90) with 0.3.
+    let bg = dir.path().join("map.bedgraph");
+    std::fs::write(&bg, "chr1\t30\t60\t0.9\nchr1\t60\t90\t0.3\n").unwrap();
+
+    let out = dir.path().join("track.coverage.parquet");
+    assert_geac_success(&[
+        "coverage",
+        "--input",     bam.to_str().unwrap(),
+        "--reference", fa.to_str().unwrap(),
+        "--output",    out.to_str().unwrap(),
+        "--track",     &format!("gem150:{}", bg.display()),
+        "--read-type", "raw",
+        "--pipeline",  "raw",
+    ]);
+
+    // The column "gem150" should be present.
+    let cols = parquet_columns(&out);
+    assert!(cols.contains(&"gem150".to_string()), "gem150 column missing; found: {cols:?}");
+
+    // pos=40 falls in [30, 60) → score 0.9.
+    let score = parquet_query_f32(&out, "gem150", "pos = 40");
+    assert!(
+        (score - 0.9).abs() < 0.01,
+        "gem150 score at pos=40 should be 0.9, got {score}"
+    );
+}
+
 /// .coverage.intervals.parquet files are routed to the coverage_intervals table by geac merge.
 #[test]
 fn merge_routes_coverage_intervals_parquet_to_coverage_intervals_table() {

@@ -121,7 +121,7 @@ pub fn collect_alt_bases(
         }
 
         let on_target = target_intervals.map(|t| t.contains(&chrom, pos));
-        let gene = gene_annots.and_then(|g| g.get(&chrom, pos).map(str::to_owned));
+        let gene = gene_annots.and_then(|g| g.get(&chrom, pos)).map(|a| a.gene);
         let repeat =
             compute_repeat_metrics(ref_cache.current_seq(), pos as usize, args.repeat_window);
         let trinuc_context = {

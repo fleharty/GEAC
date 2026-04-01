@@ -1441,7 +1441,7 @@ _r_join = f"""
 """
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon, tab_pipeline = st.tabs(
+tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon, tab_pipeline, tab_read_type = st.tabs(
     [module.LABEL for module in TAB_MODULES],
     key="main_tabs",
 )
@@ -5305,4 +5305,361 @@ with tab_pipeline:
                         f"Points above the diagonal: higher depth in {_pc_pipe_b}. "
                         f"Points below: higher depth in {_pc_pipe_a}. "
                         "Systematic offset suggests different duplicate-collapsing or overlap behaviour."
+                    )
+
+with tab_read_type:
+    if not data_source.is_duckdb:
+        st.info(
+            "Read-type comparison requires a merged DuckDB file. "
+            "Run `geac collect` separately for each BAM (raw, simplex, duplex) with the same "
+            "`--sample-id`, then `geac merge` all Parquets into one DuckDB."
+        )
+    else:
+        _rt_read_types = data_source.distinct_values("read_type")
+        if len(_rt_read_types) < 2:
+            st.info(
+                "Read-type comparison requires at least 2 distinct `read_type` values in the database. "
+                f"This database contains only: {', '.join(str(r) for r in _rt_read_types)}. "
+                "Re-run `geac collect` with a different `--read-type` value for the same sample "
+                "and merge both Parquets into one DuckDB."
+            )
+        else:
+            st.caption(
+                "Compare the same sample processed at two different read types (e.g. raw vs duplex). "
+                "All active sidebar filters (chromosome, sample, VAF, etc.) are applied to both. "
+                "The goal is to quantify what duplex consensus processing removes vs retains."
+            )
+
+            # ── Read-type selectors ────────────────────────────────────────────
+            _rt_col1, _rt_col2 = st.columns(2)
+            _rt_a = _rt_col1.selectbox(
+                "Read type A", _rt_read_types, index=0, key="rt_cmp_a"
+            )
+            _rt_b_opts = [r for r in _rt_read_types if r != _rt_a]
+            _rt_b = _rt_col2.selectbox(
+                "Read type B", _rt_b_opts, index=0, key="rt_cmp_b"
+            )
+
+            _rt_wa = " AND ".join(
+                conditions + [f"read_type = '{_sql_str(str(_rt_a))}'"]
+            ) if conditions else f"read_type = '{_sql_str(str(_rt_a))}'"
+            _rt_wb = " AND ".join(
+                conditions + [f"read_type = '{_sql_str(str(_rt_b))}'"]
+            ) if conditions else f"read_type = '{_sql_str(str(_rt_b))}'"
+
+            # ── Build FULL OUTER JOIN dataset once, reused by all views ───────
+            _rt_df = con.execute(f"""
+                WITH a AS (
+                    SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                           ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                           total_depth,
+                           fwd_alt_count, rev_alt_count,
+                           trinuc_context, ref_allele
+                    FROM {table_expr}
+                    WHERE {_rt_wa}
+                ),
+                b AS (
+                    SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                           ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                           total_depth,
+                           fwd_alt_count, rev_alt_count
+                    FROM {table_expr}
+                    WHERE {_rt_wb}
+                )
+                SELECT
+                    COALESCE(a.sample_id,    b.sample_id)    AS sample_id,
+                    COALESCE(a.chrom,        b.chrom)        AS chrom,
+                    COALESCE(a.pos,          b.pos)          AS pos,
+                    COALESCE(a.alt_allele,   b.alt_allele)   AS alt_allele,
+                    COALESCE(a.variant_type, b.variant_type) AS variant_type,
+                    a.vaf            AS vaf_a,
+                    b.vaf            AS vaf_b,
+                    a.total_depth    AS depth_a,
+                    b.total_depth    AS depth_b,
+                    a.fwd_alt_count  AS fwd_alt_a,
+                    a.rev_alt_count  AS rev_alt_a,
+                    b.fwd_alt_count  AS fwd_alt_b,
+                    b.rev_alt_count  AS rev_alt_b,
+                    a.trinuc_context,
+                    a.ref_allele,
+                    CASE
+                        WHEN a.chrom IS NOT NULL AND b.chrom IS NOT NULL THEN 'shared'
+                        WHEN a.chrom IS NOT NULL                         THEN 'only_a'
+                        ELSE                                                  'only_b'
+                    END AS concordance
+                FROM a
+                FULL OUTER JOIN b
+                    ON  a.sample_id  = b.sample_id
+                    AND a.chrom      = b.chrom
+                    AND a.pos        = b.pos
+                    AND a.alt_allele = b.alt_allele
+            """).df()
+
+            if _rt_df.empty:
+                st.info("No records for either read type under the current filters.")
+            else:
+                _rt_label_map = {
+                    "shared": "Shared",
+                    "only_a": f"Only {_rt_a}",
+                    "only_b": f"Only {_rt_b}",
+                }
+                _rt_df["concordance_label"] = _rt_df["concordance"].map(_rt_label_map)
+                _rt_shared = _rt_df[_rt_df["concordance"] == "shared"]
+
+                # ── View 1: Concordance summary ────────────────────────────────
+                st.subheader("Locus concordance")
+                st.caption(
+                    "Loci unique to the less-filtered read type were likely removed by consensus "
+                    "processing. Shared loci are retained across both read types."
+                )
+
+                _rt_n_shared = int((_rt_df["concordance"] == "shared").sum())
+                _rt_n_only_a = int((_rt_df["concordance"] == "only_a").sum())
+                _rt_n_only_b = int((_rt_df["concordance"] == "only_b").sum())
+                _rt_m1, _rt_m2, _rt_m3 = st.columns(3)
+                _rt_m1.metric("Shared loci", f"{_rt_n_shared:,}")
+                _rt_m2.metric(f"Only {_rt_a}", f"{_rt_n_only_a:,}")
+                _rt_m3.metric(f"Only {_rt_b}", f"{_rt_n_only_b:,}")
+
+                _rt_conc_counts = (
+                    _rt_df.groupby(["concordance_label", "variant_type"])
+                    .size()
+                    .reset_index(name="n_loci")
+                )
+                _rt_conc_order = ["Shared", f"Only {_rt_a}", f"Only {_rt_b}"]
+                _rt_conc_chart = (
+                    alt.Chart(_rt_conc_counts)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("concordance_label:N", title=None, sort=_rt_conc_order),
+                        y=alt.Y("n_loci:Q", title="Loci"),
+                        color=alt.Color("variant_type:N", title="Variant type"),
+                        tooltip=["concordance_label", "variant_type", "n_loci"],
+                    )
+                    .properties(height=280)
+                )
+                st.altair_chart(_rt_conc_chart, width="stretch")
+
+                st.divider()
+
+                # ── View 2: VAF distribution overlay ──────────────────────────
+                st.subheader("VAF distribution")
+                st.caption(
+                    "Duplex processing typically shifts the VAF distribution by removing "
+                    "low-VAF artefacts that arise from PCR or sequencing errors."
+                )
+
+                _rt_vaf_a = _rt_df[_rt_df["concordance"].isin(["shared", "only_a"])][["vaf_a", "variant_type"]].dropna(subset=["vaf_a"]).rename(columns={"vaf_a": "vaf"})
+                _rt_vaf_a["read_type"] = str(_rt_a)
+                _rt_vaf_b = _rt_df[_rt_df["concordance"].isin(["shared", "only_b"])][["vaf_b", "variant_type"]].dropna(subset=["vaf_b"]).rename(columns={"vaf_b": "vaf"})
+                _rt_vaf_b["read_type"] = str(_rt_b)
+                _rt_vaf_both = pd.concat([_rt_vaf_a, _rt_vaf_b], ignore_index=True)
+
+                if not _rt_vaf_both.empty:
+                    _rt_vaf_chart = (
+                        alt.Chart(_rt_vaf_both)
+                        .transform_density(
+                            "vaf",
+                            as_=["vaf", "density"],
+                            groupby=["read_type"],
+                            extent=[0, 1],
+                            steps=100,
+                        )
+                        .mark_area(opacity=0.4)
+                        .encode(
+                            x=alt.X("vaf:Q", title="VAF", scale=alt.Scale(domain=[0, 1])),
+                            y=alt.Y("density:Q", title="Density", stack=None),
+                            color=alt.Color("read_type:N", title="Read type"),
+                            tooltip=[
+                                alt.Tooltip("vaf:Q", format=".3f"),
+                                "read_type:N",
+                                alt.Tooltip("density:Q", format=".3f"),
+                            ],
+                        )
+                        .properties(height=280)
+                    )
+                    st.altair_chart(_rt_vaf_chart, width="stretch")
+
+                st.divider()
+
+                # ── View 3: VAF correlation (shared loci) ──────────────────────
+                st.subheader("VAF correlation (shared loci)")
+
+                if _rt_shared.empty:
+                    st.info("No shared loci for current filters.")
+                else:
+                    _rt_vaf_diag = (
+                        alt.Chart(pd.DataFrame({"x": [0.0, 1.0], "y": [0.0, 1.0]}))
+                        .mark_line(color="gray", strokeDash=[4, 4], opacity=0.6)
+                        .encode(x="x:Q", y="y:Q")
+                    )
+                    _rt_vaf_scatter = (
+                        alt.Chart(_rt_shared)
+                        .mark_circle(opacity=0.5, size=40)
+                        .encode(
+                            x=alt.X("vaf_a:Q", title=f"VAF — {_rt_a}",
+                                    scale=alt.Scale(domain=[0, 1])),
+                            y=alt.Y("vaf_b:Q", title=f"VAF — {_rt_b}",
+                                    scale=alt.Scale(domain=[0, 1])),
+                            color=alt.Color("variant_type:N", title="Variant type"),
+                            tooltip=[
+                                "sample_id", "chrom", "pos", "alt_allele", "variant_type",
+                                alt.Tooltip("vaf_a:Q", title=f"VAF ({_rt_a})", format=".4f"),
+                                alt.Tooltip("vaf_b:Q", title=f"VAF ({_rt_b})", format=".4f"),
+                            ],
+                        )
+                        .properties(width=450, height=380)
+                        .interactive()
+                    )
+                    st.altair_chart(_rt_vaf_diag + _rt_vaf_scatter, width="stretch")
+
+                    if len(_rt_shared) >= 2:
+                        _rt_r = _rt_shared["vaf_a"].corr(_rt_shared["vaf_b"])
+                        st.caption(
+                            f"Pearson r = {_rt_r:.4f} across {len(_rt_shared):,} shared loci. "
+                            "Points below the diagonal indicate higher VAF in read type B."
+                        )
+
+                st.divider()
+
+                # ── View 4: Strand balance comparison ─────────────────────────
+                st.subheader("Strand balance")
+                st.caption(
+                    "Fraction of alt-supporting reads on the forward strand. "
+                    "Values near 0.5 indicate balanced strand support; "
+                    "values near 0 or 1 suggest strand artefacts."
+                )
+
+                _rt_strand_rows = []
+                for _rt_lbl, _rt_fw_col, _rt_rv_col in [
+                    (str(_rt_a), "fwd_alt_a", "rev_alt_a"),
+                    (str(_rt_b), "fwd_alt_b", "rev_alt_b"),
+                ]:
+                    _rt_sub = _rt_df[[_rt_fw_col, _rt_rv_col, "variant_type"]].dropna()
+                    _rt_total_alt = _rt_sub[_rt_fw_col] + _rt_sub[_rt_rv_col]
+                    _rt_sub = _rt_sub[_rt_total_alt > 0].copy()
+                    _rt_total_alt = _rt_total_alt[_rt_total_alt > 0]
+                    if not _rt_sub.empty:
+                        _rt_sub["frac_fwd"] = _rt_sub[_rt_fw_col] / _rt_total_alt
+                        _rt_sub["read_type"] = _rt_lbl
+                        _rt_strand_rows.append(_rt_sub[["frac_fwd", "variant_type", "read_type"]])
+
+                if _rt_strand_rows:
+                    _rt_strand_df = pd.concat(_rt_strand_rows, ignore_index=True)
+                    _rt_strand_chart = (
+                        alt.Chart(_rt_strand_df)
+                        .transform_density(
+                            "frac_fwd",
+                            as_=["frac_fwd", "density"],
+                            groupby=["read_type"],
+                            extent=[0, 1],
+                            steps=80,
+                        )
+                        .mark_area(opacity=0.4)
+                        .encode(
+                            x=alt.X("frac_fwd:Q", title="Fraction of alt reads on forward strand",
+                                    scale=alt.Scale(domain=[0, 1])),
+                            y=alt.Y("density:Q", title="Density", stack=None),
+                            color=alt.Color("read_type:N", title="Read type"),
+                            tooltip=[
+                                alt.Tooltip("frac_fwd:Q", format=".3f", title="Frac forward"),
+                                "read_type:N",
+                            ],
+                        )
+                        .properties(height=250)
+                    )
+                    st.altair_chart(_rt_strand_chart, width="stretch")
+                else:
+                    st.info("No strand balance data available under current filters.")
+
+                st.divider()
+
+                # ── View 5: SBS96 spectrum side-by-side ────────────────────────
+                st.subheader("SBS96 error spectrum")
+
+                if not _has_data("trinuc_context"):
+                    st.info(
+                        "SBS96 spectrum requires the `trinuc_context` column. "
+                        "Re-run `geac collect` with a reference FASTA."
+                    )
+                else:
+                    def _rt_sbs96(rt_where: str):
+                        _raw = con.execute(f"""
+                            SELECT trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
+                            FROM {table_expr}
+                            WHERE {rt_where}
+                              AND variant_type = 'SNV'
+                              AND trinuc_context IS NOT NULL
+                              AND length(trinuc_context) = 3
+                            GROUP BY trinuc_context, ref_allele, alt_allele
+                        """).df()
+                        return _to_spec96_strat(_raw)
+
+                    _rt_s96_a, _rt_total_a = _rt_sbs96(_rt_wa)
+                    _rt_s96_b, _rt_total_b = _rt_sbs96(_rt_wb)
+
+                    if _rt_s96_a is None or _rt_s96_b is None:
+                        st.info("Insufficient SNV data for spectrum comparison.")
+                    else:
+                        _rt_sc1, _rt_sc2 = st.columns(2)
+                        with _rt_sc1:
+                            st.markdown(f"**{_rt_a}** ({_rt_total_a:,} SNVs)")
+                            st.altair_chart(
+                                _strat_sbs96_chart(_rt_s96_a, str(_rt_a)),
+                                width="stretch",
+                            )
+                        with _rt_sc2:
+                            st.markdown(f"**{_rt_b}** ({_rt_total_b:,} SNVs)")
+                            st.altair_chart(
+                                _strat_sbs96_chart(_rt_s96_b, str(_rt_b)),
+                                width="stretch",
+                            )
+
+                st.divider()
+
+                # ── View 6: Loci unique to one read type ───────────────────────
+                st.subheader("Loci unique to one read type")
+                st.caption(
+                    "These loci are called in one read type but absent in the other. "
+                    "Loci only in the less-filtered read type are candidates for "
+                    "consensus-removed artefacts."
+                )
+
+                _rt_uniq = _rt_df[_rt_df["concordance"] != "shared"].copy()
+                _rt_uniq["read_type"] = _rt_uniq["concordance"].map(
+                    {"only_a": str(_rt_a), "only_b": str(_rt_b)}
+                )
+                _rt_uniq_filter = st.radio(
+                    "Show",
+                    ["Both", f"Only {_rt_a}", f"Only {_rt_b}"],
+                    horizontal=True,
+                    key="rt_cmp_uniq_filter",
+                )
+                if _rt_uniq_filter == f"Only {_rt_a}":
+                    _rt_uniq_show = _rt_uniq[_rt_uniq["concordance"] == "only_a"]
+                elif _rt_uniq_filter == f"Only {_rt_b}":
+                    _rt_uniq_show = _rt_uniq[_rt_uniq["concordance"] == "only_b"]
+                else:
+                    _rt_uniq_show = _rt_uniq
+
+                _rt_uniq_cols = [c for c in [
+                    "read_type", "sample_id", "chrom", "pos", "alt_allele",
+                    "variant_type", "vaf_a", "vaf_b", "depth_a", "depth_b",
+                ] if c in _rt_uniq_show.columns]
+
+                if _rt_uniq_show.empty:
+                    st.success("No unique loci for current filter selection.")
+                else:
+                    st.dataframe(
+                        _rt_uniq_show[_rt_uniq_cols]
+                        .rename(columns={
+                            "vaf_a":   f"vaf_{_rt_a}",
+                            "vaf_b":   f"vaf_{_rt_b}",
+                            "depth_a": f"depth_{_rt_a}",
+                            "depth_b": f"depth_{_rt_b}",
+                        })
+                        .sort_values(["read_type", "chrom", "pos"]),
+                        width="stretch",
+                        hide_index=True,
+                        key="rt_cmp_uniq_table",
                     )

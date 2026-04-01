@@ -237,9 +237,15 @@ pub struct CoverageRecord {
     /// Fraction of G+C bases in --gc-window bp window around this position
     pub gc_content: f32,
 
+    // ── Pre-computed annotation tracks ─────────────────────────────────────────
+    /// One score per --track flag (order matches TrackSet::names()). Empty when no tracks given.
+    pub track_values: Vec<Option<f32>>,
+
     // ── Annotations ────────────────────────────────────────────────────────────
     pub on_target: Option<bool>,
     pub gene: Option<String>,
+    pub feature_type: Option<String>,
+    pub exon_number: Option<i32>,
 
     // ── Provenance ─────────────────────────────────────────────────────────────
     pub read_type: ReadType,
@@ -291,6 +297,8 @@ pub struct IntervalRecord {
     /// Name field from BED col 4 or Picard interval name col
     pub interval_name: Option<String>,
     pub gene:         Option<String>,
+    pub feature_type: Option<String>,
+    pub exon_number:  Option<i32>,
 
     // ── Depth summary ─────────────────────────────────────────────────────────
     /// Total number of positions in the interval (= end - start)

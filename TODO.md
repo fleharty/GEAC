@@ -1,15 +1,16 @@
 # GEAC — TODO
 
-## Current plan (as of 2026-03-24)
+## Current plan (as of 2026-04-01)
 
-- **`main` branch** — v0.4.0 work is complete (annotate-normal, annotate-pon, batch/multi-BAM
-  support, merge routing, Explorer Tumor/Normal + PoN + batch tabs). Waiting on real data
-  for manual smoke testing before cutting the v0.4.0 release (~2 days).
-- **`feature/coverage` branch** — start `geac coverage` implementation now while waiting.
-  Branch from current `main` so it includes all v0.4.0 features. Work in parallel;
-  do not merge until after v0.4.0 is released and tested.
-- **Release sequence:** test v0.4.0 on real data → release v0.4.0 → merge coverage branch
-  → release v0.5.0.
+**Target: v0.4.0 — "Coverage complete"**
+
+All planned `geac coverage` features finished before shipping. Three items gate the release:
+
+1. ~~**Gene annotation extensions**~~ ✅ — `feature_type` and `exon_number` added to GTF/GFF3/genePred lookup; propagated through coverage records and Parquet schema.
+2. ~~**BEDGraph annotation tracks**~~ ✅ — `src/track.rs` with `AnnotationTrack`/`TrackSet`; binary-search lookup; chr-prefix bridging; `--track NAME:FILE` repeatable flag; dynamic Arrow schema columns in coverage Parquet.
+3. ~~**Read-type comparison view**~~ ✅ — `tab_read_type` in Explorer: locus concordance tiles + stacked bar, VAF density overlay, VAF correlation scatter, strand balance density, SBS96 side-by-side, unique-loci table.
+
+Current version: v0.3.19. All work on `main`.
 
 ## Rust / CLI
 
@@ -92,8 +93,7 @@ Two output files per sample from `geac collect`:
 
 ## Intra-sample comparison (read-type)
 
-- [ ] Multi-BAM collect — allow `geac collect` to accept multiple input BAMs for the same sample (raw, simplex, duplex) and tag each record with its `read_type`; output a single merged Parquet with a `read_type` column
-- [ ] Read-type comparison view in Explorer — given a Parquet or DuckDB with mixed read types, show side-by-side or overlaid metrics (VAF distribution, strand balance, SBS96 spectrum) broken down by `read_type` (raw / simplex / duplex / mixed); goal is to quantify what duplex consensus processing removes vs retains
+- [x] Read-type comparison view in Explorer — locus concordance, VAF density overlay, VAF correlation scatter, strand balance density, SBS96 side-by-side, unique-loci table. DuckDB only; gated on ≥2 distinct `read_type` values.
 
 ## Per-read filter validation
 
@@ -512,12 +512,12 @@ WHERE c.frac_mapq0 > 0.3;
 
 ### Implementation steps
 
-- [ ] Step 1: Extend `src/gene_annotations.rs` — add `feature_type` and `exon_number` to
+- [x] Step 1: Extend `src/gene_annotations.rs` — add `feature_type` and `exon_number` to
   the annotation lookup result; update GTF/GFF3 parser to extract the `exon_number` attribute
-- [ ] Step 2: Add `src/track.rs` — `AnnotationTrack` struct; BEDGraph loader; binary-search
-  lookup; streaming loader for WGS; `TrackSet` holding multiple named tracks
+- [x] Step 2: Add `src/track.rs` — `AnnotationTrack` struct; BEDGraph loader; binary-search
+  lookup; `TrackSet` holding multiple named tracks; chr-prefix bridging; `--track NAME:FILE`
+  repeatable flag in `CoverageArgs`; dynamic Arrow schema columns in `CoverageWriter`
 - [x] Step 3: Add `CoverageArgs` to `src/cli.rs`; add `Command::Coverage` variant
-  (Note: `--track` and `--summarize-intervals` deferred to Steps 2 and 5)
 - [x] Step 4: Add `src/coverage/mod.rs` — pileup loop with three-layer read counting
   (raw → de-dup → de-overlap → total_depth); all BAM-derived signals (mapq, base qual,
   insert size, GC content, overlap, dup fraction); zero-depth fill-in for target positions;

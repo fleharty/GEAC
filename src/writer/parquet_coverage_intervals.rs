@@ -66,6 +66,8 @@ fn intervals_schema() -> Arc<Schema> {
         Field::new("end",                DataType::Int64,   false),
         Field::new("interval_name",      DataType::Utf8,    true),
         Field::new("gene",               DataType::Utf8,    true),
+        Field::new("feature_type",       DataType::Utf8,    true),
+        Field::new("exon_number",        DataType::Int32,   true),
         // Depth summary
         Field::new("n_bases",            DataType::Int32,   false),
         Field::new("mean_depth",         DataType::Float32, false),
@@ -109,6 +111,12 @@ fn records_to_batch(records: &[IntervalRecord], schema: Arc<Schema>) -> Result<R
     let gene: ArrayRef = Arc::new(StringArray::from(
         records.iter().map(|r| r.gene.as_deref()).collect::<Vec<_>>(),
     ));
+    let feature_type: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.feature_type.as_deref()).collect::<Vec<_>>(),
+    ));
+    let exon_number: ArrayRef = Arc::new(Int32Array::from(
+        records.iter().map(|r| r.exon_number).collect::<Vec<_>>(),
+    ));
 
     let n_bases:      ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.n_bases)));
     let mean_depth:   ArrayRef = Arc::new(Float32Array::from_iter_values(records.iter().map(|r| r.mean_depth)));
@@ -143,7 +151,7 @@ fn records_to_batch(records: &[IntervalRecord], schema: Arc<Schema>) -> Result<R
     RecordBatch::try_new(
         schema,
         vec![
-            sample_id, chrom, start, end, interval_name, gene,
+            sample_id, chrom, start, end, interval_name, gene, feature_type, exon_number,
             n_bases, mean_depth, median_depth, min_depth, max_depth,
             frac_at_1x, frac_at_10x, frac_at_20x, frac_at_30x, frac_at_50x, frac_at_100x,
             mean_gc_content, mean_mapq, mean_frac_mapq0, mean_frac_dup,

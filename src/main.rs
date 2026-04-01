@@ -12,6 +12,7 @@ mod qc;
 mod record;
 mod repeat;
 mod targets;
+mod track;
 mod variants_tsv;
 mod vcf;
 mod writer;
@@ -89,7 +90,7 @@ fn main() -> Result<()> {
                 .transpose()?;
 
             if let Some(ref ga) = gene_annots {
-                info!(n_genes = ga.n_genes(), "gene annotations loaded");
+                info!(n_intervals = ga.n_intervals(), "gene annotations loaded");
             }
 
             let mut gnomad_index = args
@@ -211,12 +212,21 @@ fn main() -> Result<()> {
                 anyhow::bail!("--intervals-output requires --targets");
             }
 
-            let mut cov_writer = writer::parquet_coverage::CoverageWriter::new(&args.output)?;
+            let track_set = if args.tracks.is_empty() {
+                None
+            } else {
+                info!(n_tracks = args.tracks.len(), "loading annotation tracks");
+                Some(track::TrackSet::load(&args.tracks)?)
+            };
+
+            let track_names = track_set.as_ref().map_or(&[][..], |ts| ts.names());
+            let mut cov_writer = writer::parquet_coverage::CoverageWriter::new(&args.output, track_names)?;
 
             let interval_records = coverage::collect_coverage(
                 &args,
                 target_intervals.as_ref().map(|t| t as &_),
                 gene_annots.as_ref(),
+                track_set.as_ref(),
                 &mut cov_writer,
             )?;
 

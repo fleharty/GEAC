@@ -4,6 +4,7 @@ from . import error_spectrum
 from . import overlap_agreement
 from . import panel_of_normals
 from . import pipeline_comparison
+from . import read_type_comparison
 from . import reads
 from . import strand_bias
 from . import tumor_normal
@@ -20,4 +21,5 @@ TAB_MODULES = (
     tumor_normal,
     panel_of_normals,
     pipeline_comparison,
+    read_type_comparison,
 )

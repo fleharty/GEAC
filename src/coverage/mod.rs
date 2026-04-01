@@ -9,6 +9,7 @@ use crate::bam::{open_bam, read_group_sample_id, RefCache};
 use crate::cli::CoverageArgs;
 use crate::gene_annotations::GeneAnnotations;
 use crate::record::{CoverageRecord, IntervalRecord};
+use crate::track::TrackSet;
 use crate::targets::TargetIntervals;
 use crate::writer::parquet_coverage::CoverageWriter;
 
@@ -25,6 +26,7 @@ pub fn collect_coverage(
     args: &CoverageArgs,
     target_intervals: Option<&TargetIntervals>,
     gene_annots: Option<&GeneAnnotations>,
+    track_set: Option<&TrackSet>,
     writer: &mut CoverageWriter,
 ) -> Result<Vec<IntervalRecord>> {
     let mut reader = open_bam(&args.input, &args.reference)?;
@@ -92,13 +94,17 @@ pub fn collect_coverage(
         let tally = tally_coverage(&pileup, args.min_map_qual);
 
         let gc = compute_gc_content(ref_cache.current_seq(), pos as usize, args.gc_window);
-        let gene = gene_annots.and_then(|g| g.get(&chrom, pos).map(str::to_owned));
+        let annotation = gene_annots.and_then(|g| g.get(&chrom, pos));
+        let gene = annotation.as_ref().map(|a| a.gene.clone());
+        let feature_type = annotation.as_ref().and_then(|a| a.feature_type.clone());
+        let exon_number = annotation.as_ref().and_then(|a| a.exon_number);
+        let track_values = track_set.map_or_else(Vec::new, |ts| ts.lookup(&chrom, pos));
 
         // Update interval accumulator before the min_depth gate so that low-depth
         // positions still contribute to per-interval stats.
         if do_intervals {
             if let Some(idx) = target_intervals.and_then(|ti| ti.interval_index(&chrom, pos)) {
-                interval_accs[idx].push_tally(&tally, gc, gene.clone(), args);
+                interval_accs[idx].push_tally(&tally, gc, gene.clone(), feature_type.clone(), args);
             }
         }
 
@@ -115,7 +121,7 @@ pub fn collect_coverage(
             seen.insert((chrom.clone(), pos));
         }
 
-        let record = build_record(&sample_id, &chrom, pos, &tally, gc, on_target, gene, args);
+        let record = build_record(&sample_id, &chrom, pos, &tally, gc, track_values, on_target, gene, feature_type, exon_number, args);
         if args.adaptive_depth_threshold.map_or(false, |t| tally.total_depth < t) {
             // Flush any in-progress bin, then emit this position at single-base resolution
             if let Some(bin) = acc.finish() {
@@ -178,8 +184,12 @@ pub fn collect_coverage(
                     return;
                 }
                 let gc = zero_ref.gc_content(chrom, pos, args.gc_window);
-                let gene = gene_annots.and_then(|g| g.get(chrom, pos).map(str::to_owned));
-                let record = build_zero_record(&sample_id, chrom, pos, gc, Some(true), gene, args);
+                let annotation = gene_annots.and_then(|g| g.get(chrom, pos));
+                let gene = annotation.as_ref().map(|a| a.gene.clone());
+                let feature_type = annotation.as_ref().and_then(|a| a.feature_type.clone());
+                let exon_number = annotation.as_ref().and_then(|a| a.exon_number);
+                let track_values = track_set.map_or_else(Vec::new, |ts| ts.lookup(chrom, pos));
+                let record = build_zero_record(&sample_id, chrom, pos, gc, track_values, Some(true), gene, feature_type, exon_number, args);
                 if let Some(bin) = zero_acc.push(record) {
                     if let Err(e) = writer.push(bin) {
                         zero_err = Some(e);
@@ -203,8 +213,10 @@ pub fn collect_coverage(
             ti.for_each_named_position(|idx, chrom, pos| {
                 if !seen.contains(&(chrom.to_string(), pos)) {
                     let gc = zero_ref.gc_content(chrom, pos, args.gc_window);
-                    let gene = gene_annots.and_then(|g| g.get(chrom, pos).map(str::to_owned));
-                    interval_accs[idx].push_zero(gc, gene);
+                    let annotation = gene_annots.and_then(|g| g.get(chrom, pos));
+                    let gene = annotation.as_ref().map(|a| a.gene.clone());
+                    let feature_type = annotation.as_ref().and_then(|a| a.feature_type.clone());
+                    interval_accs[idx].push_zero(gc, gene, feature_type);
                 }
             });
         }
@@ -265,9 +277,14 @@ struct BinAccumulator {
     n_ins_pos: u32,
     // gc
     sum_gc: f64,
+    // track values (mean across bin positions)
+    sum_track_values: Vec<f64>,
+    n_track_obs: Vec<u32>,
     // annotations
     on_target: Option<bool>,
     gene: Option<String>,
+    feature_type: Option<String>,
+    exon_number: Option<i32>,
     // provenance
     sample_id: String,
     read_type: crate::record::ReadType,
@@ -290,7 +307,8 @@ impl BinAccumulator {
             sum_mean_bq: 0.0, min_bq: 0, max_bq: 0, sum_frac_low_bq: 0.0,
             sum_mean_ins: 0.0, min_ins: 0, max_ins: 0, n_ins_obs: 0, n_ins_pos: 0,
             sum_gc: 0.0,
-            on_target: None, gene: None,
+            sum_track_values: Vec::new(), n_track_obs: Vec::new(),
+            on_target: None, gene: None, feature_type: None, exon_number: None,
             sample_id: String::new(),
             read_type: crate::record::ReadType::Duplex,
             pipeline: crate::record::Pipeline::Fgbio,
@@ -328,7 +346,10 @@ impl BinAccumulator {
         self.sum_mean_ins = 0.0; self.min_ins = i32::MAX; self.max_ins = i32::MIN;
         self.n_ins_obs = 0; self.n_ins_pos = 0;
         self.sum_gc = 0.0;
-        self.on_target = None; self.gene = None;
+        let n_tracks = r.track_values.len();
+        self.sum_track_values = vec![0.0; n_tracks];
+        self.n_track_obs = vec![0u32; n_tracks];
+        self.on_target = None; self.gene = None; self.feature_type = None; self.exon_number = None;
         self.sample_id = r.sample_id.clone();
         self.read_type = r.read_type;
         self.pipeline = r.pipeline;
@@ -361,8 +382,20 @@ impl BinAccumulator {
             self.n_ins_pos += 1;
         }
         self.sum_gc += r.gc_content as f64;
+        for (i, &v) in r.track_values.iter().enumerate() {
+            if let Some(score) = v {
+                self.sum_track_values[i] += score as f64;
+                self.n_track_obs[i] += 1;
+            }
+        }
         if self.gene.is_none() {
             self.gene = r.gene.clone();
+        }
+        if self.feature_type.is_none() {
+            self.feature_type = r.feature_type.clone();
+        }
+        if self.exon_number.is_none() {
+            self.exon_number = r.exon_number;
         }
         match (self.on_target, r.on_target) {
             (_, Some(true)) => self.on_target = Some(true),
@@ -411,8 +444,13 @@ impl BinAccumulator {
             max_insert_size: max_ins,
             n_insert_size_obs: self.n_ins_obs,
             gc_content: mean(self.sum_gc),
+            track_values: self.sum_track_values.iter().zip(self.n_track_obs.iter())
+                .map(|(&s, &n)| if n > 0 { Some((s / n as f64) as f32) } else { None })
+                .collect(),
             on_target: self.on_target,
             gene: self.gene.clone(),
+            feature_type: self.feature_type.clone(),
+            exon_number: self.exon_number,
             read_type: self.read_type,
             pipeline: self.pipeline,
             batch: self.batch.clone(),
@@ -439,6 +477,7 @@ struct IntervalAccumulator {
     n_ins_pos:     u32,
     /// First non-None gene seen in this interval.
     gene:          Option<String>,
+    feature_type:  Option<String>,
 }
 
 impl IntervalAccumulator {
@@ -447,6 +486,7 @@ impl IntervalAccumulator {
         tally: &CoverageTally,
         gc: f32,
         gene: Option<String>,
+        feature_type: Option<String>,
         args: &CoverageArgs,
     ) {
         self.depths.push(tally.total_depth);
@@ -478,14 +518,20 @@ impl IntervalAccumulator {
         if self.gene.is_none() {
             self.gene = gene;
         }
+        if self.feature_type.is_none() {
+            self.feature_type = feature_type;
+        }
     }
 
-    fn push_zero(&mut self, gc: f32, gene: Option<String>) {
+    fn push_zero(&mut self, gc: f32, gene: Option<String>, feature_type: Option<String>) {
         self.depths.push(0);
         self.sum_gc += gc as f64;
         // All QC sums remain 0 for zero-depth positions.
         if self.gene.is_none() {
             self.gene = gene;
+        }
+        if self.feature_type.is_none() {
+            self.feature_type = feature_type;
         }
     }
 
@@ -508,6 +554,8 @@ impl IntervalAccumulator {
             end:          named.end as i64,
             interval_name: named.name.clone(),
             gene:         self.gene.clone(),
+            feature_type: self.feature_type.clone(),
+            exon_number:  None,
             n_bases,
             mean_depth,
             median_depth,
@@ -721,8 +769,11 @@ fn build_record(
     pos: i64,
     t: &CoverageTally,
     gc: f32,
+    track_values: Vec<Option<f32>>,
     on_target: Option<bool>,
     gene: Option<String>,
+    feature_type: Option<String>,
+    exon_number: Option<i32>,
     args: &CoverageArgs,
 ) -> CoverageRecord {
     let (mean_mapq, frac_mapq0, frac_low_mapq) = mapq_stats(&t.mapqs_non_dup, args.min_map_qual);
@@ -767,8 +818,11 @@ fn build_record(
         max_insert_size: max_ins,
         n_insert_size_obs: n_ins,
         gc_content: gc,
+        track_values,
         on_target,
         gene,
+        feature_type,
+        exon_number,
         read_type: args.read_type,
         pipeline: args.pipeline,
         batch: args.batch.clone(),
@@ -780,8 +834,11 @@ fn build_zero_record(
     chrom: &str,
     pos: i64,
     gc: f32,
+    track_values: Vec<Option<f32>>,
     on_target: Option<bool>,
     gene: Option<String>,
+    feature_type: Option<String>,
+    exon_number: Option<i32>,
     args: &CoverageArgs,
 ) -> CoverageRecord {
     CoverageRecord {
@@ -811,8 +868,11 @@ fn build_zero_record(
         max_insert_size: 0,
         n_insert_size_obs: 0,
         gc_content: gc,
+        track_values,
         on_target,
         gene,
+        feature_type,
+        exon_number,
         read_type: args.read_type,
         pipeline: args.pipeline,
         batch: args.batch.clone(),

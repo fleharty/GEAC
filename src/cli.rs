@@ -370,6 +370,12 @@ pub struct CoverageArgs {
     /// Requires --targets. When omitted, no interval file is written.
     #[arg(long)]
     pub intervals_output: Option<PathBuf>,
+
+    /// Pre-computed annotation track in BEDGraph format, as NAME:path (repeatable).
+    /// Each NAME becomes a nullable Float32 column in the output Parquet.
+    /// Example: --track gem150:gem_150mer.bedgraph --track umap50:umap_k50.bedgraph
+    #[arg(long = "track", value_name = "NAME:FILE")]
+    pub tracks: Vec<String>,
 }
 
 // Allow clap to parse ReadType and Pipeline from strings

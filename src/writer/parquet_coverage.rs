@@ -19,15 +19,19 @@ const BATCH_SIZE: usize = 100_000;
 ///
 /// Buffers records in memory and flushes to disk in fixed-size batches,
 /// keeping peak memory proportional to BATCH_SIZE rather than total output size.
+///
+/// `track_names` determines the dynamic track columns inserted after `gc_content`
+/// in the schema. Pass an empty slice when no `--track` flags were given.
 pub struct CoverageWriter {
-    writer: ArrowWriter<std::fs::File>,
-    schema: Arc<Schema>,
-    buf:    Vec<CoverageRecord>,
+    writer:      ArrowWriter<std::fs::File>,
+    schema:      Arc<Schema>,
+    track_names: Vec<String>,
+    buf:         Vec<CoverageRecord>,
 }
 
 impl CoverageWriter {
-    pub fn new(output: &Path) -> Result<Self> {
-        let schema = coverage_schema();
+    pub fn new(output: &Path, track_names: &[String]) -> Result<Self> {
+        let schema = coverage_schema(track_names);
         let file = std::fs::File::create(output)
             .with_context(|| format!("failed to create output file: {}", output.display()))?;
         let props = WriterProperties::builder()
@@ -35,7 +39,12 @@ impl CoverageWriter {
             .build();
         let writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))
             .context("failed to create Parquet writer")?;
-        Ok(Self { writer, schema, buf: Vec::with_capacity(BATCH_SIZE) })
+        Ok(Self {
+            writer,
+            schema,
+            track_names: track_names.to_vec(),
+            buf: Vec::with_capacity(BATCH_SIZE),
+        })
     }
 
     pub fn push(&mut self, record: CoverageRecord) -> Result<()> {
@@ -50,7 +59,7 @@ impl CoverageWriter {
         if self.buf.is_empty() {
             return Ok(());
         }
-        let batch = records_to_batch(&self.buf, Arc::clone(&self.schema))?;
+        let batch = records_to_batch(&self.buf, Arc::clone(&self.schema), &self.track_names)?;
         self.writer.write(&batch).context("failed to write record batch")?;
         self.buf.clear();
         Ok(())
@@ -63,8 +72,8 @@ impl CoverageWriter {
     }
 }
 
-fn coverage_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
+fn coverage_schema(track_names: &[String]) -> Arc<Schema> {
+    let mut fields = vec![
         Field::new("sample_id",          DataType::Utf8,    false),
         Field::new("chrom",              DataType::Utf8,    false),
         Field::new("pos",                DataType::Int64,   false),
@@ -98,17 +107,33 @@ fn coverage_schema() -> Arc<Schema> {
         Field::new("n_insert_size_obs",  DataType::Int32,   false),
         // GC content
         Field::new("gc_content",         DataType::Float32, false),
+    ];
+
+    // Dynamic track columns (nullable Float32, one per --track flag).
+    for name in track_names {
+        fields.push(Field::new(name.as_str(), DataType::Float32, true));
+    }
+
+    fields.extend([
         // Annotations (nullable)
         Field::new("on_target",          DataType::Boolean, true),
         Field::new("gene",               DataType::Utf8,    true),
+        Field::new("feature_type",       DataType::Utf8,    true),
+        Field::new("exon_number",        DataType::Int32,   true),
         // Provenance
         Field::new("read_type",          DataType::Utf8,    false),
         Field::new("pipeline",           DataType::Utf8,    false),
         Field::new("batch",              DataType::Utf8,    true),
-    ]))
+    ]);
+
+    Arc::new(Schema::new(fields))
 }
 
-fn records_to_batch(records: &[CoverageRecord], schema: Arc<Schema>) -> Result<RecordBatch> {
+fn records_to_batch(
+    records: &[CoverageRecord],
+    schema: Arc<Schema>,
+    track_names: &[String],
+) -> Result<RecordBatch> {
     let sample_id: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.sample_id.as_str()),
     ));
@@ -153,6 +178,12 @@ fn records_to_batch(records: &[CoverageRecord], schema: Arc<Schema>) -> Result<R
     let gene: ArrayRef = Arc::new(StringArray::from(
         records.iter().map(|r| r.gene.as_deref()).collect::<Vec<_>>(),
     ));
+    let feature_type: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.feature_type.as_deref()).collect::<Vec<_>>(),
+    ));
+    let exon_number: ArrayRef = Arc::new(Int32Array::from(
+        records.iter().map(|r| r.exon_number).collect::<Vec<_>>(),
+    ));
 
     let read_type: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.read_type.to_string()),
@@ -164,20 +195,27 @@ fn records_to_batch(records: &[CoverageRecord], schema: Arc<Schema>) -> Result<R
         records.iter().map(|r| r.batch.as_deref()).collect::<Vec<_>>(),
     ));
 
-    RecordBatch::try_new(
-        schema,
-        vec![
-            sample_id, chrom, pos, end, bin_n,
-            total_depth, min_depth, max_depth, fwd_depth, rev_depth,
-            raw_read_depth, frac_dup,
-            overlap_depth, frac_overlap,
-            mean_mapq, frac_mapq0, frac_low_mapq,
-            mean_base_qual, min_base_qual_obs, max_base_qual_obs, frac_low_bq,
-            mean_insert_size, min_insert_size, max_insert_size, n_insert_size_obs,
-            gc_content,
-            on_target, gene,
-            read_type, pipeline, batch,
-        ],
-    )
-    .context("failed to create Arrow record batch")
+    // Build the column list in schema order.
+    let mut columns: Vec<ArrayRef> = vec![
+        sample_id, chrom, pos, end, bin_n,
+        total_depth, min_depth, max_depth, fwd_depth, rev_depth,
+        raw_read_depth, frac_dup,
+        overlap_depth, frac_overlap,
+        mean_mapq, frac_mapq0, frac_low_mapq,
+        mean_base_qual, min_base_qual_obs, max_base_qual_obs, frac_low_bq,
+        mean_insert_size, min_insert_size, max_insert_size, n_insert_size_obs,
+        gc_content,
+    ];
+
+    // Dynamic track columns: one Float32 nullable column per track.
+    for (i, _name) in track_names.iter().enumerate() {
+        let col: ArrayRef = Arc::new(Float32Array::from(
+            records.iter().map(|r| r.track_values.get(i).copied().flatten()).collect::<Vec<_>>(),
+        ));
+        columns.push(col);
+    }
+
+    columns.extend([on_target, gene, feature_type, exon_number, read_type, pipeline, batch]);
+
+    RecordBatch::try_new(schema, columns).context("failed to create Arrow record batch")
 }

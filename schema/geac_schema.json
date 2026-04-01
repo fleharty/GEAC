@@ -127,7 +127,9 @@
         "bin_n",
         "batch",
         "on_target",
-        "gene"
+        "gene",
+        "feature_type",
+        "exon_number"
       ]
     },
     "geac_metadata": {
