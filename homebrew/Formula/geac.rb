@@ -38,6 +38,7 @@ class Geac < Formula
       "numpy>=1.26",
       "scipy>=1.13",
       "scikit-learn>=1.5",
+      "pytz>=2024.1",
       "google-cloud-storage",
       "google-auth"
 

@@ -85,7 +85,7 @@ def _write_alt_db(path: str) -> None:
             samples_rows BIGINT
         );
         INSERT INTO geac_metadata VALUES (
-            'duckdb-v2', '0.3.17', current_timestamp, 'geac merge', '/tmp/cohort.duckdb',
+            'duckdb-v2', '0.3.18', current_timestamp, 'geac merge', '/tmp/cohort.duckdb',
             'macos', 'arm64', 'unix',
             1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1
         );
@@ -159,7 +159,7 @@ def _write_coverage_db(path: str) -> None:
             samples_rows BIGINT
         );
         INSERT INTO geac_metadata VALUES (
-            'duckdb-v2', '0.3.17', current_timestamp, 'geac merge', '/tmp/coverage.duckdb',
+            'duckdb-v2', '0.3.18', current_timestamp, 'geac merge', '/tmp/coverage.duckdb',
             'macos', 'arm64', 'unix',
             0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0
         );
@@ -200,7 +200,7 @@ class TestDataSource:
         assert ds.has_optional_table("pon_evidence") is False
         assert ds.required_columns_missing() == []
         assert ds.distinct_values("sample_id") == ["sample1"]
-        assert ds.db_version == "0.3.17"
+        assert ds.db_version == "0.3.18"
         assert ds.db_schema_version == "duckdb-v2"
         assert list(ds.metadata_header()["schema_version"]) == ["duckdb-v2"]
         assert list(ds.metadata_inputs().columns) == []
@@ -215,7 +215,7 @@ class TestDataSource:
         assert ds.required_columns_missing() == []
         assert ds.has_column("bin_n") is True
         assert ds.has_non_null("gene") is True
-        assert ds.db_version == "0.3.17"
+        assert ds.db_version == "0.3.18"
         assert ds.db_schema_version == "duckdb-v2"
         assert list(ds.metadata_header()["schema_version"]) == ["duckdb-v2"]
 
