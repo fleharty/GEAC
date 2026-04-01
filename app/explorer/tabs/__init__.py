@@ -3,6 +3,7 @@ from . import duplex_simplex
 from . import error_spectrum
 from . import overlap_agreement
 from . import panel_of_normals
+from . import pipeline_comparison
 from . import reads
 from . import strand_bias
 from . import tumor_normal
@@ -18,4 +19,5 @@ TAB_MODULES = (
     duplex_simplex,
     tumor_normal,
     panel_of_normals,
+    pipeline_comparison,
 )

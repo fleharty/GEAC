@@ -1441,7 +1441,7 @@ _r_join = f"""
 """
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon = st.tabs(
+tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon, tab_pipeline = st.tabs(
     [module.LABEL for module in TAB_MODULES],
     key="main_tabs",
 )
@@ -5009,3 +5009,300 @@ with tab_pon:
                     width="stretch",
                     hide_index=True,
                 )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tab 10 — Pipeline comparison
+# ──────────────────────────────────────────────────────────────────────────────
+with tab_pipeline:
+    if not data_source.is_duckdb:
+        st.info(
+            "Pipeline comparison requires a merged DuckDB file. "
+            "Run `geac collect` twice with different `--pipeline` values and the same "
+            "`--sample-id`, then `geac merge` both Parquets into one DuckDB."
+        )
+    else:
+        _pc_pipelines = data_source.distinct_values("pipeline")
+        if len(_pc_pipelines) < 2:
+            st.info(
+                "Pipeline comparison requires at least 2 distinct `pipeline` values in the database. "
+                f"This database contains only: {', '.join(str(p) for p in _pc_pipelines)}. "
+                "Re-run `geac collect` with a different `--pipeline` value for the same sample "
+                "and merge both Parquets into one DuckDB."
+            )
+        else:
+            st.caption(
+                "Compare the same sample processed through two different pipelines. "
+                "All active sidebar filters (chromosome, sample, VAF, etc.) are applied to both pipelines."
+            )
+
+            # ── Pipeline selectors ─────────────────────────────────────────────
+            _pc_col1, _pc_col2 = st.columns(2)
+            _pc_pipe_a = _pc_col1.selectbox(
+                "Pipeline A", _pc_pipelines, index=0, key="pipe_cmp_a"
+            )
+            _pc_pipe_b_opts = [p for p in _pc_pipelines if p != _pc_pipe_a]
+            _pc_pipe_b = _pc_col2.selectbox(
+                "Pipeline B", _pc_pipe_b_opts, index=0, key="pipe_cmp_b"
+            )
+
+            _pc_wa = " AND ".join(
+                conditions + [f"pipeline = '{_sql_str(str(_pc_pipe_a))}'"]
+            ) if conditions else f"pipeline = '{_sql_str(str(_pc_pipe_a))}'"
+            _pc_wb = " AND ".join(
+                conditions + [f"pipeline = '{_sql_str(str(_pc_pipe_b))}'"]
+            ) if conditions else f"pipeline = '{_sql_str(str(_pc_pipe_b))}'"
+
+            # ── Build FULL OUTER JOIN dataset once, reused by all views ───────
+            _pc_df = con.execute(f"""
+                WITH a AS (
+                    SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                           ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                           total_depth,
+                           trinuc_context, ref_allele
+                    FROM {table_expr}
+                    WHERE {_pc_wa}
+                ),
+                b AS (
+                    SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                           ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                           total_depth
+                    FROM {table_expr}
+                    WHERE {_pc_wb}
+                )
+                SELECT
+                    COALESCE(a.sample_id,    b.sample_id)    AS sample_id,
+                    COALESCE(a.chrom,        b.chrom)        AS chrom,
+                    COALESCE(a.pos,          b.pos)          AS pos,
+                    COALESCE(a.alt_allele,   b.alt_allele)   AS alt_allele,
+                    COALESCE(a.variant_type, b.variant_type) AS variant_type,
+                    a.vaf         AS vaf_a,
+                    b.vaf         AS vaf_b,
+                    a.total_depth AS depth_a,
+                    b.total_depth AS depth_b,
+                    a.trinuc_context,
+                    a.ref_allele,
+                    CASE
+                        WHEN a.chrom IS NOT NULL AND b.chrom IS NOT NULL THEN 'shared'
+                        WHEN a.chrom IS NOT NULL                         THEN 'only_a'
+                        ELSE                                                  'only_b'
+                    END AS concordance
+                FROM a
+                FULL OUTER JOIN b
+                    ON  a.sample_id  = b.sample_id
+                    AND a.chrom      = b.chrom
+                    AND a.pos        = b.pos
+                    AND a.alt_allele = b.alt_allele
+            """).df()
+
+            if _pc_df.empty:
+                st.info("No records for either pipeline under the current filters.")
+            else:
+                _pc_label_map = {
+                    "shared": "Shared",
+                    "only_a": f"Only {_pc_pipe_a}",
+                    "only_b": f"Only {_pc_pipe_b}",
+                }
+                _pc_df["concordance_label"] = _pc_df["concordance"].map(_pc_label_map)
+                _pc_shared = _pc_df[_pc_df["concordance"] == "shared"]
+
+                # ── View 1: Concordance summary ────────────────────────────────
+                st.subheader("Locus concordance")
+
+                _pc_n_shared = int((_pc_df["concordance"] == "shared").sum())
+                _pc_n_only_a = int((_pc_df["concordance"] == "only_a").sum())
+                _pc_n_only_b = int((_pc_df["concordance"] == "only_b").sum())
+                _pc_m1, _pc_m2, _pc_m3 = st.columns(3)
+                _pc_m1.metric("Shared loci", f"{_pc_n_shared:,}")
+                _pc_m2.metric(f"Only {_pc_pipe_a}", f"{_pc_n_only_a:,}")
+                _pc_m3.metric(f"Only {_pc_pipe_b}", f"{_pc_n_only_b:,}")
+
+                _pc_conc_counts = (
+                    _pc_df.groupby(["concordance_label", "variant_type"])
+                    .size()
+                    .reset_index(name="n_loci")
+                )
+                _pc_conc_order = ["Shared", f"Only {_pc_pipe_a}", f"Only {_pc_pipe_b}"]
+                _pc_conc_chart = (
+                    alt.Chart(_pc_conc_counts)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("concordance_label:N", title=None, sort=_pc_conc_order),
+                        y=alt.Y("n_loci:Q", title="Loci"),
+                        color=alt.Color("variant_type:N", title="Variant type"),
+                        tooltip=["concordance_label", "variant_type", "n_loci"],
+                    )
+                    .properties(height=280)
+                )
+                st.altair_chart(_pc_conc_chart, width="stretch")
+
+                st.divider()
+
+                # ── View 2: VAF correlation ────────────────────────────────────
+                st.subheader("VAF correlation (shared loci)")
+
+                if _pc_shared.empty:
+                    st.info("No shared loci for current filters.")
+                else:
+                    _pc_diag = (
+                        alt.Chart(pd.DataFrame({"x": [0.0, 1.0], "y": [0.0, 1.0]}))
+                        .mark_line(color="gray", strokeDash=[4, 4], opacity=0.6)
+                        .encode(x="x:Q", y="y:Q")
+                    )
+                    _pc_vaf_scatter = (
+                        alt.Chart(_pc_shared)
+                        .mark_circle(opacity=0.5, size=40)
+                        .encode(
+                            x=alt.X("vaf_a:Q", title=f"VAF — {_pc_pipe_a}",
+                                    scale=alt.Scale(domain=[0, 1])),
+                            y=alt.Y("vaf_b:Q", title=f"VAF — {_pc_pipe_b}",
+                                    scale=alt.Scale(domain=[0, 1])),
+                            color=alt.Color("variant_type:N", title="Variant type"),
+                            tooltip=[
+                                "sample_id", "chrom", "pos", "alt_allele", "variant_type",
+                                alt.Tooltip("vaf_a:Q", title=f"VAF ({_pc_pipe_a})", format=".4f"),
+                                alt.Tooltip("vaf_b:Q", title=f"VAF ({_pc_pipe_b})", format=".4f"),
+                            ],
+                        )
+                        .properties(width=450, height=400)
+                        .interactive()
+                    )
+                    st.altair_chart(_pc_diag + _pc_vaf_scatter, width="stretch")
+
+                    if len(_pc_shared) >= 2:
+                        _pc_r = _pc_shared["vaf_a"].corr(_pc_shared["vaf_b"])
+                        st.caption(
+                            f"Pearson r = {_pc_r:.4f} across {len(_pc_shared):,} shared loci. "
+                            "Points off the diagonal are discordant calls."
+                        )
+
+                st.divider()
+
+                # ── View 3: Unique-to-pipeline loci table ──────────────────────
+                st.subheader("Loci unique to one pipeline")
+                st.caption(
+                    "One pipeline calls these loci; the other does not. "
+                    "Highest-priority candidates for manual review."
+                )
+
+                _pc_uniq = _pc_df[_pc_df["concordance"] != "shared"].copy()
+                _pc_uniq["pipeline"] = _pc_uniq["concordance"].map(
+                    {"only_a": _pc_pipe_a, "only_b": _pc_pipe_b}
+                )
+                _pc_uniq_filter = st.radio(
+                    "Show",
+                    ["Both", f"Only {_pc_pipe_a}", f"Only {_pc_pipe_b}"],
+                    horizontal=True,
+                    key="pipe_cmp_uniq_filter",
+                )
+                if _pc_uniq_filter == f"Only {_pc_pipe_a}":
+                    _pc_uniq_show = _pc_uniq[_pc_uniq["concordance"] == "only_a"]
+                elif _pc_uniq_filter == f"Only {_pc_pipe_b}":
+                    _pc_uniq_show = _pc_uniq[_pc_uniq["concordance"] == "only_b"]
+                else:
+                    _pc_uniq_show = _pc_uniq
+
+                _pc_uniq_cols = [c for c in [
+                    "pipeline", "sample_id", "chrom", "pos", "alt_allele",
+                    "variant_type", "vaf_a", "vaf_b", "depth_a", "depth_b",
+                ] if c in _pc_uniq_show.columns]
+
+                if _pc_uniq_show.empty:
+                    st.success("No unique loci for current filter selection.")
+                else:
+                    st.dataframe(
+                        _pc_uniq_show[_pc_uniq_cols]
+                        .rename(columns={
+                            "vaf_a":   f"vaf_{_pc_pipe_a}",
+                            "vaf_b":   f"vaf_{_pc_pipe_b}",
+                            "depth_a": f"depth_{_pc_pipe_a}",
+                            "depth_b": f"depth_{_pc_pipe_b}",
+                        })
+                        .sort_values(["pipeline", "chrom", "pos"]),
+                        width="stretch",
+                        hide_index=True,
+                        key="pipe_cmp_uniq_table",
+                    )
+
+                st.divider()
+
+                # ── View 4: SBS96 spectrum side-by-side ────────────────────────
+                st.subheader("SBS96 error spectrum")
+
+                if not _has_data("trinuc_context"):
+                    st.info(
+                        "SBS96 spectrum requires the `trinuc_context` column. "
+                        "Re-run `geac collect` with a reference FASTA."
+                    )
+                else:
+                    def _pc_sbs96(pipe_where: str):
+                        _raw = con.execute(f"""
+                            SELECT trinuc_context, ref_allele, alt_allele, COUNT(*) AS count
+                            FROM {table_expr}
+                            WHERE {pipe_where}
+                              AND variant_type = 'SNV'
+                              AND trinuc_context IS NOT NULL
+                              AND length(trinuc_context) = 3
+                            GROUP BY trinuc_context, ref_allele, alt_allele
+                        """).df()
+                        return _to_spec96_strat(_raw)
+
+                    _pc_s96_a, _pc_total_a = _pc_sbs96(_pc_wa)
+                    _pc_s96_b, _pc_total_b = _pc_sbs96(_pc_wb)
+
+                    if _pc_s96_a is None or _pc_s96_b is None:
+                        st.info("Insufficient SNV data for spectrum comparison.")
+                    else:
+                        _pc_sc1, _pc_sc2 = st.columns(2)
+                        with _pc_sc1:
+                            st.markdown(f"**{_pc_pipe_a}** ({_pc_total_a:,} SNVs)")
+                            st.altair_chart(
+                                _strat_sbs96_chart(_pc_s96_a, _pc_pipe_a),
+                                width="stretch",
+                            )
+                        with _pc_sc2:
+                            st.markdown(f"**{_pc_pipe_b}** ({_pc_total_b:,} SNVs)")
+                            st.altair_chart(
+                                _strat_sbs96_chart(_pc_s96_b, _pc_pipe_b),
+                                width="stretch",
+                            )
+
+                st.divider()
+
+                # ── View 5: Depth comparison ───────────────────────────────────
+                st.subheader("Depth comparison (shared loci)")
+
+                if _pc_shared.empty:
+                    st.info("No shared loci for current filters.")
+                else:
+                    _pc_depth_max = int(
+                        max(_pc_shared["depth_a"].max(), _pc_shared["depth_b"].max())
+                    )
+                    _pc_depth_diag = (
+                        alt.Chart(
+                            pd.DataFrame({"x": [0, _pc_depth_max], "y": [0, _pc_depth_max]})
+                        )
+                        .mark_line(color="gray", strokeDash=[4, 4], opacity=0.6)
+                        .encode(x="x:Q", y="y:Q")
+                    )
+                    _pc_depth_scatter = (
+                        alt.Chart(_pc_shared)
+                        .mark_circle(opacity=0.5, size=40)
+                        .encode(
+                            x=alt.X("depth_a:Q", title=f"Total depth — {_pc_pipe_a}"),
+                            y=alt.Y("depth_b:Q", title=f"Total depth — {_pc_pipe_b}"),
+                            color=alt.Color("variant_type:N", title="Variant type"),
+                            tooltip=[
+                                "sample_id", "chrom", "pos", "alt_allele",
+                                alt.Tooltip("depth_a:Q", title=f"Depth ({_pc_pipe_a})"),
+                                alt.Tooltip("depth_b:Q", title=f"Depth ({_pc_pipe_b})"),
+                            ],
+                        )
+                        .properties(width=450, height=350)
+                        .interactive()
+                    )
+                    st.altair_chart(_pc_depth_diag + _pc_depth_scatter, width="stretch")
+                    st.caption(
+                        f"Points above the diagonal: higher depth in {_pc_pipe_b}. "
+                        f"Points below: higher depth in {_pc_pipe_a}. "
+                        "Systematic offset suggests different duplicate-collapsing or overlap behaviour."
+                    )

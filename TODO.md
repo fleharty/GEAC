@@ -195,7 +195,13 @@ Audit document: `docs/per-read-filter-audit.md`.
   - [x] Step 4: SNV count bar chart — n_snv per sample, stacked/colored by SBS6 substitution type breakdown
   - [x] Step 5: SBS96 heatmap — samples as rows, 96 trinucleotide contexts as columns, color = normalized count; reveals samples with unusual mutational profiles
 - [x] NMF decomposition — fit the per-sample SBS96 spectrum against COSMIC reference signatures using NNLS; show the largest contributing signatures and their weights
-- [ ] Save/load filter state — allow users to export the current sidebar filter state to a JSON file and reload it in a future session; covers all locus-level filters (variant type, VAF range, depth range, strand balance, repeat filters, on-target, gene, sample selection) and per-read filters (family size, cycle, MAPQ, insert size) when `alt_reads` is present; saved state should be human-readable and editable; load via sidebar file uploader with validation that required columns exist in the loaded DB
+- [x] Save/load filter state — allow users to export the current sidebar filter state to a JSON file and reload it in a future session; covers all locus-level filters (variant type, VAF range, depth range, strand balance, repeat filters, on-target, gene, sample selection) and per-read filters (family size, cycle, MAPQ, insert size) when `alt_reads` is present; saved state should be human-readable and editable; load via sidebar file uploader with validation that required columns exist in the loaded DB
+- [x] Pipeline comparison tab (DuckDB only) — side-by-side analysis of the same sample processed through two different pipelines (e.g. fgbio vs dragen); both pipelines present as separate rows in `alt_bases` distinguished by the `pipeline` column; intended workflow: run `geac collect` twice with `--pipeline fgbio` / `--pipeline dragen` and the same `--sample-id`, then `geac merge` both Parquets into one DuckDB
+  - [x] Step 1: Locus concordance summary — counts of loci unique to pipeline A, unique to pipeline B, and shared by both; broken down by variant type (SNV / insertion / deletion)
+  - [x] Step 2: VAF correlation scatter — one point per shared locus; x = VAF from pipeline A, y = VAF from pipeline B; points off the diagonal are discordant calls; color by variant type; Pearson r displayed
+  - [x] Step 3: Unique-to-pipeline loci table — loci called by one pipeline but absent in the other; radio filter by pipeline; columns include VAF and depth for the calling pipeline
+  - [x] Step 4: SBS96 spectrum side-by-side — per-pipeline trinucleotide profiles in adjacent panels; disagreement in mutation context distribution signals systematic pipeline-specific artefacts
+  - [x] Step 5: Depth comparison scatter — `total_depth` per locus for pipeline A vs B; systematic depth differences indicate different duplicate-collapsing or overlap behaviour between pipelines
 
 ## Coverage Analysis
 
