@@ -21,6 +21,8 @@ version 1.0
 ##   pipelines             - (optional) per-sample array of fgbio|dragen|raw; defaults to "fgbio" for all
 ##   targets               - (optional) BED or Picard interval list; when provided, zero-depth
 ##                           positions within targets are included in output (dropout captured)
+##   emit_intervals        - when true and targets is provided, also emit per-interval summary
+##                           Parquet (one row per target interval); default false
 ##   gene_annotations      - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
 ##   region                - (optional) restrict all samples to a genomic region
 ##   min_map_qual          - minimum mapping quality for total_depth (default 0)
@@ -33,8 +35,9 @@ version 1.0
 ##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##
 ## Outputs:
-##   coverage_parquets     - Per-sample coverage Parquet files from geac coverage
-##   cohort_db             - Merged cohort DuckDB from geac merge
+##   coverage_parquets          - Per-sample per-position coverage Parquet files
+##   coverage_intervals_parquets - Per-sample per-interval summary Parquet files (only when emit_intervals = true)
+##   cohort_db                  - Merged cohort DuckDB from geac merge
 
 workflow GeacCoverage {
 
@@ -52,6 +55,7 @@ workflow GeacCoverage {
         Array[String]? pipelines    # optional; defaults to "fgbio" for all
 
         File?   targets
+        Boolean emit_intervals = false
         File?   gene_annotations
         String? region
         Int     min_map_qual  = 0
@@ -94,6 +98,7 @@ workflow GeacCoverage {
                 sample_id             = this_sample_id,
                 batch                 = this_batch,
                 targets               = targets,
+                emit_intervals        = emit_intervals,
                 gene_annotations      = gene_annotations,
                 region                = region,
                 min_map_qual          = min_map_qual,
@@ -109,19 +114,24 @@ workflow GeacCoverage {
         }
     }
 
+    # Collect interval Parquets from samples that produced them (non-null outputs).
+    Array[File] interval_parquets = select_all(Coverage.coverage_intervals_parquet)
+
     call Merge {
         input:
-            parquets     = Coverage.coverage_parquet,
-            cohort_name  = cohort_name,
-            docker_image = docker_image,
-            memory_gb    = merge_memory_gb,
-            disk_gb      = merge_disk_gb,
-            preemptible  = preemptible,
+            parquets           = Coverage.coverage_parquet,
+            interval_parquets  = interval_parquets,
+            cohort_name        = cohort_name,
+            docker_image       = docker_image,
+            memory_gb          = merge_memory_gb,
+            disk_gb            = merge_disk_gb,
+            preemptible        = preemptible,
     }
 
     output {
-        Array[File] coverage_parquets = Coverage.coverage_parquet
-        File        cohort_db         = Merge.cohort_db
+        Array[File]  coverage_parquets           = Coverage.coverage_parquet
+        Array[File]  coverage_intervals_parquets = interval_parquets
+        File         cohort_db                   = Merge.cohort_db
     }
 }
 
@@ -140,6 +150,7 @@ task Coverage {
         String? sample_id
         String? batch
         File?   targets
+        Boolean emit_intervals
         File?   gene_annotations
         String? region
         Int     min_map_qual
@@ -155,8 +166,12 @@ task Coverage {
         Int    preemptible
     }
 
-    String stem   = sub(basename(input_bam), "\\.(bam|cram)$", "")
-    String output_name = stem + ".coverage.parquet"
+    String stem            = sub(basename(input_bam), "\\.(bam|cram)$", "")
+    String output_name     = stem + ".coverage.parquet"
+    String intervals_name  = stem + ".coverage.intervals.parquet"
+
+    # Only pass --intervals-output when both targets and emit_intervals are set.
+    Boolean do_intervals = emit_intervals && defined(targets)
 
     command <<<
         set -euo pipefail
@@ -177,11 +192,13 @@ task Coverage {
             ~{"--batch "            + batch} \
             ~{"--targets "          + targets} \
             ~{"--gene-annotations " + gene_annotations} \
-            ~{"--region "           + region}
+            ~{"--region "           + region} \
+            ~{if do_intervals then "--intervals-output " + intervals_name else ""}
     >>>
 
     output {
-        File coverage_parquet = output_name
+        File     coverage_parquet           = output_name
+        File?    coverage_intervals_parquet = if do_intervals then intervals_name else None
     }
 
     runtime {
@@ -197,6 +214,7 @@ task Merge {
 
     input {
         Array[File] parquets
+        Array[File] interval_parquets
         String      cohort_name
 
         String docker_image
@@ -212,7 +230,8 @@ task Merge {
 
         geac merge \
             --output ~{output_db} \
-            ~{sep=" " parquets}
+            ~{sep=" " parquets} \
+            ~{sep=" " interval_parquets}
     >>>
 
     output {
