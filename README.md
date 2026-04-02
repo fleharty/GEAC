@@ -354,6 +354,8 @@ Key options:
 | `--min-depth` | `0` | Only emit positions with depth ≥ this value |
 | `--bin-size` | `1` | Merge consecutive positions into bins of this size |
 | `--adaptive-depth-threshold` | — | Positions with depth below this value are emitted at single-base resolution (`bin_size=1`) and split any in-progress bin, preserving precision in low-coverage regions |
+| `--intervals-output` | — | Write a per-interval summary Parquet alongside the main output (requires `--targets`); used by `geac merge` to populate the `coverage_intervals` DuckDB table |
+| `--track NAME:FILE` | — | Pre-computed BEDGraph annotation track (repeatable); each `NAME` becomes a nullable `Float32` column in the output Parquet (e.g. `--track gem150:gem_150mer.bedgraph`) |
 
 The output Parquet is routed to the `coverage` table by `geac merge` when its filename
 ends in `.coverage.parquet`.
@@ -456,9 +458,14 @@ Features:
     summary; loci classified as PoN clean (not seen), Rare in PoN (< 10% of samples), or
     Common in PoN (≥ 10%); classification bar chart, tumor VAF vs PoN sample fraction
     scatter, max PoN VAF histogram, and data table sorted by PoN sample fraction
+  - *Read-type comparison* (DuckDB only, requires ≥ 2 distinct `read_type` values) —
+    side-by-side analysis of two sequencing strategies (e.g. duplex vs. simplex) on the
+    same cohort: locus concordance summary tiles and stacked bar; VAF density overlay;
+    VAF correlation scatter with Pearson r; strand balance density; SBS96 side-by-side
+    spectrum; and a unique-loci table filtered by read type
 - **Per-read filters** (DuckDB only, requires `--reads-output`) — when an `alt_reads`
-  table is present, a "Per-read filters" section appears in the sidebar with three
-  range sliders, each with an include/exclude toggle:
+  table is present, a "Per-read filters" section appears in the sidebar with four
+  range sliders. All filters use include-only (BETWEEN) semantics:
   - *Family size* — filter by fgbio `cD` tag (total molecules per consensus read).
     Raising the minimum excludes singleton families that are likely PCR or sequencing
     errors. If a locus's alt count drops to zero after filtering, the locus is removed
@@ -468,8 +475,10 @@ Features:
   - *Cycle number* — filter by 1-based sequencing cycle (position within the read).
     Variants clustered at high cycle numbers (near the read end) are a common
     alignment artefact; lowering the upper bound removes these reads.
-  - *Mapping quality* — filter by per-read MAPQ. Excluding low-MAPQ reads removes
+  - *Mapping quality* — filter by per-read MAPQ. Raising the minimum removes
     potential multi-mapping artefacts at repetitive loci.
+  - *Insert size* — filter by template insert size (|TLEN|). Activating this filter
+    implicitly excludes unpaired reads (those with no insert size recorded).
 
   Two filter modes are available (controlled by the "Recompute alt count" checkbox):
   - **Locus-inclusion mode** (default) — loci where no reads pass the filter are
@@ -486,6 +495,17 @@ Features:
   to enable "Download IGV session" buttons throughout the app. Downloads a zip containing
   `session.xml` (BAM tracks + BED track) and `positions.bed` (one row per unique locus).
   Sessions are capped at 5 samples by default with an override option.
+
+### Coverage Explorer (`geac-coverage-explorer`)
+
+The Coverage Explorer provides interactive analysis of `geac coverage` output. It accepts a merged cohort DuckDB (with a `coverage` table) or a single `.coverage.parquet` file. Six tabs are available:
+
+- **Summary** — per-sample depth table, mean-depth bar chart, and MAPQ/duplication QC fractions
+- **Depth Distribution** — per-sample depth histograms and fraction-at-depth-threshold summaries
+- **GC Bias** — mean depth vs GC content scatter per sample; reveals systematic GC-related coverage variation
+- **Low Coverage** — positions below a user-set depth threshold across a user-set fraction of samples; gene bar chart of affected loci; gene coverage summary table (all genes ranked by mean depth with one-click navigation to the Depth Profile)
+- **Depth Profile** — aggregate depth across a selected gene or genomic region across all selected samples. The mean depth line is colored by mean MAPQ or GC content (selectable) — red/orange on the mean MAPQ scale indicates depth dips driven by poor mapping rather than true under-coverage. When `coverage_intervals` data is present (requires `--targets` + `--intervals-output` + `--gene-annotations` at collection time), exon/interval boundaries are shown as shaded bands colored by feature type (CDS, UTR, Exon) with exon number labels. The ACMG Secondary Findings v3.2 gene list can be used to quickly filter the gene selector to actionable genes.
+- **IGV** — embedded IGV.js viewer; pre-populated with locus from the Low Coverage tab row click; supports GCS BAMs via ADC token
 
 ### Project config (geac.toml)
 

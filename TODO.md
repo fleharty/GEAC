@@ -10,7 +10,7 @@ All planned `geac coverage` features finished before shipping. Three items gate 
 2. ~~**BEDGraph annotation tracks**~~ ✅ — `src/track.rs` with `AnnotationTrack`/`TrackSet`; binary-search lookup; chr-prefix bridging; `--track NAME:FILE` repeatable flag; dynamic Arrow schema columns in coverage Parquet.
 3. ~~**Read-type comparison view**~~ ✅ — `tab_read_type` in Explorer: locus concordance tiles + stacked bar, VAF density overlay, VAF correlation scatter, strand balance density, SBS96 side-by-side, unique-loci table.
 
-Current version: v0.3.19. All work on `main`.
+Current version: v0.4.0. All work on `main`.
 
 ## Rust / CLI
 
@@ -549,26 +549,36 @@ WHERE c.frac_mapq0 > 0.3;
   - Per-exon coverage heatmap (genes as rows, exons as columns, color = mean depth or
     frac_at_30x) — the primary customer-facing view
 
-## Customer-facing Coverage Explorer
+## Customer-facing Coverage Explorer (`app/geac_coverage_explorer.py`)
 
-- [ ] Design `app/geac_coverage_explorer.py` — separate pre-loaded Streamlit app for
-  public panel QC dashboards; config-file-per-panel specifying DuckDB path, panel name,
-  depth thresholds, and which signals to display; no file upload, no authentication
-- [ ] Document panel config schema (`config/panel_example.toml`)
-- [ ] Design longitudinal tracking — `run_id` / `run_date` provenance in coverage schema
-  to support tracking coverage stability across instrument runs and reagent lots
-- [ ] Expand DuckDB provenance metadata:
-  - Extend `geac_metadata` from `(geac_version, created_at)` to a one-row database header
-    with: `schema_version`, `command_line`, platform/OS/arch, input file counts by type,
-    sample count, row counts per table, and optional reference/targets/gene-annotation
-    path + hash fields
-  - Add a new `geac_inputs` table with one row per source artifact merged into the DB:
-    `input_path`, `input_kind`, `source_kind`, `file_size_bytes`, `modified_at`,
-    optional `checksum_sha256`, and optional per-input `sample_count` / `row_count`
-  - Keep `geac_metadata` database-level and `geac_inputs` file-level so provenance stays
-    queryable without making the header table too wide
-  - Add `schema_version` so future DuckDB layout changes are explicit and
-    backward-compatible
+### Done
+- [x] App scaffold: file-path text input, `DataSource.open_coverage()`, version-mismatch warning
+- [x] Sidebar filters: samples, chromosome, gene partial-match, on-target
+- [x] Sidebar IGV integration: manifest path input, `load_manifest`, GCS OAuth token
+- [x] Sidebar Advanced expander: `geac_metadata` and `geac_inputs` display
+- [x] Tab 1 — Summary: per-sample depth table, mean-depth bar chart, QC-fractions grouped bar
+- [x] Tab 2 — Depth distribution: per-sample depth histogram, fraction-at-threshold table
+- [x] Tab 3 — GC bias: mean depth vs GC bin (5% bins) per sample; frac_mapq0 overlay expander
+- [x] Tab 4 — Low coverage: undercovered positions table (depth + fraction-of-samples sliders),
+  gene bar chart with click-to-drill-down, IGV locus link on row select
+- [x] Tab 5 — IGV: embedded IGV.js viewer; BAM/CRAM tracks from manifest; per-track height slider; GCS OAuth
+- [x] Tab 6 — Intervals (DuckDB + coverage_intervals only):
+  - [x] Undercovered intervals table (depth threshold + fraction-of-samples sliders)
+  - [x] GC bias scatter: mean_gc_content vs mean_depth per interval, colored by mean_frac_mapq0
+  - [x] Per-exon heatmap: genes × intervals, color = frac_at_30x; sort and top-N controls
+- [x] `geac_config.py`: TOML config loader for pre-populating paths (data, manifest, genome, etc.)
+- [x] `geac_metadata` and `geac_inputs` DuckDB tables (provenance) — written by `geac merge`
+
+### Still to do
+- [ ] Surface `feature_type` and `exon_number` in the intervals heatmap — now available from
+  v0.4.0; use `exon_number` as the x-axis instead of `interval_name` when present, so exons
+  line up consistently across genes regardless of naming conventions
+- [ ] Surface BEDGraph track columns in the intervals GC scatter — detect any `Float32` columns
+  beyond the fixed schema in `coverage_intervals` and offer them as a color-by selector
+- [ ] `config/panel_example.toml` — example config file for operators deploying the Coverage
+  Explorer for a specific panel; documents all supported `geac.toml` keys with comments
+- [ ] Longitudinal tracking — add `run_id` and `run_date` provenance fields to `CoverageArgs`
+  and `CoverageRecord`; surface a run-over-run depth trend line in the Summary tab
 
 ## Fragmentomics (long-term, low priority)
 

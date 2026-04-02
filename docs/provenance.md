@@ -29,8 +29,8 @@ I/O and wall time, but the checksum is useful for provenance tracking and dedupl
 
 The WDLs expose the same behavior as:
 
-- `input_checksum_sha256 = true` in [wdl/geac_collect.wdl](/Users/fleharty/GEAC-codex/GEAC/wdl/geac_collect.wdl)
-- `input_checksum_sha256 = true` in [wdl/geac_cohort.wdl](/Users/fleharty/GEAC-codex/GEAC/wdl/geac_cohort.wdl)
+- `input_checksum_sha256 = true` in [wdl/geac_collect.wdl](../wdl/geac_collect.wdl)
+- `input_checksum_sha256 = true` in [wdl/geac_cohort.wdl](../wdl/geac_cohort.wdl)
 
 ## Merge-time provenance
 
