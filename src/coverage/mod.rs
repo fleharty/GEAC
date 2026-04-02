@@ -60,6 +60,10 @@ pub fn collect_coverage(
     let has_targets = target_intervals.is_some();
     // When targets are provided, track which positions had reads so we can fill zeros.
     let mut seen: HashSet<(String, i64)> = HashSet::new();
+    // When --fill-zeros is set without targets, use a bitset to track covered positions.
+    // ~375 MB for a 3 Gbp genome; far more efficient than a HashSet at WGS coverage depth.
+    let do_refwide_zero_fill = args.fill_zeros && !has_targets && args.min_depth == 0;
+    let mut covered: Option<CoveredBitset> = if do_refwide_zero_fill { Some(CoveredBitset::new()) } else { None };
 
     // Per-interval accumulators — one per named interval, only when intervals output is requested.
     let do_intervals = args.intervals_output.is_some() && target_intervals.is_some();
@@ -112,6 +116,9 @@ pub fn collect_coverage(
             if has_targets {
                 seen.insert((chrom.clone(), pos));
             }
+            if let Some(ref mut cov) = covered {
+                cov.mark(&chrom, pos);
+            }
             continue;
         }
 
@@ -119,6 +126,9 @@ pub fn collect_coverage(
 
         if has_targets {
             seen.insert((chrom.clone(), pos));
+        }
+        if let Some(ref mut cov) = covered {
+            cov.mark(&chrom, pos);
         }
 
         let record = build_record(&sample_id, &chrom, pos, &tally, gc, track_values, on_target, gene, feature_type, exon_number, args);
@@ -201,6 +211,38 @@ pub fn collect_coverage(
             }
             if let Some(bin) = zero_acc.finish() {
                 writer.push(bin)?;
+            }
+        }
+    }
+
+    // Reference-wide zero-depth fill (--fill-zeros without --targets).
+    if do_refwide_zero_fill {
+        if let Some(ref cov) = covered {
+            let n_contigs = bam_contigs.len();
+            info!(n_contigs, "filling zero-depth positions across reference contigs");
+            let mut zero_ref = ZeroDepthRefReader::open(&args.reference)?;
+            let mut zero_acc = BinAccumulator::new(args.bin_size);
+            for (chrom, chrom_len) in &bam_contigs {
+                for pos in 0..*chrom_len as i64 {
+                    if cov.contains(chrom, pos) {
+                        continue;
+                    }
+                    let gc = zero_ref.gc_content(chrom, pos, args.gc_window);
+                    let annotation = gene_annots.and_then(|g| g.get(chrom, pos));
+                    let gene = annotation.as_ref().map(|a| a.gene.clone());
+                    let feature_type = annotation.as_ref().and_then(|a| a.feature_type.clone());
+                    let exon_number = annotation.as_ref().and_then(|a| a.exon_number);
+                    let track_values = track_set.map_or_else(Vec::new, |ts| ts.lookup(chrom, pos));
+                    let record = build_zero_record(&sample_id, chrom, pos, gc, track_values, None, gene, feature_type, exon_number, args);
+                    if let Some(bin) = zero_acc.push(record) {
+                        writer.push(bin)?;
+                        positions_written += 1;
+                    }
+                }
+            }
+            if let Some(bin) = zero_acc.finish() {
+                writer.push(bin)?;
+                positions_written += 1;
             }
         }
     }
@@ -938,6 +980,41 @@ fn fmt_with_commas(n: u64) -> String {
         out.push(ch);
     }
     out.chars().rev().collect()
+}
+
+// ── Covered-position bitset ───────────────────────────────────────────────────
+
+/// Memory-efficient tracker of positions that had at least one read.
+///
+/// Uses one bit per position (~375 MB for a 3 Gbp genome) vs. ~170 GB for a
+/// HashSet<(String, i64)> at 30x WGS coverage.  Each chromosome's bits are
+/// allocated lazily up to the maximum position seen on that chromosome.
+struct CoveredBitset {
+    bits: HashMap<String, Vec<u64>>,
+}
+
+impl CoveredBitset {
+    fn new() -> Self {
+        Self { bits: HashMap::new() }
+    }
+
+    fn mark(&mut self, chrom: &str, pos: i64) {
+        let u = pos as usize;
+        let entry = self.bits.entry(chrom.to_string()).or_default();
+        let idx = u / 64;
+        if entry.len() <= idx {
+            entry.resize(idx + 1, 0u64);
+        }
+        entry[idx] |= 1u64 << (u % 64);
+    }
+
+    fn contains(&self, chrom: &str, pos: i64) -> bool {
+        let u = pos as usize;
+        self.bits.get(chrom)
+            .and_then(|v| v.get(u / 64))
+            .map(|&w| w & (1u64 << (u % 64)) != 0)
+            .unwrap_or(false)
+    }
 }
 
 // ── Zero-depth reference reader ───────────────────────────────────────────────

@@ -31,6 +31,8 @@ version 1.0
 ##   min_depth             - suppress positions with total_depth below this (default 0)
 ##   bin_size              - aggregate consecutive positions into bins of this size (default 1 = per-position)
 ##   adaptive_depth_threshold - when set, positions below this depth are emitted at single-base resolution
+##   fill_zeros            - emit zero-depth positions across all reference contigs even without targets;
+##                           for WGS combine with bin_size to keep output manageable (default false)
 ##   cohort_name           - base name for the output DuckDB file (default: cohort)
 ##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##
@@ -64,6 +66,9 @@ workflow GeacCoverage {
         Int     min_depth     = 0
         Int     bin_size      = 1
         Int?    adaptive_depth_threshold
+        Boolean fill_zeros    = false
+
+        Boolean fill_zeros  = false
 
         String cohort_name = "cohort"
 
@@ -107,6 +112,7 @@ workflow GeacCoverage {
                 min_depth                 = min_depth,
                 bin_size                  = bin_size,
                 adaptive_depth_threshold  = adaptive_depth_threshold,
+                fill_zeros                = fill_zeros,
                 docker_image              = docker_image,
                 memory_gb             = coverage_memory_gb,
                 disk_gb               = coverage_disk_gb,
@@ -159,6 +165,7 @@ task Coverage {
         Int     min_depth
         Int     bin_size
         Int?    adaptive_depth_threshold
+        Boolean fill_zeros
 
         String docker_image
         Int    memory_gb
@@ -188,6 +195,7 @@ task Coverage {
             --min-depth        ~{min_depth} \
             --bin-size         ~{bin_size} \
             ~{"--adaptive-depth-threshold " + adaptive_depth_threshold} \
+            ~{if fill_zeros then "--fill-zeros" else ""} \
             ~{"--sample-id "        + sample_id} \
             ~{"--batch "            + batch} \
             ~{"--targets "          + targets} \

@@ -376,6 +376,13 @@ pub struct CoverageArgs {
     /// Example: --track gem150:gem_150mer.bedgraph --track umap50:umap_k50.bedgraph
     #[arg(long = "track", value_name = "NAME:FILE")]
     pub tracks: Vec<String>,
+
+    /// Fill in zero-depth positions across all reference contigs, even without --targets.
+    /// Useful for WGS to detect dropout without a BED file.
+    /// For whole-genome output, combine with --bin-size to keep output size manageable.
+    /// Has no effect when --min-depth > 0 (zero-depth positions would always be filtered).
+    #[arg(long)]
+    pub fill_zeros: bool,
 }
 
 // Allow clap to parse ReadType and Pipeline from strings
