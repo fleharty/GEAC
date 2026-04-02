@@ -192,6 +192,13 @@ if _btn_col.button("Clear all", help="Reset all filters to defaults"):
     st.session_state.pop("_drill_locus", None)
     st.rerun()
 
+# Initialize all managed filter defaults into session state on first load.
+# This avoids the Streamlit warning that fires when a widget has both key= and
+# value= and the key is already in session_state (e.g. after "Clear all").
+for _fk, _fv in MAIN_FILTER_STATE.defaults.items():
+    if _fk not in st.session_state:
+        st.session_state[_fk] = _fv
+
 chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + chroms, key="chrom_sel")
 if "sample_sel" not in st.session_state:
     st.session_state["sample_sel"] = []
@@ -280,13 +287,13 @@ variant_sel = st.sidebar.multiselect(
     ["SNV", "insertion", "deletion"],
     key="variant_sel",
 )
-vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, (0.0, 1.0), step=0.01, key="vaf_range")
-min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, value=1, step=1, key="min_alt")
-max_alt = st.sidebar.number_input("Max alt count (0 = no maximum)", min_value=0, max_value=10000, value=0, step=1, key="max_alt")
-min_fwd_alt = st.sidebar.number_input("Min fwd alt count (0 = no minimum)", min_value=0, max_value=10000, value=0, step=1, key="min_fwd_alt")
-min_rev_alt = st.sidebar.number_input("Min rev alt count (0 = no minimum)", min_value=0, max_value=10000, value=0, step=1, key="min_rev_alt")
-min_overlap_agree    = st.sidebar.number_input("Min overlap alt agree (0 = no minimum)",    min_value=0, max_value=10000, value=0, step=1, key="min_overlap_agree")
-min_overlap_disagree = st.sidebar.number_input("Min overlap alt disagree (0 = no minimum)", min_value=0, max_value=10000, value=0, step=1, key="min_overlap_disagree")
+vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, step=0.01, key="vaf_range")
+min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, step=1, key="min_alt")
+max_alt = st.sidebar.number_input("Max alt count (0 = no maximum)", min_value=0, max_value=10000, step=1, key="max_alt")
+min_fwd_alt = st.sidebar.number_input("Min fwd alt count (0 = no minimum)", min_value=0, max_value=10000, step=1, key="min_fwd_alt")
+min_rev_alt = st.sidebar.number_input("Min rev alt count (0 = no minimum)", min_value=0, max_value=10000, step=1, key="min_rev_alt")
+min_overlap_agree    = st.sidebar.number_input("Min overlap alt agree (0 = no minimum)",    min_value=0, max_value=10000, step=1, key="min_overlap_agree")
+min_overlap_disagree = st.sidebar.number_input("Min overlap alt disagree (0 = no minimum)", min_value=0, max_value=10000, step=1, key="min_overlap_disagree")
 variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No", "Unknown (no VCF/TSV)"], key="variant_called_sel")
 _vf_has_data = _has_data("variant_filter")
 if _vf_has_data:
@@ -311,13 +318,11 @@ if _has_data("gnomad_af"):
     gnomad_af_range = st.sidebar.select_slider(
         "gnomAD AF (log scale)",
         options=_GNOMAD_AF_STEPS,
-        value=("0", "1.0"),
         key="gnomad_af_range",
         help="Filter by gnomAD allele frequency. Steps are logarithmic.",
     )
     gnomad_include_null = st.sidebar.checkbox(
         "Include sites absent from gnomAD",
-        value=True,
         key="gnomad_include_null",
     )
 else:
@@ -326,14 +331,14 @@ else:
 
 _repeat_cols_present = _has_data("homopolymer_len")
 if _repeat_cols_present:
-    homopolymer_range = st.sidebar.slider("Homopolymer length range", 0, 20, (0, 20), step=1, key="homopolymer_range")
-    str_len_range     = st.sidebar.slider("STR length range",         0, 50, (0, 50), step=1, key="str_len_range")
+    homopolymer_range = st.sidebar.slider("Homopolymer length range", 0, 20, step=1, key="homopolymer_range")
+    str_len_range     = st.sidebar.slider("STR length range",         0, 50, step=1, key="str_len_range")
 else:
     homopolymer_range = (0, 20)
     str_len_range     = (0, 50)
     st.sidebar.caption("Repeat filters unavailable — run geac collect with a newer build to enable.")
-min_depth = st.sidebar.number_input("Min depth (0 = no minimum)", min_value=0, value=0, step=1, key="min_depth")
-max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, value=0, step=1, key="max_depth")
+min_depth = st.sidebar.number_input("Min depth (0 = no minimum)", min_value=0, step=1, key="min_depth")
+max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, step=1, key="max_depth")
 
 
 # ── Per-read filters (only when alt_reads table is present) ───────────────────
@@ -363,7 +368,6 @@ if _has_alt_reads:
     st.sidebar.subheader("Per-read filters")
     recompute_vaf = st.sidebar.checkbox(
         "Recompute alt count from filtered reads",
-        value=False,
         key="recompute_vaf",
         help="When checked, alt_count is re-aggregated from the reads table using only "
              "reads that pass the filters below. VAF denominator (total_depth) is unchanged — "

@@ -268,12 +268,12 @@ def _igv_html(locus: str, tracks: list[dict], genome: str = "hg38", oauth_token:
 
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-_tab_names = ["Summary", "Depth Distribution", "GC Bias", "Low Coverage", "IGV"]
+_tab_names = ["Summary", "Depth Distribution", "GC Bias", "Low Coverage", "Depth Profile", "IGV"]
 if _has_intervals:
     _tab_names.append("Intervals")
 _tabs = st.tabs(_tab_names)
-tab_summary, tab_depth, tab_gc, tab_low, tab_igv = _tabs[:5]
-tab_intervals = _tabs[5] if _has_intervals else None
+tab_summary, tab_depth, tab_gc, tab_low, tab_profile, tab_igv = _tabs[:6]
+tab_intervals = _tabs[6] if _has_intervals else None
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Tab 1 — Per-sample summary
@@ -611,8 +611,413 @@ with tab_low:
                     width="stretch",
                 )
 
+            # ── Gene coverage summary table ────────────────────────────────
+            st.markdown("**Gene coverage summary**")
+            st.caption("All genes ranked by mean depth. Click a row then use the button to open it in the Depth Profile.")
+            _gene_summary = con.execute(f"""
+                SELECT
+                    gene,
+                    COUNT(DISTINCT pos)                                          AS n_positions,
+                    ROUND(AVG(total_depth), 1)                                  AS mean_depth,
+                    ROUND(MIN(total_depth * 1.0), 0)                            AS min_depth,
+                    ROUND(AVG(mean_mapq), 1)                                    AS mean_mapq,
+                    ROUND(AVG(gc_content), 3)                                   AS mean_gc,
+                    SUM(CASE WHEN total_depth < {depth_threshold} THEN 1 ELSE 0 END) AS n_loci_below,
+                    ROUND(
+                        100.0 * SUM(CASE WHEN total_depth < {depth_threshold} THEN 1 ELSE 0 END)
+                        / NULLIF(COUNT(*), 0), 1
+                    )                                                            AS pct_below
+                FROM {table_expr}
+                {where(["gene IS NOT NULL", "gene <> ''"])}
+                GROUP BY gene
+                ORDER BY mean_depth
+            """).df()
+
+            _gs_event = st.dataframe(
+                _gene_summary,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="low_gene_summary_table",
+            )
+            _gs_rows = (_gs_event.selection or {}).get("rows", [])
+            if _gs_rows:
+                _gs_gene = _gene_summary.iloc[_gs_rows[0]]["gene"]
+                if st.button(f"Open **{_gs_gene}** in Depth Profile →", key="open_in_profile"):
+                    st.session_state["prof_gene"] = _gs_gene
+                    st.rerun()
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Tab 5 — IGV
+# Tab 5 — Depth Profile
+# ──────────────────────────────────────────────────────────────────────────────
+with tab_profile:
+    st.subheader("Depth Profile")
+    st.caption(
+        "Aggregate depth across a gene or genomic region across all selected samples. "
+        "The band shows the min–max range; the shaded area shows the IQR (p25–p75); "
+        "the line shows the mean."
+    )
+
+    _prof_mode = "gene" if _has_gene else "region"
+
+    # ACMG SF v3.2 gene list (81 genes)
+    _ACMG_GENES = frozenset({
+        "ACTA2", "ACTC1", "APC", "APOB", "ATP7B", "BMPR1A", "BRCA1", "BRCA2",
+        "CACNA1S", "COL3A1", "DSC2", "DSG2", "DSP", "FBN1", "FBN2", "FLNC",
+        "GLA", "HFE", "HNF1A", "KCNQ1", "KCNH2", "LDLR", "LMNA", "MAX",
+        "MEN1", "MLH1", "MSH2", "MSH6", "MUTYH", "MYH11", "MYH7", "MYL2",
+        "MYL3", "MYBPC3", "NF2", "OTC", "PALB2", "PCSK9", "PKP2", "PMS2",
+        "POLD1", "POLE", "PTEN", "RB1", "RET", "RPE65", "RYR1", "RYR2",
+        "SCN5A", "SCN1A", "SDHAF2", "SDHB", "SDHC", "SDHD", "SMAD3", "SMAD4",
+        "STK11", "TGFBR1", "TGFBR2", "TMEM43", "TNNI3", "TNNT2", "TP53",
+        "TPM1", "TSC1", "TSC2", "TTN", "TTR", "VHL", "WT1",
+        # Additional SF v3.2 genes
+        "EZH2", "ANKRD26", "CEBPA", "DDX41", "ELANE", "GATA2", "RUNX1",
+        "SRP72", "TERC", "TERT", "TINF2",
+    })
+
+    _prof_col1, _prof_col2 = st.columns([2, 1])
+    with _prof_col1:
+        if _has_gene:
+            _all_genes = sorted(
+                con.execute(
+                    f"SELECT DISTINCT gene FROM {table_expr} "
+                    f"WHERE gene IS NOT NULL AND gene <> '' ORDER BY gene"
+                ).df()["gene"].tolist()
+            )
+            _acmg_only = st.checkbox(
+                "ACMG genes only", value=False, key="prof_acmg_only",
+                help="Filter gene list to ACMG Secondary Findings v3.2 genes present in this dataset",
+            )
+            _gene_choices = (
+                [g for g in _all_genes if g in _ACMG_GENES] if _acmg_only else _all_genes
+            )
+            if not _gene_choices:
+                st.info("No ACMG genes found in this dataset.")
+                st.stop()
+            else:
+                # If a gene was sent here from Low Coverage but isn't in the
+                # current filtered list, clear the ACMG filter automatically.
+                _incoming = st.session_state.get("prof_gene")
+                if _incoming and _incoming not in _gene_choices:
+                    st.session_state["prof_acmg_only"] = False
+                    _gene_choices = _all_genes
+                _prof_gene = st.selectbox("Gene", _gene_choices, key="prof_gene")
+            _prof_chrom_val = None
+            _prof_start_val = None
+            _prof_end_val = None
+        else:
+            _prof_gene = None
+            _prof_chrom_val = st.selectbox(
+                "Chromosome", all_chroms, key="prof_chrom"
+            )
+    with _prof_col2:
+        if not _has_gene:
+            _prof_start_val = st.number_input(
+                "Start", min_value=0, value=0, step=1000, key="prof_start"
+            )
+            _prof_end_val = st.number_input(
+                "End", min_value=1, value=1_000_000, step=1000, key="prof_end"
+            )
+
+    # Build WHERE clause for profile region
+    _prof_clauses: list[str] = []
+    _ids = ", ".join(f"'{s.replace(chr(39), chr(39)*2)}'" for s in sample_sel) if sample_sel else ""
+    if _ids:
+        _prof_clauses.append(f"sample_id IN ({_ids})")
+    if _has_gene and _prof_gene:
+        _pg = _prof_gene.replace("'", "''")
+        _prof_clauses.append(f"gene = '{_pg}'")
+    elif _prof_chrom_val:
+        _pc = _prof_chrom_val.replace("'", "''")
+        _prof_clauses.append(f"chrom = '{_pc}'")
+        _prof_clauses.append(f"pos >= {int(_prof_start_val)}")
+        _prof_clauses.append(f"pos < {int(_prof_end_val)}")
+
+    _prof_where = ("WHERE " + " AND ".join(_prof_clauses)) if _prof_clauses else ""
+
+    # Count positions before fetching
+    _prof_n_pos = con.execute(
+        f"SELECT COUNT(DISTINCT pos) FROM {table_expr} {_prof_where}"
+    ).fetchone()[0]
+
+    if _prof_n_pos == 0:
+        st.info("No data for the selected region/gene.")
+    elif _prof_n_pos > 50_000:
+        st.warning(
+            f"This region spans {_prof_n_pos:,} distinct positions. "
+            "Consider using a smaller region or re-running `geac coverage` with a larger `--bin-size`."
+        )
+    else:
+        _prof_df = con.execute(
+            f"""
+            SELECT
+                pos,
+                AVG(total_depth)   AS mean_depth,
+                MIN(total_depth)   AS min_depth,
+                MAX(total_depth)   AS max_depth,
+                PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_depth) AS p25_depth,
+                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_depth) AS p75_depth,
+                COUNT(DISTINCT sample_id) AS n_samples,
+                AVG(mean_mapq)     AS mean_mapq,
+                AVG(frac_mapq0)    AS mean_frac_mapq0,
+                AVG(frac_low_mapq) AS mean_frac_low_mapq,
+                AVG(gc_content)    AS mean_gc_content
+            FROM {table_expr}
+            {_prof_where}
+            GROUP BY pos
+            ORDER BY pos
+            """
+        ).df()
+
+        _ctl_col1, _ctl_col2 = st.columns([1, 2])
+        with _ctl_col1:
+            _color_by = st.selectbox(
+                "Color line by",
+                ["Mean MAPQ", "GC content"],
+                key="prof_color_by",
+            )
+        with _ctl_col2:
+            _show_samples = st.checkbox(
+                "Show individual sample lines", value=False, key="prof_show_samples"
+            )
+
+        if _color_by == "Mean MAPQ":
+            _color_field = "mean_mapq"
+            _color_title = "Mean MAPQ"
+            _color_scale = alt.Scale(scheme="redyellowgreen", domainMid=30)
+            _color_fmt   = ".1f"
+        else:
+            _color_field = "mean_gc_content"
+            _color_title = "GC content"
+            _color_scale = alt.Scale(scheme="blueorange", domainMid=0.5, domain=[0, 1])
+            _color_fmt   = ".1%"
+
+        # ── Aggregate chart ────────────────────────────────────────────────
+        _base = alt.Chart(_prof_df)
+
+        _band_minmax = (
+            _base.mark_area(opacity=0.12, color="#4c78a8")
+            .encode(
+                x=alt.X("pos:Q", title="Position"),
+                y=alt.Y("min_depth:Q", title="Depth"),
+                y2=alt.Y2("max_depth:Q"),
+                tooltip=["pos:Q", alt.Tooltip("min_depth:Q", format=".1f"),
+                         alt.Tooltip("max_depth:Q", format=".1f")],
+            )
+        )
+
+        _band_iqr = (
+            _base.mark_area(opacity=0.30, color="#4c78a8")
+            .encode(
+                x="pos:Q",
+                y=alt.Y("p25_depth:Q"),
+                y2=alt.Y2("p75_depth:Q"),
+            )
+        )
+
+        _line_mean = (
+            _base.mark_line(strokeWidth=2.5)
+            .encode(
+                x="pos:Q",
+                y=alt.Y("mean_depth:Q"),
+                color=alt.Color(
+                    f"{_color_field}:Q",
+                    scale=_color_scale,
+                    legend=alt.Legend(title=_color_title),
+                ),
+                tooltip=["pos:Q",
+                         alt.Tooltip("mean_depth:Q", format=".1f", title="Mean depth"),
+                         alt.Tooltip("mean_mapq:Q", format=".1f", title="Mean MAPQ"),
+                         alt.Tooltip("mean_frac_low_mapq:Q", format=".1%", title="Frac low MAPQ"),
+                         alt.Tooltip("mean_gc_content:Q", format=".1%", title="GC content"),
+                         "n_samples:Q"],
+            )
+        )
+
+        _prof_chart = _band_minmax + _band_iqr + _line_mean
+
+        # ── Optional per-sample lines ──────────────────────────────────────
+        if _show_samples and sample_sel:
+            _samp_df = con.execute(
+                f"""
+                SELECT pos, sample_id, total_depth AS depth
+                FROM {table_expr}
+                {_prof_where}
+                ORDER BY pos
+                """
+            ).df()
+            _samp_chart = (
+                alt.Chart(_samp_df)
+                .mark_line(opacity=0.5, strokeWidth=1)
+                .encode(
+                    x="pos:Q",
+                    y=alt.Y("depth:Q"),
+                    color=alt.Color("sample_id:N", legend=alt.Legend(title="Sample")),
+                    tooltip=["pos:Q", "sample_id:N",
+                             alt.Tooltip("depth:Q", format=".1f")],
+                )
+            )
+            _prof_chart = _prof_chart + _samp_chart
+
+        # ── Exon / interval shaded bands ──────────────────────────────────
+        if _has_intervals and _has_gene and _prof_gene:
+            _pg2 = _prof_gene.replace("'", "''")
+            _ivl_cols = con.execute("PRAGMA table_info(coverage_intervals)").df()["name"].tolist()
+            _has_feature_type = "feature_type" in _ivl_cols
+            _has_exon_number  = "exon_number"  in _ivl_cols
+
+            _ivl_select = ", ".join(filter(None, [
+                "start", "end", "interval_name",
+                "feature_type" if _has_feature_type else None,
+                "exon_number"  if _has_exon_number  else None,
+            ]))
+            _ivl_bounds = con.execute(
+                f"""
+                SELECT DISTINCT {_ivl_select}
+                FROM coverage_intervals
+                WHERE gene = '{_pg2}'
+                ORDER BY start
+                """
+            ).df()
+
+            if not _ivl_bounds.empty:
+                # Fill missing feature_type so color encoding always has a value
+                if "feature_type" not in _ivl_bounds.columns:
+                    _ivl_bounds["feature_type"] = "Exon"
+                else:
+                    _ivl_bounds["feature_type"] = (
+                        _ivl_bounds["feature_type"].fillna("Exon")
+                    )
+
+                _ft_color = alt.Color(
+                    "feature_type:N",
+                    scale=alt.Scale(
+                        domain=["CDS", "Exon", "UTR", "Gene"],
+                        range=["#4c78a8", "#72b7b2", "#f58518", "#b279a2"],
+                    ),
+                    legend=alt.Legend(title="Feature type"),
+                )
+
+                _tooltip_fields = ["interval_name:N", "start:Q", "end:Q", "feature_type:N"]
+                if "exon_number" in _ivl_bounds.columns:
+                    _tooltip_fields.append("exon_number:Q")
+
+                # Shaded rect bands spanning the full y extent
+                _bands = (
+                    alt.Chart(_ivl_bounds)
+                    .mark_rect(opacity=0.15)
+                    .encode(
+                        x=alt.X("start:Q"),
+                        x2=alt.X2("end:Q"),
+                        color=_ft_color,
+                        tooltip=_tooltip_fields,
+                    )
+                )
+
+                # Thin border lines at start/end of each interval for crispness
+                _borders = (
+                    alt.Chart(_ivl_bounds)
+                    .mark_rule(opacity=0.4, strokeWidth=1)
+                    .encode(
+                        x=alt.X("start:Q"),
+                        color=_ft_color,
+                    )
+                )
+
+                # Exon number labels along the top of the chart
+                if "exon_number" in _ivl_bounds.columns:
+                    _mid = _ivl_bounds.copy()
+                    _mid["mid"] = (_mid["start"] + _mid["end"]) / 2
+                    _labels = (
+                        alt.Chart(_mid)
+                        .mark_text(dy=-8, fontSize=9, align="center", color="#555")
+                        .encode(
+                            x=alt.X("mid:Q"),
+                            text=alt.Text("exon_number:Q"),
+                            tooltip=_tooltip_fields,
+                        )
+                    )
+                    _prof_chart = _bands + _borders + _labels + _prof_chart
+                else:
+                    _prof_chart = _bands + _borders + _prof_chart
+
+        st.altair_chart(
+            _prof_chart.resolve_scale(color="independent").properties(height=320).interactive(),
+            use_container_width=True,
+        )
+
+        # ── Interval-level summary ─────────────────────────────────────────
+        if _has_intervals and _has_gene and _prof_gene:
+            _pg3 = _prof_gene.replace("'", "''")
+            _ivl_df = con.execute(
+                f"""
+                SELECT
+                    ci.interval_name,
+                    ci.start,
+                    ci.end,
+                    AVG(c.total_depth)  AS mean_depth,
+                    MIN(c.total_depth)  AS min_depth,
+                    MAX(c.total_depth)  AS max_depth,
+                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY c.total_depth) AS p25_depth,
+                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY c.total_depth) AS p75_depth,
+                    COUNT(DISTINCT c.sample_id) AS n_samples
+                FROM coverage_intervals ci
+                JOIN {table_expr} c
+                    ON c.pos >= ci.start AND c.pos < ci.end
+                    AND c.gene = ci.gene
+                WHERE ci.gene = '{_pg3}'
+                {"AND c.sample_id IN (" + _ids + ")" if sample_sel else ""}
+                GROUP BY ci.interval_name, ci.start, ci.end
+                ORDER BY ci.start
+                """
+            ).df()
+            if not _ivl_df.empty:
+                with st.expander("Interval summary", expanded=False):
+                    _ivl_bar = (
+                        alt.Chart(_ivl_df)
+                        .mark_bar()
+                        .encode(
+                            x=alt.X("interval_name:N", sort=alt.SortField("start"),
+                                    title="Interval"),
+                            y=alt.Y("mean_depth:Q", title="Mean depth"),
+                            color=alt.Color("mean_depth:Q",
+                                            scale=alt.Scale(scheme="blues"),
+                                            legend=None),
+                            tooltip=["interval_name:N", "start:Q", "end:Q",
+                                     alt.Tooltip("mean_depth:Q", format=".1f"),
+                                     alt.Tooltip("min_depth:Q", format=".1f"),
+                                     alt.Tooltip("max_depth:Q", format=".1f"),
+                                     "n_samples:Q"],
+                        )
+                        .properties(height=200)
+                    )
+                    st.altair_chart(_ivl_bar, use_container_width=True)
+                    st.dataframe(_ivl_df.round(1), use_container_width=True, hide_index=True)
+
+        # ── Per-sample stats ───────────────────────────────────────────────
+        with st.expander("Per-sample statistics", expanded=False):
+            _samp_stats = con.execute(
+                f"""
+                SELECT
+                    sample_id,
+                    COUNT(DISTINCT pos)   AS n_positions,
+                    AVG(total_depth)            AS mean_depth,
+                    MIN(total_depth)            AS min_depth,
+                    MAX(total_depth)            AS max_depth,
+                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_depth) AS p25_depth,
+                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_depth) AS p75_depth
+                FROM {table_expr}
+                {_prof_where}
+                GROUP BY sample_id
+                ORDER BY sample_id
+                """
+            ).df()
+            st.dataframe(_samp_stats.round(1), use_container_width=True, hide_index=True)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tab 6 — IGV
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_igv:
     st.subheader("IGV.js Genome Browser")
