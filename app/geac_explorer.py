@@ -319,17 +319,20 @@ if _has_data("gnomad_af"):
     # and return a string, which breaks the [0]/[1] indexing below.
     # Streamlit can store the range as a list after user interaction, so
     # accept both list and tuple as valid; only reset on a bare string/None.
-    _af_ss = st.session_state.get("gnomad_af_range")
-    if isinstance(_af_ss, list) and len(_af_ss) == 2:
-        st.session_state["gnomad_af_range"] = tuple(_af_ss)
-    elif not (isinstance(_af_ss, tuple) and len(_af_ss) == 2):
-        st.session_state["gnomad_af_range"] = ("0", "1.0")
+    # select_slider requires value= to be a tuple to render in range mode;
+    # key= alone does not communicate range mode to Streamlit. Manage
+    # session state manually so we can always pass an explicit tuple value.
+    _af_ss = st.session_state.get("gnomad_af_range", ("0", "1.0"))
+    if not (isinstance(_af_ss, (tuple, list)) and len(_af_ss) == 2):
+        _af_ss = ("0", "1.0")
+    _af_ss = tuple(_af_ss)
     gnomad_af_range = st.sidebar.select_slider(
         "gnomAD AF (log scale)",
         options=_GNOMAD_AF_STEPS,
-        key="gnomad_af_range",
+        value=_af_ss,
         help="Filter by gnomAD allele frequency. Steps are logarithmic.",
     )
+    st.session_state["gnomad_af_range"] = gnomad_af_range
     gnomad_include_null = st.sidebar.checkbox(
         "Include sites absent from gnomAD",
         key="gnomad_include_null",
