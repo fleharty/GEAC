@@ -114,8 +114,8 @@ workflow GeacCoverage {
         }
     }
 
-    # Collect interval Parquets from samples that produced them (non-null outputs).
-    Array[File] interval_parquets = select_all(Coverage.coverage_intervals_parquet)
+    # Collect interval Parquets from samples that produced them.
+    Array[File] interval_parquets = flatten(Coverage.coverage_intervals_parquet)
 
     call Merge {
         input:
@@ -130,7 +130,7 @@ workflow GeacCoverage {
 
     output {
         Array[File]  coverage_parquets           = Coverage.coverage_parquet
-        Array[File]  coverage_intervals_parquets = interval_parquets
+        Array[File]  coverage_intervals_parquets  = interval_parquets
         File         cohort_db                   = Merge.cohort_db
     }
 }
@@ -197,8 +197,8 @@ task Coverage {
     >>>
 
     output {
-        File     coverage_parquet           = output_name
-        File?    coverage_intervals_parquet = if do_intervals then intervals_name else None
+        File        coverage_parquet           = output_name
+        Array[File] coverage_intervals_parquet = if do_intervals then [intervals_name] else []
     }
 
     runtime {
