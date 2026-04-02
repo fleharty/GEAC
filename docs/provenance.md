@@ -17,20 +17,20 @@ GEAC records provenance at two levels:
 - `label3`
 - `input_checksum_sha256`
 
-`input_checksum_sha256` is null by default. Enable it explicitly with:
+`input_checksum_sha256` is enabled by default. It can be disabled with:
 
 ```bash
-geac collect ... --input-checksum-sha256
+geac collect ... # --input-checksum-sha256 is on by default; pass false in the WDL to disable
 ```
 
 This computes a SHA-256 of the input BAM/CRAM once during collection and stores the
-same value on every output row for that sample. It is optional because hashing large
-alignment files adds I/O and wall time.
+same value on every output row for that sample. Hashing large alignment files adds
+I/O and wall time, but the checksum is useful for provenance tracking and deduplication.
 
 The WDLs expose the same behavior as:
 
-- `input_checksum_sha256 = false` in [wdl/geac_collect.wdl](/Users/fleharty/GEAC-codex/GEAC/wdl/geac_collect.wdl)
-- `input_checksum_sha256 = false` in [wdl/geac_cohort.wdl](/Users/fleharty/GEAC-codex/GEAC/wdl/geac_cohort.wdl)
+- `input_checksum_sha256 = true` in [wdl/geac_collect.wdl](/Users/fleharty/GEAC-codex/GEAC/wdl/geac_collect.wdl)
+- `input_checksum_sha256 = true` in [wdl/geac_cohort.wdl](/Users/fleharty/GEAC-codex/GEAC/wdl/geac_cohort.wdl)
 
 ## Merge-time provenance
 
