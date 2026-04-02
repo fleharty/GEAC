@@ -680,3 +680,19 @@ widget renders.
 **Lesson:** For `st.select_slider` (and likely other range widgets), range mode is
 determined at call time by `value=`, not by what is in session state. If you want a
 persistent range slider, manage session state manually rather than relying on `key=`.
+
+---
+
+### `--fill-zeros` filled entire genome when `--region` was set
+**Symptom:** Running `geac coverage --fill-zeros --region chr20` would emit zero-depth
+records for every position on every chromosome in the BAM header, not just chr20.
+**Root cause:** The zero-fill loop iterates over `bam_contigs` (all chromosomes from the
+BAM header). The `covered` bitset only has positions marked for the restricted region
+(chr20 in this case, since `--region` restricts the pileup fetch). Every position on
+every other chromosome passes the `!cov.contains()` check and gets emitted as zero-depth.
+**Fix:** Parse `--region` (handling `chrom`, `chrom:start-end`, and `chrom:start` forms)
+at the start of the zero-fill phase and skip chromosomes that don't match, restricting
+the fill range to the parsed start/end when coordinates are provided.
+**Lesson:** Any post-pileup fill pass that iterates over all reference contigs must
+respect `--region`. The pileup fetch is the only thing that naturally inherits the
+region restriction; anything that follows the pileup loop does not.
