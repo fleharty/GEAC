@@ -72,9 +72,22 @@ ship in whatever version is current. To cut a release:
 
 ## Sensitive data
 
-This is a **public** repository. Flag any content that could be patient-identifiable
-(real sample IDs, file paths containing patient identifiers, genomic coordinates from
-real clinical data) before committing.
+This is a **public** repository. Before committing anything, verify that **none** of
+the following are present:
+
+- **Real genomic data** — no BAM/CRAM/FASTQ/VCF files or their derivatives; no real
+  coverage Parquet or DuckDB files; no actual sequencing reads or variant calls.
+- **External file paths** — no absolute paths or filenames that reference locations
+  outside this repository (e.g. `/home/user/...`, `/data/projects/...`, GCS bucket
+  URIs from real runs). These can reveal infrastructure details or project names.
+- **Real sample identifiers** — the only sample names permitted in this repo are
+  public reference standards: **HG001 / NA12878** and **HG002 / NA24385**.
+  Any other sample name must not appear in code, tests, documentation, or data files.
+- **Synthetic data** — even synthetic/simulated data should be reviewed before
+  committing. If in doubt, flag it for review rather than committing immediately.
+
+When in doubt, **stop and ask** rather than committing. It is much easier to add
+something later than to scrub it from git history after the fact.
 
 ## CHALLENGES.md
 
