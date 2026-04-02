@@ -2,14 +2,19 @@
 
 ## Architecture
 
-GEAC has two independent layers:
+GEAC has three layers:
 
 1. **Rust CLI (`src/`)** — pileup-based BAM/CRAM processing. Produces Parquet files
    (one per sample) and DuckDB cohort databases.
-2. **Python Streamlit apps (`app/`)** — interactive explorers that consume those files.
+2. **WDL workflows (`wdl/`)** — the primary way the Rust CLI runs in production on Terra
+   or other cloud compute platforms. Wraps the CLI flags as WDL inputs and handles
+   scatter-gather across cohorts.
+3. **Python Streamlit apps (`app/`)** — interactive explorers that consume the Parquet
+   and DuckDB files produced by the CLI.
 
-The schema contract between them lives in **`schema/geac_schema.json`**. Any new column
-added to Rust output must be reflected there and checked against `app/explorer/schema.py`.
+The schema contract between layers 1 and 3 lives in **`schema/geac_schema.json`**. Any
+new column added to Rust output must be reflected there and checked against
+`app/explorer/schema.py`. When adding a CLI flag, also expose it in the relevant WDL.
 
 ### Two separate explorers
 
