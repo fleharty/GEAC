@@ -317,8 +317,12 @@ if _has_data("gnomad_af"):
     # Ensure session state holds a valid 2-tuple before the widget renders.
     # A plain string (e.g. "0") causes select_slider to render as single-value
     # and return a string, which breaks the [0]/[1] indexing below.
+    # Streamlit can store the range as a list after user interaction, so
+    # accept both list and tuple as valid; only reset on a bare string/None.
     _af_ss = st.session_state.get("gnomad_af_range")
-    if not (isinstance(_af_ss, tuple) and len(_af_ss) == 2):
+    if isinstance(_af_ss, list) and len(_af_ss) == 2:
+        st.session_state["gnomad_af_range"] = tuple(_af_ss)
+    elif not (isinstance(_af_ss, tuple) and len(_af_ss) == 2):
         st.session_state["gnomad_af_range"] = ("0", "1.0")
     gnomad_af_range = st.sidebar.select_slider(
         "gnomAD AF (log scale)",
