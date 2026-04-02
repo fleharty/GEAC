@@ -314,6 +314,12 @@ on_target_sel = st.sidebar.selectbox("Target bases", ["All", "On target", "Off t
 
 _GNOMAD_AF_STEPS = ["0", "1e-6", "1e-5", "1e-4", "1e-3", "0.01", "0.1", "1.0"]
 if _has_data("gnomad_af"):
+    # Ensure session state holds a valid 2-tuple before the widget renders.
+    # A plain string (e.g. "0") causes select_slider to render as single-value
+    # and return a string, which breaks the [0]/[1] indexing below.
+    _af_ss = st.session_state.get("gnomad_af_range")
+    if not (isinstance(_af_ss, tuple) and len(_af_ss) == 2):
+        st.session_state["gnomad_af_range"] = ("0", "1.0")
     gnomad_af_range = st.sidebar.select_slider(
         "gnomAD AF (log scale)",
         options=_GNOMAD_AF_STEPS,
