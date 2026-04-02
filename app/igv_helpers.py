@@ -10,7 +10,7 @@ import duckdb
 
 
 def insert_size_active_part(
-    is_lo: int, is_hi: int, is_min: int, is_max: int, is_exclude_mode: bool = False
+    is_lo: int, is_hi: int, is_min: int, is_max: int
 ) -> str | None:
     """Return the insert-size banner fragment when the filter is non-default, else None.
 
@@ -18,8 +18,7 @@ def insert_size_active_part(
     importing Streamlit.
     """
     if is_lo > is_min or is_hi < is_max:
-        mode = "excluding" if is_exclude_mode else "including only"
-        return f"insert size: {mode} {is_lo}–{is_hi}"
+        return f"insert size: {is_lo}–{is_hi}"
     return None
 
 

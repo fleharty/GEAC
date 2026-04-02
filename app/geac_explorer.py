@@ -30,7 +30,6 @@ warnings.filterwarnings(
 from igv_helpers import (
     query_distinct_samples,
     per_read_warning_note,
-    insert_size_active_part,
     resolve_index_uri,
 )
 import geac_config
@@ -377,90 +376,44 @@ if _has_alt_reads:
     )
 
     if _fs_has_data:
-        _fs_slider_col, _fs_toggle_col = st.sidebar.columns([3, 1])
-        with _fs_slider_col:
-            family_size_range = st.slider(
-                "Family size range",
-                min_value=0, max_value=_fs_max, value=(0, _fs_max), step=1,
-                key="family_size_range",
-                help="family_size = cD tag (total raw read count per molecule).",
-            )
-        with _fs_toggle_col:
-            st.write("Mode")
-            fs_exclude_mode = st.toggle(
-                "Excl.",
-                key="fs_exclude_mode",
-                help="Off = include only reads within this range. "
-                     "On = exclude reads within this range (keep reads outside it).",
-            )
+        family_size_range = st.sidebar.slider(
+            "Family size range",
+            min_value=0, max_value=_fs_max, value=(0, _fs_max), step=1,
+            key="family_size_range",
+            help="family_size = cD tag (total raw read count per molecule).",
+        )
     else:
         family_size_range = (0, 0)
-        fs_exclude_mode = False
         st.sidebar.caption("Family size unavailable — BAM has no fgbio cD tag.")
 
-    _cycle_slider_col, _cycle_toggle_col = st.sidebar.columns([3, 1])
-    with _cycle_slider_col:
-        cycle_range = st.slider(
-            "Cycle number",
-            min_value=1, max_value=_cycle_max, value=(1, _cycle_max), step=1,
-            key="cycle_range",
-            help="Filter alt-supporting reads by sequencing cycle (1-based position within the read). "
-                 "Lower the upper bound to exclude variants clustered at read ends (a common artefact).",
-        )
-    with _cycle_toggle_col:
-        st.write("Mode")
-        cycle_exclude_mode = st.toggle(
-            "Excl.",
-            key="cycle_exclude_mode",
-            help="Off = include only reads within this cycle range. "
-                 "On = exclude reads within this range (keep reads outside it).",
-        )
+    cycle_range = st.sidebar.slider(
+        "Cycle number",
+        min_value=1, max_value=_cycle_max, value=(1, _cycle_max), step=1,
+        key="cycle_range",
+        help="Filter alt-supporting reads by sequencing cycle (1-based position within the read). "
+             "Lower the upper bound to exclude variants clustered at read ends (a common artefact).",
+    )
 
-    _mq_slider_col, _mq_toggle_col = st.sidebar.columns([3, 1])
-    with _mq_slider_col:
-        map_qual_range = st.slider(
-            "Mapping quality range",
-            min_value=0, max_value=_mq_max, value=(0, _mq_max), step=1,
-            key="map_qual_range",
-            help="Filter alt-supporting reads by mapping quality (MAPQ).",
-        )
-    with _mq_toggle_col:
-        st.write("Mode")
-        mq_exclude_mode = st.toggle(
-            "Excl.",
-            key="mq_exclude_mode",
-            help="Off = include only reads within this range. "
-                 "On = exclude reads within this range (keep reads outside it).",
-        )
+    map_qual_range = st.sidebar.slider(
+        "Mapping quality range",
+        min_value=0, max_value=_mq_max, value=(0, _mq_max), step=1,
+        key="map_qual_range",
+        help="Filter alt-supporting reads by mapping quality (MAPQ).",
+    )
 
     if _is_has_data:
-        _is_slider_col, _is_toggle_col = st.sidebar.columns([3, 1])
-        with _is_slider_col:
-            insert_size_range = st.slider(
-                "Insert size range",
-                min_value=_IS_MIN, max_value=_IS_MAX,
-                value=(_IS_MIN, _IS_MAX), step=1,
-                key="insert_size_range",
-                help="Filter alt-supporting reads by template insert size (|TLEN|).",
-            )
-        with _is_toggle_col:
-            st.write("Mode")
-            is_exclude_mode = st.toggle(
-                "Excl.",
-                key="is_exclude_mode",
-                help="Off = include only reads within this range. "
-                     "On = exclude reads within this range (keep reads outside it).",
-            )
+        insert_size_range = st.sidebar.slider(
+            "Insert size range",
+            min_value=_IS_MIN, max_value=_IS_MAX,
+            value=(_IS_MIN, _IS_MAX), step=1,
+            key="insert_size_range",
+            help="Filter alt-supporting reads by template insert size (|TLEN|).",
+        )
         _is_lo, _is_hi = insert_size_range
         if _is_lo == _IS_MIN and _is_hi == _IS_MAX:
             st.sidebar.caption(
                 "Insert size: no filter active — reads with any insert size "
                 "(including unpaired reads with no insert size) are accepted."
-            )
-        elif is_exclude_mode:
-            st.sidebar.caption(
-                f"Insert size: excluding reads with insert size between {_is_lo} and {_is_hi} bp. "
-                "Unpaired reads (no insert size) are kept."
             )
         else:
             st.sidebar.caption(
@@ -469,7 +422,6 @@ if _has_alt_reads:
             )
     else:
         insert_size_range = (_IS_MIN, _IS_MAX)
-        is_exclude_mode = False
 
     read_strand_sel = st.sidebar.radio(
         "Read",
@@ -485,40 +437,17 @@ if _has_alt_reads:
     _is_lo, _is_hi = insert_size_range
 
     if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
-        if fs_exclude_mode:
-            # Exclude mode: reads with unknown family_size pass (can't say they're bad)
-            _reads_conditions.append(
-                f"(family_size IS NULL OR family_size < {_fs_lo} OR family_size > {_fs_hi})"
-            )
-        else:
-            # Include mode: reads with unknown family_size fail (we can't confirm they're good)
-            _reads_conditions.append(f"family_size BETWEEN {_fs_lo} AND {_fs_hi}")
+        _reads_conditions.append(f"family_size BETWEEN {_fs_lo} AND {_fs_hi}")
 
     if _cycle_lo > 1 or _cycle_hi < _cycle_max:
-        if cycle_exclude_mode:
-            _reads_conditions.append(
-                f"(cycle < {_cycle_lo} OR cycle > {_cycle_hi})"
-            )
-        else:
-            _reads_conditions.append(f"cycle BETWEEN {_cycle_lo} AND {_cycle_hi}")
+        _reads_conditions.append(f"cycle BETWEEN {_cycle_lo} AND {_cycle_hi}")
 
     if _mq_lo > 0 or _mq_hi < _mq_max:
-        if mq_exclude_mode:
-            _reads_conditions.append(
-                f"(map_qual < {_mq_lo} OR map_qual > {_mq_hi})"
-            )
-        else:
-            _reads_conditions.append(f"map_qual BETWEEN {_mq_lo} AND {_mq_hi}")
+        _reads_conditions.append(f"map_qual BETWEEN {_mq_lo} AND {_mq_hi}")
 
     if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
-        if is_exclude_mode:
-            # Exclude mode: unpaired reads (insert_size IS NULL) pass through
-            _reads_conditions.append(
-                f"(insert_size IS NULL OR insert_size < {_is_lo} OR insert_size > {_is_hi})"
-            )
-        else:
-            # Include mode: unpaired reads (insert_size IS NULL) are excluded
-            _reads_conditions.append(f"insert_size BETWEEN {_is_lo} AND {_is_hi}")
+        # Unpaired reads (insert_size IS NULL) are excluded when a range is active
+        _reads_conditions.append(f"insert_size BETWEEN {_is_lo} AND {_is_hi}")
 
     if read_strand_sel == "R1 only":
         _reads_conditions.append("is_read1 = true")
@@ -541,10 +470,6 @@ else:
     cycle_range = (1, 1)
     map_qual_range = (0, 0)
     insert_size_range = (0, 0)
-    fs_exclude_mode = False
-    cycle_exclude_mode = False
-    mq_exclude_mode = False
-    is_exclude_mode = False
     read_strand_sel = "All"
     _fs_lo = _fs_hi = _cycle_lo = _cycle_hi = _mq_lo = _mq_hi = _is_lo = _is_hi = 0
 
@@ -1206,17 +1131,13 @@ _reads_banner = st.empty()
 if _reads_active:
     _active_parts = []
     if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
-        _mode = "excluding" if fs_exclude_mode else "including only"
-        _active_parts.append(f"family size: {_mode} {_fs_lo}–{_fs_hi}")
+        _active_parts.append(f"family size: {_fs_lo}–{_fs_hi}")
     if _cycle_lo > 1 or _cycle_hi < _cycle_max:
-        _mode = "excluding" if cycle_exclude_mode else "including only"
-        _active_parts.append(f"cycle number: {_mode} {_cycle_lo}–{_cycle_hi}")
+        _active_parts.append(f"cycle number: {_cycle_lo}–{_cycle_hi}")
     if _mq_lo > 0 or _mq_hi < _mq_max:
-        _mode = "excluding" if mq_exclude_mode else "including only"
-        _active_parts.append(f"map qual: {_mode} {_mq_lo}–{_mq_hi}")
-    _is_part = insert_size_active_part(_is_lo, _is_hi, _IS_MIN, _IS_MAX, is_exclude_mode)
-    if _is_has_data and _is_part is not None:
-        _active_parts.append(_is_part)
+        _active_parts.append(f"map qual: {_mq_lo}–{_mq_hi}")
+    if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
+        _active_parts.append(f"insert size: {_is_lo}–{_is_hi}")
     if read_strand_sel != "All":
         _active_parts.append(read_strand_sel.lower())
     _reads_banner.warning(
@@ -1330,28 +1251,28 @@ def _build_active_filter_provenance(
         rows,
         "per_read_filters",
         "family_size",
-        f"{_fs_lo}-{_fs_hi} ({'exclude' if fs_exclude_mode else 'include'})",
+        f"{_fs_lo}-{_fs_hi}",
         active=_has_alt_reads and _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max),
     )
     _append_provenance_row(
         rows,
         "per_read_filters",
         "cycle_number",
-        f"{_cycle_lo}-{_cycle_hi} ({'exclude' if cycle_exclude_mode else 'include'})",
+        f"{_cycle_lo}-{_cycle_hi}",
         active=_has_alt_reads and (_cycle_lo > 1 or _cycle_hi < _cycle_max),
     )
     _append_provenance_row(
         rows,
         "per_read_filters",
         "mapping_quality",
-        f"{_mq_lo}-{_mq_hi} ({'exclude' if mq_exclude_mode else 'include'})",
+        f"{_mq_lo}-{_mq_hi}",
         active=_has_alt_reads and (_mq_lo > 0 or _mq_hi < _mq_max),
     )
     _append_provenance_row(
         rows,
         "per_read_filters",
         "insert_size",
-        f"{_is_lo}-{_is_hi} ({'exclude' if is_exclude_mode else 'include'})",
+        f"{_is_lo}-{_is_hi}",
         active=_has_alt_reads and _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX),
     )
     _append_provenance_row(

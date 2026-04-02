@@ -113,10 +113,6 @@ MAIN_FILTER_KEYS = (
     "cycle_range",
     "map_qual_range",
     "insert_size_range",
-    "fs_exclude_mode",
-    "cycle_exclude_mode",
-    "mq_exclude_mode",
-    "is_exclude_mode",
     "read_strand_sel",
 )
 
@@ -181,10 +177,6 @@ MAIN_FILTER_STATE = FilterState(
         "max_depth": 0,
         "table_limit_sel": 500,
         "recompute_vaf": False,
-        "fs_exclude_mode": False,
-        "cycle_exclude_mode": False,
-        "mq_exclude_mode": False,
-        "is_exclude_mode": False,
         "read_strand_sel": "All",
     },
 )
