@@ -326,7 +326,8 @@ to the `pon_evidence` table automatically.
 `geac coverage` pileups a BAM/CRAM and emits per-position depth and GC content as a
 Parquet file (`.coverage.parquet`).  When a targets BED or Picard interval list is
 supplied, every target position is always emitted even if depth is zero; without
-`--targets` only positions with at least one covering read are written.
+`--targets` only positions with at least one covering read are written (unless
+`--fill-zeros` is set).
 
 ```bash
 geac coverage \
@@ -355,6 +356,7 @@ Key options:
 | `--bin-size` | `1` | Merge consecutive positions into bins of this size |
 | `--adaptive-depth-threshold` | — | Positions with depth below this value are emitted at single-base resolution (`bin_size=1`) and split any in-progress bin, preserving precision in low-coverage regions |
 | `--intervals-output` | — | Write a per-interval summary Parquet alongside the main output (requires `--targets`); used by `geac merge` to populate the `coverage_intervals` DuckDB table |
+| `--fill-zeros` | off | Emit zero-depth positions across all reference contigs even without `--targets`; useful for WGS dropout detection. Has no effect when `--min-depth > 0`. Combine with `--bin-size` for whole-genome runs to keep output size manageable |
 | `--track NAME:FILE` | — | Pre-computed BEDGraph annotation track (repeatable); each `NAME` becomes a nullable `Float32` column in the output Parquet (e.g. `--track gem150:gem_150mer.bedgraph`) |
 
 The output Parquet is routed to the `coverage` table by `geac merge` when its filename

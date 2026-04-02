@@ -659,3 +659,24 @@ tab does not trigger the gene drill-down table.
 **Lesson:** Every `on_select="rerun"` widget needs an explicit stable `key=`.
 The failure mode is always silent (empty selection, no error). See the main
 `on_select="rerun"` recipe entry above.
+
+---
+
+### `select_slider` range mode requires explicit `value=` tuple — `key=` alone is insufficient
+**Symptom:** The gnomAD AF range slider snapped back to its default position (`("0", "1.0")`)
+every time the user released the mouse, even though the drag appeared to work visually.
+**Root cause:** Streamlit's `select_slider` determines whether to render as a single-value
+or range slider based on the `value=` parameter passed at call time. Using `key=` alone
+(relying on session state to supply the value) does not communicate range mode to Streamlit.
+On the first render, our normalization code set `st.session_state["gnomad_af_range"] =
+("0", "1.0")` (a tuple), but the slider rendered in single-value mode because no `value=`
+tuple was passed to the function. After interaction, Streamlit stored a bare string `"0"`
+in session state. Our `isinstance(..., tuple)` guard then fired, reset the state to
+`("0", "1.0")`, and the slider snapped back.
+**Fix:** Removed `key=` from the `select_slider` call. Instead, read the current value
+from session state manually, normalize it to a 2-tuple, pass it as `value=` explicitly
+(forcing range mode), and then write the returned value back to session state after the
+widget renders.
+**Lesson:** For `st.select_slider` (and likely other range widgets), range mode is
+determined at call time by `value=`, not by what is in session state. If you want a
+persistent range slider, manage session state manually rather than relying on `key=`.
