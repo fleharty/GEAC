@@ -79,7 +79,7 @@ workflow GeacCollect {
         Boolean include_secondary     = false
         Boolean include_supplementary = false
         Boolean reads_output   = false
-        Boolean input_checksum_sha256 = false
+        Boolean input_checksum_sha256 = true
         Int     threads        = 1
 
         String docker_image
