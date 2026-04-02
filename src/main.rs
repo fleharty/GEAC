@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 mod bam;
 mod cli;
 mod cohort;
