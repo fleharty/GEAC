@@ -218,12 +218,36 @@ pub fn collect_coverage(
     // Reference-wide zero-depth fill (--fill-zeros without --targets).
     if do_refwide_zero_fill {
         if let Some(ref cov) = covered {
+            // When --region is set, restrict zero-fill to that region only.
+            // Without this, all chromosomes not covered by the pileup (i.e. every
+            // chromosome other than the restricted one) would be filled with zeros.
+            let (region_chrom, region_start, region_end): (Option<&str>, i64, i64) =
+                match &args.region {
+                    Some(r) => {
+                        // Parse "chrom", "chrom:start-end", or "chrom:start"
+                        if let Some((chrom, coords)) = r.split_once(':') {
+                            let (s, e) = coords.split_once('-').unwrap_or((coords, ""));
+                            let start = s.replace(',', "").parse::<i64>().unwrap_or(0).saturating_sub(1);
+                            let end   = e.replace(',', "").parse::<i64>().unwrap_or(i64::MAX);
+                            (Some(chrom), start, end)
+                        } else {
+                            (Some(r.as_str()), 0, i64::MAX)
+                        }
+                    }
+                    None => (None, 0, i64::MAX),
+                };
+
             let n_contigs = bam_contigs.len();
             info!(n_contigs, "filling zero-depth positions across reference contigs");
             let mut zero_ref = ZeroDepthRefReader::open(&args.reference)?;
             let mut zero_acc = BinAccumulator::new(args.bin_size);
             for (chrom, chrom_len) in &bam_contigs {
-                for pos in 0..*chrom_len as i64 {
+                if let Some(rc) = region_chrom {
+                    if chrom != rc { continue; }
+                }
+                let fill_start = if region_chrom.is_some() { region_start } else { 0 };
+                let fill_end   = if region_chrom.is_some() { region_end.min(*chrom_len as i64) } else { *chrom_len as i64 };
+                for pos in fill_start..fill_end {
                     if cov.contains(chrom, pos) {
                         continue;
                     }
