@@ -179,8 +179,9 @@ fn src_table_exists(conn: &Connection, alias: &str, table: &str) -> Result<bool>
     let count: i64 = conn
         .query_row(
             &format!(
-                "SELECT COUNT(*) FROM {alias}.information_schema.tables \
-                 WHERE table_name = '{table}' AND table_schema = 'main'"
+                "SELECT COUNT(*) FROM duckdb_tables() \
+                 WHERE database_name = '{alias}' AND schema_name = 'main' \
+                 AND table_name = '{table}'"
             ),
             [],
             |row| row.get(0),
