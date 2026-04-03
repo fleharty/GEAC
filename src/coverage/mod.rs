@@ -496,7 +496,7 @@ impl BinAccumulator {
             sample_id: self.sample_id.clone(),
             chrom: self.chrom.clone(),
             pos: self.bin_start,
-            end: self.bin_start + self.bin_size,
+            end: self.bin_start + self.n as i64,
             bin_n: self.n as i32,
             total_depth: mean_i(self.sum_total),
             min_depth: self.min_total,

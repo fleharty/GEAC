@@ -1464,6 +1464,64 @@ fn coverage_no_targets_skips_zero_depth() {
     assert_eq!(n, 20, "expected 20 covered positions, got {n}");
 }
 
+/// Adaptive thresholding flushes a partially filled bin before emitting low-depth
+/// positions at single-base resolution. The flushed bin should end at pos + bin_n,
+/// not at the configured bin boundary.
+#[test]
+fn coverage_adaptive_threshold_partial_bin_end_matches_bin_n() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 400);
+
+    // 25 reads starting at 0 cover [0, 20) at depth 25.
+    // 15 reads starting at 10 add extra depth to [10, 30), so:
+    //   [0, 10)  depth 25  -> above threshold
+    //   [10, 20) depth 40  -> above threshold
+    //   [20, 30) depth 15  -> below threshold, forces adaptive flush
+    let mut reads: Vec<CovRead> = (0..25).map(|_| CovRead::regular(0)).collect();
+    reads.extend((0..15).map(|_| CovRead::regular(10)));
+    let bam = write_coverage_bam(dir.path(), "adaptive.bam", "sample1", 400, reads, 20);
+    let out = dir.path().join("adaptive.coverage.parquet");
+
+    assert_geac_success(&[
+        "coverage",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+        "--bin-size",
+        "100",
+        "--adaptive-depth-threshold",
+        "20",
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
+    ]);
+
+    assert_eq!(
+        parquet_query_i32(&out, "bin_n", "pos = 0"),
+        20,
+        "partial adaptive bin should represent the 20 high-depth positions before the flush"
+    );
+    assert_eq!(
+        parquet_query_i64(&out, "\"end\"", "pos = 0"),
+        20,
+        "partial adaptive bin end should be pos + bin_n"
+    );
+    assert_eq!(
+        parquet_query_i32(&out, "bin_n", "pos = 20"),
+        1,
+        "first low-depth position should be emitted at single-base resolution"
+    );
+    assert_eq!(
+        parquet_query_i64(&out, "\"end\"", "pos = 20"),
+        21,
+        "single-base adaptive row should retain end = pos + 1"
+    );
+}
+
 /// insert_size is collected from properly-paired R1 reads; mean_insert_size reflects
 /// the TLEN set on those reads and n_insert_size_obs counts them.
 #[test]

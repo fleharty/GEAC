@@ -5,6 +5,11 @@ import pandas as pd
 import geac_config
 import json
 import streamlit.components.v1 as components
+from coverage_profile import (
+    expanded_profile_position_count,
+    load_expanded_depth_profile,
+    load_expanded_sample_profile,
+)
 from igv_helpers import load_manifest, resolve_index_uri
 from explorer import COVERAGE_FILTER_STATE, GEAC_VERSION, DataSource
 
@@ -756,7 +761,8 @@ with tab_profile:
     st.caption(
         "Aggregate depth across a gene or genomic region across all selected samples. "
         "The band shows the min–max range; the shaded area shows the IQR (p25–p75); "
-        "the line shows the mean."
+        "the line shows the mean. Mixed 1 bp and wider coverage bins are expanded back "
+        "to genomic base positions for this view."
     )
 
     _prof_mode = "gene" if _has_gene else "region"
@@ -859,183 +865,22 @@ with tab_profile:
     elif _prof_chrom_val:
         _pc = _prof_chrom_val.replace("'", "''")
         _prof_clauses.append(f"chrom = '{_pc}'")
-        _prof_clauses.append(f"pos >= {int(_prof_start_val)}")
+        _prof_clauses.append(f"\"end\" > {int(_prof_start_val)}")
         _prof_clauses.append(f"pos < {int(_prof_end_val)}")
 
     _prof_where = ("WHERE " + " AND ".join(_prof_clauses)) if _prof_clauses else ""
 
-    # Detect display bin size. When --adaptive-depth-threshold was used, dropout
-    # positions are stored at 1 bp while covered positions use the configured
-    # bin_size. Without normalisation the dropout regions appear 100× denser
-    # in the plot. We detect the largest bin_n in the region and re-bucket
-    # everything to that resolution using a bin_n-weighted depth average.
-    #
-    # The key insight: each display bin may contain BOTH a 100 bp record (depth ≈35)
-    # AND several 1 bp dropout records (depth 0) for the SAME sample. If we compute
-    # percentiles across all raw records, the 1 bp zeros dominate the IQR while the
-    # weighted mean ignores them — they diverge. Fix: a two-level aggregation that
-    # first consolidates per (display_bin, sample_id) with weighted depth, then
-    # computes cross-sample stats over those consolidated values.
-    if _has_bin_n:
-        _disp_bin = int(
-            con.execute(f"SELECT MAX(bin_n) FROM {table_expr} {_prof_where}").fetchone()[0] or 1
-        )
-    else:
-        _disp_bin = 1
-
-    _pos_expr = f"FLOOR(pos / {_disp_bin}) * {_disp_bin}" if _disp_bin > 1 else "pos"
-
-    # Count display positions before fetching
-    _prof_n_pos = con.execute(
-        f"SELECT COUNT(DISTINCT {_pos_expr}) FROM {table_expr} {_prof_where}"
-    ).fetchone()[0]
+    _prof_n_pos = expanded_profile_position_count(con, table_expr, _prof_where)
 
     if _prof_n_pos == 0:
         st.info("No data for the selected region/gene.")
     elif _prof_n_pos > 50_000:
         st.warning(
-            f"This region spans {_prof_n_pos:,} distinct positions. "
+            f"This region spans {_prof_n_pos:,} genomic positions after interval expansion. "
             "Consider using a smaller region or re-running `geac coverage` with a larger `--bin-size`."
         )
     else:
-        _needs_rebin = False
-        if _disp_bin > 1:
-            _mixed = con.execute(
-                f"SELECT COUNT(DISTINCT bin_n) FROM {table_expr} {_prof_where}"
-            ).fetchone()[0]
-            _needs_rebin = _mixed > 1
-            if _needs_rebin:
-                st.info(
-                    f"This dataset uses adaptive depth thresholding — dropout positions are "
-                    f"stored at 1 bp resolution and re-bucketed to {_disp_bin} bp for display."
-                )
-
-        if _needs_rebin:
-            # Two-level aggregation: first consolidate per (display_bin, sample),
-            # then compute cross-sample statistics over consolidated values.
-            _prof_df = con.execute(
-                f"""
-                WITH rebinned AS (
-                    SELECT
-                        {_pos_expr}  AS pos,
-                        sample_id,
-                        SUM(total_depth * bin_n) * 1.0 / NULLIF(SUM(bin_n), 0) AS total_depth,
-                        SUM(mean_mapq * bin_n) * 1.0 / NULLIF(SUM(bin_n), 0) AS mean_mapq,
-                        SUM(frac_mapq0 * bin_n) * 1.0 / NULLIF(SUM(bin_n), 0) AS frac_mapq0,
-                        SUM(frac_low_mapq * bin_n) * 1.0 / NULLIF(SUM(bin_n), 0) AS frac_low_mapq,
-                        SUM(gc_content * bin_n) * 1.0 / NULLIF(SUM(bin_n), 0) AS gc_content
-                    FROM {table_expr}
-                    {_prof_where}
-                    GROUP BY {_pos_expr}, sample_id
-                )
-                SELECT
-                    pos,
-                    AVG(total_depth)   AS mean_depth,
-                    MIN(total_depth)   AS min_depth,
-                    MAX(total_depth)   AS max_depth,
-                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_depth) AS p25_depth,
-                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_depth) AS p75_depth,
-                    COUNT(DISTINCT sample_id)  AS n_samples,
-                    AVG(mean_mapq)             AS mean_mapq,
-                    AVG(frac_mapq0)            AS mean_frac_mapq0,
-                    AVG(frac_low_mapq)         AS mean_frac_low_mapq,
-                    AVG(gc_content)            AS mean_gc_content
-                FROM rebinned
-                GROUP BY pos
-                ORDER BY pos
-                """
-            ).df()
-        else:
-            _prof_df = con.execute(
-                f"""
-                SELECT
-                    {_pos_expr}                        AS pos,
-                    AVG(total_depth)                   AS mean_depth,
-                    MIN(total_depth)                   AS min_depth,
-                    MAX(total_depth)                   AS max_depth,
-                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_depth) AS p25_depth,
-                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_depth) AS p75_depth,
-                    COUNT(DISTINCT sample_id)          AS n_samples,
-                    AVG(mean_mapq)                     AS mean_mapq,
-                    AVG(frac_mapq0)                    AS mean_frac_mapq0,
-                    AVG(frac_low_mapq)                 AS mean_frac_low_mapq,
-                    AVG(gc_content)                    AS mean_gc_content
-                FROM {table_expr}
-                {_prof_where}
-                GROUP BY {_pos_expr}
-                ORDER BY {_pos_expr}
-                """
-            ).df()
-
-        # ── DEBUG: raw data diagnostics ───────────────────────────────────
-        with st.expander("DEBUG: data diagnostics", expanded=True):
-            _raw_stats = con.execute(f"""
-                SELECT
-                    COUNT(*)                AS n_rows,
-                    COUNT(DISTINCT bin_n)   AS n_distinct_bin_n,
-                    MIN(bin_n)              AS min_bin_n,
-                    MAX(bin_n)              AS max_bin_n,
-                    MIN(total_depth)        AS raw_min_depth,
-                    MAX(total_depth)        AS raw_max_depth,
-                    ROUND(AVG(total_depth), 2) AS raw_avg_depth,
-                    COUNT(DISTINCT sample_id) AS n_samples
-                FROM {table_expr}
-                {_prof_where}
-            """).df() if _has_bin_n else None
-            if _raw_stats is not None:
-                st.code("Raw data stats:\n" + _raw_stats.to_string(index=False), language=None)
-
-            st.code(f"_disp_bin = {_disp_bin}\n_needs_rebin = {_needs_rebin}", language=None)
-            st.code(f"_prof_df shape = {_prof_df.shape}", language=None)
-            st.code(
-                "_prof_df describe:\n"
-                + _prof_df[["pos", "mean_depth", "min_depth", "max_depth", "p25_depth", "p75_depth"]].describe().to_string(),
-                language=None,
-            )
-            st.code("_prof_df first 10 rows:\n" + _prof_df.head(10).to_string(index=False), language=None)
-            _high = _prof_df[_prof_df["max_depth"] > 50]
-            st.code(f"_prof_df rows with max_depth > 50: {len(_high)}", language=None)
-            if not _high.empty:
-                st.code(_high.head(10).to_string(index=False), language=None)
-
-            # Per-sample mean depth across the whole region — reveals outlier samples
-            _per_sample = con.execute(f"""
-                SELECT
-                    sample_id,
-                    COUNT(*)                            AS n_records,
-                    ROUND(SUM(total_depth * bin_n) * 1.0
-                          / NULLIF(SUM(bin_n), 0), 2)   AS weighted_mean_depth,
-                    ROUND(AVG(total_depth), 2)           AS unweighted_avg_depth,
-                    MIN(total_depth)                     AS min_td,
-                    MAX(total_depth)                     AS max_td,
-                    MIN(bin_n)                           AS min_bin_n,
-                    MAX(bin_n)                           AS max_bin_n,
-                    ROUND(AVG(raw_read_depth), 2)        AS avg_raw_read_depth
-                FROM {table_expr}
-                {_prof_where}
-                GROUP BY sample_id
-                ORDER BY weighted_mean_depth DESC
-            """).df()
-            st.code("Per-sample stats (sorted by depth desc):\n" + _per_sample.to_string(index=False), language=None)
-
-            # Show raw records for the highest and a median sample at the first display pos
-            _first_pos = _prof_df["pos"].iloc[0]
-            _top_sample = _per_sample["sample_id"].iloc[0]
-            _mid_sample = _per_sample["sample_id"].iloc[len(_per_sample) // 2]
-            _spot_check = con.execute(f"""
-                SELECT sample_id, pos, total_depth, raw_read_depth,
-                       frac_dup, bin_n, min_depth, max_depth
-                FROM {table_expr}
-                WHERE {_pos_expr} = {_first_pos}
-                  AND sample_id IN ('{_top_sample}', '{_mid_sample}')
-                ORDER BY sample_id, pos
-            """).df()
-            st.code(
-                f"Spot check at display pos {_first_pos:.0f} "
-                f"(top: {_top_sample}, mid: {_mid_sample}):\n"
-                + _spot_check.to_string(index=False),
-                language=None,
-            )
+        _prof_df = load_expanded_depth_profile(con, table_expr, _prof_where)
 
         _show_samples = st.checkbox(
             "Show individual sample lines", value=False, key="prof_show_samples"
@@ -1081,37 +926,7 @@ with tab_profile:
         _depth_panel = (_depth_minmax + _depth_iqr + _depth_mean).properties(height=220, width="container")
 
         if _show_samples and sample_sel:
-            if _needs_rebin:
-                _samp_df = con.execute(
-                    f"""
-                    SELECT
-                        {_pos_expr} AS pos,
-                        sample_id,
-                        SUM(total_depth * bin_n) * 1.0
-                            / NULLIF(SUM(bin_n), 0) AS depth
-                    FROM {table_expr}
-                    {_prof_where}
-                    GROUP BY {_pos_expr}, sample_id
-                    ORDER BY pos
-                    """
-                ).df()
-            else:
-                _samp_df = con.execute(
-                    f"""
-                    SELECT {_pos_expr} AS pos, sample_id, total_depth AS depth
-                    FROM {table_expr}
-                    {_prof_where}
-                    ORDER BY pos
-                    """
-                ).df()
-            with st.expander("DEBUG: sample lines data", expanded=False):
-                st.code(f"_samp_df shape = {_samp_df.shape}", language=None)
-                st.code("_samp_df describe:\n" + _samp_df.describe().to_string(), language=None)
-                _s_high = _samp_df[_samp_df["depth"] > 50]
-                st.code(f"_samp_df rows with depth > 50: {len(_s_high)}", language=None)
-                if not _s_high.empty:
-                    st.code(_s_high.head(20).to_string(index=False), language=None)
-
+            _samp_df = load_expanded_sample_profile(con, table_expr, _prof_where)
             _samp_lines = (
                 alt.Chart(_samp_df)
                 .mark_line(opacity=0.5, strokeWidth=1)
