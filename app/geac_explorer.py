@@ -249,6 +249,11 @@ if _has_data("batch"):
 else:
     batch_sel = []
 
+_pipelines = con.execute(f"SELECT DISTINCT pipeline FROM {table_expr} WHERE pipeline IS NOT NULL ORDER BY pipeline").df()["pipeline"].tolist()
+if "pipeline_sel" not in st.session_state:
+    st.session_state["pipeline_sel"] = []
+pipeline_sel = st.sidebar.multiselect("Pipeline (blank = all)", _pipelines, key="pipeline_sel")
+
 if _has_data("label1"):
     _label1_vals = con.execute(f"SELECT DISTINCT label1 FROM {table_expr} WHERE label1 IS NOT NULL ORDER BY label1").df()["label1"].tolist()
     if "label1_sel" not in st.session_state:
@@ -1016,6 +1021,9 @@ if _n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total):
     if batch_sel:
         _scope_parts.append("batch IN ({})".format(
             ", ".join(f"'{_sql_str(b)}'" for b in batch_sel)))
+    if pipeline_sel:
+        _scope_parts.append("pipeline IN ({})".format(
+            ", ".join(f"'{_sql_str(p)}'" for p in pipeline_sel)))
     if label1_sel:
         _scope_parts.append("label1 IN ({})".format(
             ", ".join(f"'{_sql_str(v)}'" for v in label1_sel)))
@@ -1040,6 +1048,9 @@ if _n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total):
 if batch_sel:
     b_list = ", ".join(f"'{_sql_str(b)}'" for b in batch_sel)
     conditions.append(f"batch IN ({b_list})")
+if pipeline_sel:
+    p_list = ", ".join(f"'{_sql_str(p)}'" for p in pipeline_sel)
+    conditions.append(f"pipeline IN ({p_list})")
 if label1_sel:
     l_list = ", ".join(f"'{_sql_str(v)}'" for v in label1_sel)
     conditions.append(f"label1 IN ({l_list})")
