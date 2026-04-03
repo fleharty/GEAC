@@ -12,6 +12,7 @@ from coverage_profile import (
     expanded_profile_position_count,
     load_expanded_depth_profile,
     load_expanded_sample_profile,
+    max_bin_width,
 )
 
 
@@ -68,3 +69,45 @@ def test_expanded_depth_profile_uses_interval_spans():
         "sample_b",
     ]
     assert sample_profile["depth"].tolist() == [40, 10, 40, 20, 40, 30, 40, 40]
+
+
+def test_display_step_rebuckets_to_bin_resolution():
+    """With display_step=4, four 1bp positions should collapse to one display bin."""
+    con = duckdb.connect()
+    con.execute(
+        """
+        CREATE TABLE cov2 (
+            sample_id VARCHAR,
+            pos BIGINT,
+            "end" BIGINT,
+            total_depth INTEGER,
+            mean_mapq DOUBLE,
+            frac_mapq0 DOUBLE,
+            frac_low_mapq DOUBLE,
+            gc_content DOUBLE
+        )
+        """
+    )
+    # Two samples, each with a single 4bp bin — mirrors 100bp bin behaviour.
+    con.executemany(
+        """
+        INSERT INTO cov2
+            (sample_id, pos, "end", total_depth, mean_mapq, frac_mapq0, frac_low_mapq, gc_content)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("sample_a", 0, 4, 20, 60, 0.0, 0.0, 0.50),
+            ("sample_b", 0, 4, 40, 55, 0.0, 0.0, 0.50),
+        ],
+    )
+
+    assert max_bin_width(con, "cov2", "") == 4
+
+    profile = load_expanded_depth_profile(con, "cov2", "", display_step=4)
+    assert len(profile) == 1, "4bp bins with display_step=4 should yield 1 display point"
+    assert profile["pos"].tolist() == [0]
+    assert profile["mean_depth"].tolist() == [30.0]
+
+    sample_profile = load_expanded_sample_profile(con, "cov2", "", display_step=4)
+    assert len(sample_profile) == 2
+    assert set(sample_profile["sample_id"]) == {"sample_a", "sample_b"}

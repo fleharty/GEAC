@@ -41,30 +41,52 @@ def expanded_profile_position_count(
     )
 
 
+def max_bin_width(
+    con: duckdb.DuckDBPyConnection,
+    table_expr: str,
+    where_clause: str,
+) -> int:
+    """Return the largest (end - pos) value in the region, used as display step."""
+    result = con.execute(
+        f'SELECT MAX("end" - pos) FROM {table_expr} {where_clause}'
+    ).fetchone()[0]
+    return int(result) if result and result > 0 else 1
+
+
 def load_expanded_depth_profile(
     con: duckdb.DuckDBPyConnection,
     table_expr: str,
     where_clause: str,
+    display_step: int = 1,
 ) -> pd.DataFrame:
-    """Load cross-sample depth profile statistics at base resolution."""
+    """Load cross-sample depth profile statistics.
+
+    Expands each coverage interval to individual base positions for correct
+    cross-sample aggregation, then re-buckets to ``display_step`` base-pair
+    bins so the plot matches the original data resolution and renders quickly.
+    """
     base_expr = build_expanded_profile_expr(table_expr, where_clause)
+    if display_step > 1:
+        pos_expr = f"FLOOR(prof_pos / {display_step}) * {display_step}"
+    else:
+        pos_expr = "prof_pos"
     return con.execute(
         f"""
         SELECT
-            prof_pos AS pos,
-            AVG(total_depth)   AS mean_depth,
-            MIN(total_depth)   AS min_depth,
-            MAX(total_depth)   AS max_depth,
+            {pos_expr}                AS pos,
+            AVG(total_depth)          AS mean_depth,
+            MIN(total_depth)          AS min_depth,
+            MAX(total_depth)          AS max_depth,
             PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_depth) AS p25_depth,
             PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_depth) AS p75_depth,
             COUNT(DISTINCT sample_id) AS n_samples,
-            AVG(mean_mapq)     AS mean_mapq,
-            AVG(frac_mapq0)    AS mean_frac_mapq0,
-            AVG(frac_low_mapq) AS mean_frac_low_mapq,
-            AVG(gc_content)    AS mean_gc_content
+            AVG(mean_mapq)            AS mean_mapq,
+            AVG(frac_mapq0)           AS mean_frac_mapq0,
+            AVG(frac_low_mapq)        AS mean_frac_low_mapq,
+            AVG(gc_content)           AS mean_gc_content
         FROM {base_expr}
-        GROUP BY prof_pos
-        ORDER BY prof_pos
+        GROUP BY {pos_expr}
+        ORDER BY {pos_expr}
         """
     ).df()
 
@@ -73,16 +95,26 @@ def load_expanded_sample_profile(
     con: duckdb.DuckDBPyConnection,
     table_expr: str,
     where_clause: str,
+    display_step: int = 1,
 ) -> pd.DataFrame:
-    """Load per-sample depth values at base resolution for profile overlays."""
+    """Load per-sample depth values for profile overlays.
+
+    Re-buckets to ``display_step`` bins matching the display resolution used
+    for the aggregate profile.
+    """
     base_expr = build_expanded_profile_expr(table_expr, where_clause)
+    if display_step > 1:
+        pos_expr = f"FLOOR(prof_pos / {display_step}) * {display_step}"
+    else:
+        pos_expr = "prof_pos"
     return con.execute(
         f"""
         SELECT
-            prof_pos AS pos,
+            {pos_expr}           AS pos,
             sample_id,
-            total_depth AS depth
+            AVG(total_depth)     AS depth
         FROM {base_expr}
-        ORDER BY prof_pos, sample_id
+        GROUP BY {pos_expr}, sample_id
+        ORDER BY {pos_expr}, sample_id
         """
     ).df()

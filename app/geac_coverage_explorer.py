@@ -9,6 +9,7 @@ from coverage_profile import (
     expanded_profile_position_count,
     load_expanded_depth_profile,
     load_expanded_sample_profile,
+    max_bin_width,
 )
 from igv_helpers import load_manifest, resolve_index_uri
 from explorer import COVERAGE_FILTER_STATE, GEAC_VERSION, DataSource
@@ -880,7 +881,8 @@ with tab_profile:
             "Consider using a smaller region or re-running `geac coverage` with a larger `--bin-size`."
         )
     else:
-        _prof_df = load_expanded_depth_profile(con, table_expr, _prof_where)
+        _display_step = max_bin_width(con, table_expr, _prof_where)
+        _prof_df = load_expanded_depth_profile(con, table_expr, _prof_where, display_step=_display_step)
 
         _show_samples = st.checkbox(
             "Show individual sample lines", value=False, key="prof_show_samples"
@@ -926,7 +928,7 @@ with tab_profile:
         _depth_panel = (_depth_minmax + _depth_iqr + _depth_mean).properties(height=220, width="container")
 
         if _show_samples and sample_sel:
-            _samp_df = load_expanded_sample_profile(con, table_expr, _prof_where)
+            _samp_df = load_expanded_sample_profile(con, table_expr, _prof_where, display_step=_display_step)
             _samp_lines = (
                 alt.Chart(_samp_df)
                 .mark_line(opacity=0.5, strokeWidth=1)
