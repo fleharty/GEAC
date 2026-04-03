@@ -5105,23 +5105,67 @@ with tab_pipeline:
                         .mark_line(color="gray", strokeDash=[4, 4], opacity=0.6)
                         .encode(x="x:Q", y="y:Q")
                     )
+                    _pc_vaf_sel = alt.selection_point(
+                        name="pc_vaf_select",
+                        fields=["sample_id", "chrom", "pos", "alt_allele"],
+                        on="click",
+                        toggle="event.shiftKey",
+                    )
                     _pc_vaf_scatter = (
                         alt.Chart(_pc_plot)
-                        .mark_circle(opacity=0.5, size=40)
+                        .mark_circle(size=40)
                         .encode(
                             x=alt.X("log1p_vaf_a:Q", title=f"log1p(VAF) — {_pc_pipe_a}"),
                             y=alt.Y("log1p_vaf_b:Q", title=f"log1p(VAF) — {_pc_pipe_b}"),
                             color=alt.Color("variant_type:N", title="Variant type"),
+                            opacity=alt.condition(_pc_vaf_sel, alt.value(1.0), alt.value(0.4)),
+                            size=alt.condition(_pc_vaf_sel, alt.value(120), alt.value(40)),
                             tooltip=[
                                 "sample_id", "chrom", "pos", "alt_allele", "variant_type",
                                 alt.Tooltip("vaf_a:Q", title=f"VAF ({_pc_pipe_a})", format=".4f"),
                                 alt.Tooltip("vaf_b:Q", title=f"VAF ({_pc_pipe_b})", format=".4f"),
                             ],
                         )
+                        .add_params(_pc_vaf_sel)
                         .properties(width=450, height=400)
                         .interactive()
                     )
-                    st.altair_chart(_pc_diag + _pc_vaf_scatter, width="stretch")
+                    _pc_vaf_event = st.altair_chart(
+                        _pc_diag + _pc_vaf_scatter,
+                        width="stretch",
+                        on_select="rerun",
+                        key="pc_vaf_scatter",
+                    )
+
+                    _pc_vaf_pts = (_pc_vaf_event.selection or {}).get("pc_vaf_select", [])
+                    if _pc_vaf_pts:
+                        _pc_vaf_or = " OR ".join(
+                            f"(sample_id = '{_sql_str(p['sample_id'])}' AND chrom = '{_sql_str(p['chrom'])}' "
+                            f"AND pos = {int(p['pos'])} AND alt_allele = '{_sql_str(p['alt_allele'])}')"
+                            for p in _pc_vaf_pts
+                            if all(k in p for k in ["sample_id", "chrom", "pos", "alt_allele"])
+                        )
+                        if _pc_vaf_or:
+                            _pc_vaf_sel_df = con.execute(f"""
+                                SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+                                FROM {table_expr}
+                                WHERE ({_pc_vaf_or})
+                                ORDER BY sample_id, chrom, pos, pipeline
+                            """).df()
+                            _pc_vaf_show_cols = [c for c in _table_cols + ["pipeline"] if c in _pc_vaf_sel_df.columns]
+                            st.caption(
+                                f"{len(_pc_vaf_sel_df)} records for {len(_pc_vaf_pts)} selected "
+                                f"loci (both pipelines shown) — shift-click to select multiple"
+                            )
+                            st.dataframe(_pc_vaf_sel_df[_pc_vaf_show_cols], width="stretch", hide_index=True)
+                            igv_buttons(
+                                [f"({_pc_vaf_or})"],
+                                _pc_vaf_sel_df,
+                                key=f"pc_vaf_{'_'.join(str(int(p['pos'])) for p in _pc_vaf_pts[:5] if 'pos' in p)}",
+                                use_global_filters=False,
+                            )
+                    else:
+                        st.caption("Click a point to select it; shift-click to select multiple.")
 
                     if len(_pc_shared) >= 2:
                         _pc_r = _pc_shared["vaf_a"].corr(_pc_shared["vaf_b"])
