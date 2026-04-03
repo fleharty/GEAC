@@ -920,6 +920,14 @@ with tab_profile:
                         _ivl_bounds["feature_type"].fillna("Exon")
                     )
 
+                # Zoom x-axis to the exon extent so exons are visible.
+                # Genes include introns, so the full gene span >> exon widths;
+                # without an explicit domain the exons become invisible slivers.
+                _exon_x_min = int(_ivl_bounds["start"].min())
+                _exon_x_max = int(_ivl_bounds["end"].max())
+                _x_padding  = max(500, (_exon_x_max - _exon_x_min) // 10)
+                _x_domain   = [_exon_x_min - _x_padding, _exon_x_max + _x_padding]
+
                 _ft_color = alt.Color(
                     "feature_type:N",
                     scale=alt.Scale(
@@ -933,24 +941,24 @@ with tab_profile:
                 if "exon_number" in _ivl_bounds.columns:
                     _tooltip_fields.append("exon_number:Q")
 
-                # Shaded rect bands spanning the full y extent
+                # Shaded rect bands — higher opacity so they're visible at exon scale
                 _bands = (
                     alt.Chart(_ivl_bounds)
-                    .mark_rect(opacity=0.15)
+                    .mark_rect(opacity=0.30)
                     .encode(
-                        x=alt.X("start:Q"),
+                        x=alt.X("start:Q", scale=alt.Scale(domain=_x_domain)),
                         x2=alt.X2("end:Q"),
                         color=_ft_color,
                         tooltip=_tooltip_fields,
                     )
                 )
 
-                # Thin border lines at start/end of each interval for crispness
+                # Border lines at exon boundaries
                 _borders = (
                     alt.Chart(_ivl_bounds)
-                    .mark_rule(opacity=0.4, strokeWidth=1)
+                    .mark_rule(opacity=0.6, strokeWidth=1.5)
                     .encode(
-                        x=alt.X("start:Q"),
+                        x=alt.X("start:Q", scale=alt.Scale(domain=_x_domain)),
                         color=_ft_color,
                     )
                 )
@@ -963,7 +971,7 @@ with tab_profile:
                         alt.Chart(_mid)
                         .mark_text(dy=-8, fontSize=9, align="center", color="#555")
                         .encode(
-                            x=alt.X("mid:Q"),
+                            x=alt.X("mid:Q", scale=alt.Scale(domain=_x_domain)),
                             text=alt.Text("exon_number:Q"),
                             tooltip=_tooltip_fields,
                         )
@@ -971,6 +979,11 @@ with tab_profile:
                     _prof_chart = _bands + _borders + _labels + _prof_chart
                 else:
                     _prof_chart = _bands + _borders + _prof_chart
+
+                st.caption(
+                    f"{_prof_gene} · {_ivl_bounds['start'].min():,.0f}–{_ivl_bounds['end'].max():,.0f} "
+                    f"(zoomed to exon extents; scroll/pinch to pan)"
+                )
 
         st.altair_chart(
             _prof_chart.resolve_scale(color="independent").properties(height=320).interactive(),
