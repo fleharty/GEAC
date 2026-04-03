@@ -924,6 +924,13 @@ with tab_profile:
             )
             st.code("_prof_df first 10 rows:\n" + _prof_df.head(10).to_string(index=False), language=None)
 
+            # Aggregated profile stats after two-level aggregation
+            st.code(
+                "_prof_df describe (after two-level aggregation):\n" +
+                _prof_df[["pos", "mean_depth", "min_depth", "max_depth", "p25_depth", "p75_depth"]].describe().to_string(),
+                language=None,
+            )
+
             # Per-sample mean depth to spot outliers
             _dbg_per_sample = con.execute(f"""
                 SELECT

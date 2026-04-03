@@ -61,9 +61,15 @@ def load_expanded_depth_profile(
 ) -> pd.DataFrame:
     """Load cross-sample depth profile statistics.
 
-    Expands each coverage interval to individual base positions for correct
-    cross-sample aggregation, then re-buckets to ``display_step`` base-pair
-    bins so the plot matches the original data resolution and renders quickly.
+    Uses two-level aggregation:
+      1. Expand each coverage interval to base positions and collapse to one
+         value per (display_bin, sample_id) — so each sample contributes
+         equally regardless of how many 1bp dropout records it has.
+      2. Compute cross-sample statistics (mean, IQR, min/max) over the
+         per-sample values.
+
+    This ensures the IQR band reflects the spread across samples, not the
+    spread of individual base positions across all samples mixed together.
     """
     base_expr = build_expanded_profile_expr(table_expr, where_clause)
     if display_step > 1:
@@ -72,21 +78,33 @@ def load_expanded_depth_profile(
         pos_expr = "prof_pos"
     return con.execute(
         f"""
+        WITH per_sample AS (
+            SELECT
+                {pos_expr}       AS pos,
+                sample_id,
+                AVG(total_depth) AS depth,
+                AVG(mean_mapq)   AS mean_mapq,
+                AVG(frac_mapq0)  AS frac_mapq0,
+                AVG(frac_low_mapq) AS frac_low_mapq,
+                AVG(gc_content)  AS gc_content
+            FROM {base_expr}
+            GROUP BY {pos_expr}, sample_id
+        )
         SELECT
-            {pos_expr}                AS pos,
-            AVG(total_depth)          AS mean_depth,
-            MIN(total_depth)          AS min_depth,
-            MAX(total_depth)          AS max_depth,
-            PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_depth) AS p25_depth,
-            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_depth) AS p75_depth,
+            pos,
+            AVG(depth)   AS mean_depth,
+            MIN(depth)   AS min_depth,
+            MAX(depth)   AS max_depth,
+            PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY depth) AS p25_depth,
+            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY depth) AS p75_depth,
             COUNT(DISTINCT sample_id) AS n_samples,
-            AVG(mean_mapq)            AS mean_mapq,
-            AVG(frac_mapq0)           AS mean_frac_mapq0,
-            AVG(frac_low_mapq)        AS mean_frac_low_mapq,
-            AVG(gc_content)           AS mean_gc_content
-        FROM {base_expr}
-        GROUP BY {pos_expr}
-        ORDER BY {pos_expr}
+            AVG(mean_mapq)       AS mean_mapq,
+            AVG(frac_mapq0)      AS mean_frac_mapq0,
+            AVG(frac_low_mapq)   AS mean_frac_low_mapq,
+            AVG(gc_content)      AS mean_gc_content
+        FROM per_sample
+        GROUP BY pos
+        ORDER BY pos
         """
     ).df()
 
@@ -110,9 +128,9 @@ def load_expanded_sample_profile(
     return con.execute(
         f"""
         SELECT
-            {pos_expr}           AS pos,
+            {pos_expr}       AS pos,
             sample_id,
-            AVG(total_depth)     AS depth
+            AVG(total_depth) AS depth
         FROM {base_expr}
         GROUP BY {pos_expr}, sample_id
         ORDER BY {pos_expr}, sample_id
