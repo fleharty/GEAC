@@ -822,7 +822,6 @@ def make_igv_session(
     session format does not support sort-on-load, so the XML itself contains
     no sort directives.
     """
-    sample_ids = df["sample_id"].unique().tolist()
     first = df.sort_values(["chrom", "pos"]).iloc[0]
     locus = f"{first['chrom']}:{max(0, int(first['pos']) - 99)}-{int(first['pos']) + 101}"
 
@@ -843,13 +842,43 @@ def make_igv_session(
     sort_pos = int(first["pos"]) + 1  # IGV is 1-based; GEAC pos is 0-based
     sort_locus = f"{first['chrom']}:{sort_pos}"
 
-    for sid in sample_ids:
-        entry = manifest.get(str(sid))
+    # Build (sample_id, pipeline, track_label) tuples.  When multiple pipelines
+    # are present in df, emit one track per (sample_id, pipeline) pair so both
+    # BAMs appear in the session.  Manifest lookup tries "{sid}__{pipeline}"
+    # first (for manifests with pipeline-specific entries) then falls back to
+    # "{sid}" for backwards compatibility.
+    _has_pipeline = "pipeline" in df.columns and df["pipeline"].nunique() > 1
+    if _has_pipeline:
+        _sid_pipe_pairs = (
+            df[["sample_id", "pipeline"]]
+            .drop_duplicates()
+            .itertuples(index=False, name=None)
+        )
+        _track_items = [
+            (sid, pipe, f"{sid} ({pipe})")
+            for sid, pipe in _sid_pipe_pairs
+        ]
+    else:
+        _track_items = [
+            (sid, None, str(sid))
+            for sid in df["sample_id"].unique().tolist()
+        ]
+
+    _seen_bams: set[str] = set()
+    for sid, pipe, label in _track_items:
+        entry = (
+            manifest.get(f"{sid}__{pipe}") or manifest.get(str(sid))
+            if pipe is not None
+            else manifest.get(str(sid))
+        )
         if entry:
             bam, bai = entry["bam"], entry["bai"]
+            if bam in _seen_bams:
+                continue
+            _seen_bams.add(bam)
             index_attr = f' index="{bai}"' if bai else ""
-            resources.append(f'        <Resource path="{bam}" name="{sid}"{index_attr}/>')
-            tracks.append(f'        <Track id="{bam}" name="{sid}"/>')
+            resources.append(f'        <Resource path="{bam}" name="{label}"{index_attr}/>')
+            tracks.append(f'        <Track id="{bam}" name="{label}"/>')
 
     resources.append('        <Resource path="positions.bed" name="Selected positions"/>')
     tracks.append('        <Track id="positions.bed" name="Selected positions" color="255,0,0" height="40"/>')
@@ -899,7 +928,9 @@ def igv_buttons(
     n = len(sample_ids)
     cap_samples = sample_ids[:IGV_CAP]
 
-    missing = [sid for sid in sample_ids if str(sid) not in manifest]
+    missing = [sid for sid in sample_ids if str(sid) not in manifest and not any(
+        k.startswith(f"{sid}__") for k in manifest
+    )]
     if missing:
         st.warning(
             f"Sample(s) not found in manifest — no BAM track will be added for: "
