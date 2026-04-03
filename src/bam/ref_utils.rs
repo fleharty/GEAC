@@ -1,12 +1,18 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use rust_htslib::{bam, faidx};
+use tracing::warn;
 
 /// Caches one chromosome sequence at a time to avoid per-base faidx seeks.
 /// When the chromosome changes, the new sequence is fetched and the old one dropped.
+/// Contigs present in the BAM header but absent from the FASTA index are skipped
+/// gracefully (returning 'N') rather than crashing via htslib.
 pub(crate) struct RefCache {
     fai: faidx::Reader,
+    /// Sequence names present in the FASTA index.
+    fasta_seqs: HashSet<String>,
     current_tid: Option<usize>,
     current_chrom: String,
     /// Upper-cased sequence bytes for the cached chromosome (0-based)
@@ -17,8 +23,14 @@ impl RefCache {
     pub(crate) fn new(reference: &Path) -> Result<Self> {
         let fai = faidx::Reader::from_path(reference)
             .with_context(|| format!("failed to open reference FASTA: {}", reference.display()))?;
+        let fasta_seqs = fai
+            .seq_names()
+            .context("failed to read sequence names from FASTA index")?
+            .into_iter()
+            .collect();
         Ok(Self {
             fai,
+            fasta_seqs,
             current_tid: None,
             current_chrom: String::new(),
             current_seq: Vec::new(),
@@ -28,6 +40,8 @@ impl RefCache {
     /// Returns (chrom_name, ref_base) for the given tid and 0-based position.
     /// Loads the chromosome sequence on first access or when the chromosome changes.
     /// `targets` is a pre-built slice of (chrom_name, chrom_len) indexed by tid.
+    /// Returns `'N'` for contigs absent from the FASTA (e.g. decoy sequences like
+    /// `hs37d5`) so the caller skips them without crashing.
     pub(crate) fn get(
         &mut self,
         targets: &[(String, usize)],
@@ -38,6 +52,18 @@ impl RefCache {
             let (chrom, chrom_len) = targets
                 .get(tid)
                 .with_context(|| format!("tid {tid} not found in BAM header"))?;
+
+            if !self.fasta_seqs.contains(chrom.as_str()) {
+                warn!(
+                    chrom,
+                    "contig is in BAM header but not in FASTA index; skipping"
+                );
+                // Mark as loaded with an empty sequence so the warning fires once.
+                self.current_tid = Some(tid);
+                self.current_chrom = chrom.clone();
+                self.current_seq = Vec::new();
+                return Ok((chrom.clone(), 'N'));
+            }
 
             self.current_seq = self
                 .fai
