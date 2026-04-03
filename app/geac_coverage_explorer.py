@@ -884,6 +884,65 @@ with tab_profile:
         _display_step = max_bin_width(con, table_expr, _prof_where)
         _prof_df = load_expanded_depth_profile(con, table_expr, _prof_where, display_step=_display_step)
 
+        with st.expander("DEBUG: depth profile diagnostics", expanded=True):
+            # Raw record stats from the coverage table
+            _dbg_raw = con.execute(f"""
+                SELECT
+                    COUNT(*)                        AS n_records,
+                    COUNT(DISTINCT sample_id)       AS n_samples,
+                    COUNT(DISTINCT ("end" - pos))   AS n_distinct_bin_widths,
+                    MIN("end" - pos)                AS min_bin_width,
+                    MAX("end" - pos)                AS max_bin_width,
+                    MIN(pos)                        AS region_start,
+                    MAX("end")                      AS region_end,
+                    ROUND(AVG(total_depth), 2)      AS raw_avg_depth,
+                    MIN(total_depth)                AS raw_min_depth,
+                    MAX(total_depth)                AS raw_max_depth
+                FROM {table_expr}
+                {_prof_where}
+            """).df()
+            st.code("Raw coverage records:\n" + _dbg_raw.to_string(index=False), language=None)
+
+            # Bin width distribution
+            _dbg_bins = con.execute(f"""
+                SELECT "end" - pos AS bin_width, COUNT(*) AS n_records
+                FROM {table_expr}
+                {_prof_where}
+                GROUP BY bin_width
+                ORDER BY n_records DESC
+                LIMIT 10
+            """).df()
+            st.code("Bin width distribution (top 10):\n" + _dbg_bins.to_string(index=False), language=None)
+
+            st.code(f"display_step = {_display_step}\nn_expanded_positions = {_prof_n_pos:,}\n_prof_df shape = {_prof_df.shape}", language=None)
+
+            # Aggregated profile stats
+            st.code(
+                "_prof_df describe:\n" +
+                _prof_df[["pos", "mean_depth", "min_depth", "max_depth", "p25_depth", "p75_depth"]].describe().to_string(),
+                language=None,
+            )
+            st.code("_prof_df first 10 rows:\n" + _prof_df.head(10).to_string(index=False), language=None)
+
+            # Per-sample mean depth to spot outliers
+            _dbg_per_sample = con.execute(f"""
+                SELECT
+                    sample_id,
+                    COUNT(*)                                            AS n_records,
+                    MIN("end" - pos)                                    AS min_bin_width,
+                    MAX("end" - pos)                                    AS max_bin_width,
+                    ROUND(SUM(total_depth * ("end" - pos)) * 1.0
+                          / NULLIF(SUM("end" - pos), 0), 2)            AS weighted_mean_depth,
+                    ROUND(AVG(total_depth), 2)                          AS unweighted_mean_depth,
+                    MIN(total_depth)                                    AS min_depth,
+                    MAX(total_depth)                                    AS max_depth
+                FROM {table_expr}
+                {_prof_where}
+                GROUP BY sample_id
+                ORDER BY weighted_mean_depth DESC
+            """).df()
+            st.code("Per-sample stats:\n" + _dbg_per_sample.to_string(index=False), language=None)
+
         _show_samples = st.checkbox(
             "Show individual sample lines", value=False, key="prof_show_samples"
         )
