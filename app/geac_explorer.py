@@ -631,12 +631,26 @@ if genome == "other":
 
 @st.cache_data
 def load_manifest(p: str) -> dict:
+    """Load a TSV manifest into a lookup dict.
+
+    Keys are ``sample_id`` strings by default.  If the manifest has a
+    ``pipeline`` column, keys are ``(sample_id, pipeline)`` tuples so that
+    the same sample run on multiple pipelines can resolve to different BAMs.
+    Both key styles may coexist: rows without a ``pipeline`` value (or from a
+    manifest without the column) use the plain ``sample_id`` key.
+    """
     mdf = pd.read_csv(p.strip(), sep="\t")
+    _has_pipeline_col = "pipeline" in mdf.columns
     result = {}
     for row in mdf.itertuples(index=False):
         bai = str(row.duplex_output_bam_index) if hasattr(row, "duplex_output_bam_index") and pd.notna(row.duplex_output_bam_index) else None
         variants = str(row.final_annotated_variants) if hasattr(row, "final_annotated_variants") and pd.notna(row.final_annotated_variants) else None
-        result[str(row.collaborator_sample_id)] = {"bam": str(row.duplex_output_bam), "bai": bai, "variants_tsv": variants}
+        entry = {"bam": str(row.duplex_output_bam), "bai": bai, "variants_tsv": variants}
+        sid = str(row.collaborator_sample_id)
+        if _has_pipeline_col and pd.notna(row.pipeline) and str(row.pipeline).strip():
+            result[(sid, str(row.pipeline).strip())] = entry
+        else:
+            result[sid] = entry
     return result
 
 manifest = {}
@@ -867,7 +881,7 @@ def make_igv_session(
     _seen_bams: set[str] = set()
     for sid, pipe, label in _track_items:
         entry = (
-            manifest.get(f"{sid}__{pipe}") or manifest.get(str(sid))
+            manifest.get((str(sid), str(pipe))) or manifest.get(str(sid))
             if pipe is not None
             else manifest.get(str(sid))
         )
@@ -929,7 +943,7 @@ def igv_buttons(
     cap_samples = sample_ids[:IGV_CAP]
 
     missing = [sid for sid in sample_ids if str(sid) not in manifest and not any(
-        k.startswith(f"{sid}__") for k in manifest
+        isinstance(k, tuple) and k[0] == str(sid) for k in manifest
     )]
     if missing:
         st.warning(
