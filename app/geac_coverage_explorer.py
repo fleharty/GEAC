@@ -862,25 +862,54 @@ with tab_profile:
             _prof_chart = _prof_chart + _samp_chart
 
         # ── Exon / interval shaded bands ──────────────────────────────────
-        if _has_intervals and _has_gene and _prof_gene:
+        # Prefer coverage_intervals when available; fall back to deriving
+        # exon extents from the coverage table's feature_type/exon_number
+        # columns (populated when --gene-annotations was provided).
+        _cov_has_feature_type = "feature_type" in _cols
+        _can_shade_exons = (_has_intervals or _cov_has_feature_type) and _has_gene and _prof_gene
+        if _can_shade_exons:
             _pg2 = _prof_gene.replace("'", "''")
-            _ivl_cols = con.execute("PRAGMA table_info(coverage_intervals)").df()["name"].tolist()
-            _has_feature_type = "feature_type" in _ivl_cols
-            _has_exon_number  = "exon_number"  in _ivl_cols
 
-            _ivl_select = ", ".join(filter(None, [
-                "start", "end", "interval_name",
-                "feature_type" if _has_feature_type else None,
-                "exon_number"  if _has_exon_number  else None,
-            ]))
-            _ivl_bounds = con.execute(
-                f"""
-                SELECT DISTINCT {_ivl_select}
-                FROM coverage_intervals
-                WHERE gene = '{_pg2}'
-                ORDER BY start
-                """
-            ).df()
+            if _has_intervals:
+                _ivl_cols = con.execute("PRAGMA table_info(coverage_intervals)").df()["name"].tolist()
+                _has_feature_type = "feature_type" in _ivl_cols
+                _has_exon_number  = "exon_number"  in _ivl_cols
+                _ivl_select = ", ".join(filter(None, [
+                    "start", "end", "interval_name",
+                    "feature_type" if _has_feature_type else None,
+                    "exon_number"  if _has_exon_number  else None,
+                ]))
+                _ivl_bounds = con.execute(
+                    f"""
+                    SELECT DISTINCT {_ivl_select}
+                    FROM coverage_intervals
+                    WHERE gene = '{_pg2}'
+                    ORDER BY start
+                    """
+                ).df()
+            else:
+                # No coverage_intervals table — derive exon extents from the
+                # coverage table directly using feature_type / exon_number.
+                _has_feature_type = True
+                _has_exon_number  = "exon_number" in _cols
+                _exon_select = ", ".join(filter(None, [
+                    "feature_type",
+                    "exon_number" if _has_exon_number else None,
+                ]))
+                _ivl_bounds = con.execute(
+                    f"""
+                    SELECT
+                        MIN(pos)     AS start,
+                        MAX(pos) + 1 AS end,
+                        {_exon_select},
+                        COALESCE(CAST(exon_number AS VARCHAR), feature_type) AS interval_name
+                    FROM {table_expr}
+                    WHERE gene = '{_pg2}'
+                      AND feature_type IS NOT NULL
+                    GROUP BY {_exon_select}
+                    ORDER BY start
+                    """
+                ).df()
 
             if not _ivl_bounds.empty:
                 # Fill missing feature_type so color encoding always has a value
