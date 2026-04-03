@@ -802,3 +802,46 @@ the depth profile showed inflated depth values for some samples (e.g. 120x when 
 **Lesson:** When coverage records represent variable-width intervals, always expand to base
 positions (or re-bucket using the `end` coordinate, not `pos + bin_size`) before computing
 cross-sample statistics. Percentiles computed over mixed-width records are not meaningful.
+
+### Depth profile looked like bars and rendered slowly after interval expansion fix
+**Symptom:** After switching to `UNNEST(range(pos, "end"))` for correct interval expansion,
+the depth profile plot appeared as a staircase of solid bars rather than smooth area/line
+bands, and rendering became noticeably slow (especially on larger genes).
+**Root cause:** Expanding each 100bp bin into 100 individual 1bp rows means the aggregated
+profile has 100 consecutive positions with identical depth values (one per base within the
+original bin). Altair's `mark_area` renders these as a stepped/blocky fill rather than a
+smooth curve, and the chart has 100× more data points than the original binned view.
+**Fix:** After interval expansion and cross-sample aggregation, re-aggregate to the maximum
+bin width in the region (`max_bin_width()` queries `MAX("end" - pos)`). This collapses the
+100 identical 1bp rows back to a single 100bp display point — preserving correctness for
+mixed-resolution adaptive-threshold data while matching the original visual resolution and
+performance. Added `display_step` parameter to `load_expanded_depth_profile` and
+`load_expanded_sample_profile` in `app/coverage_profile.py`.
+**Lesson:** Interval expansion to 1bp is the right aggregation strategy but not the right
+display strategy. Always re-bucket to the native display resolution after aggregation.
+
+### `geac merge` failing when merging two DuckDB files — table existence checks broken
+**Symptom:** `geac merge a.duckdb b.duckdb --output cohort.duckdb` failed with:
+```
+Catalog Error: Table with name tables does not exist!
+Did you mean "information_schema.tables"?
+```
+and then on the second run attempt:
+```
+failed to insert 'alt_bases' from attached '_src0'
+Catalog Error: Table with name alt_bases does not exist!
+Did you mean "_src0.alt_bases"?
+```
+**Root cause (two bugs in `src/merge.rs`):**
+1. `src_table_exists` queried `{alias}.information_schema.tables` — not reliably accessible
+   for attached databases in DuckDB 1.x.
+2. `dst_table_exists` queried `information_schema.tables` (unqualified) — this includes
+   tables from all attached databases. So when the source DuckDB was attached, the output
+   DB appeared to already have `alt_bases`, causing an `INSERT INTO` on a non-existent
+   destination table.
+**Fix:** Both functions now use `duckdb_tables()` — `src_table_exists` filters by
+`database_name = '{alias}'` and `dst_table_exists` filters by
+`database_name = current_database()`.
+**Lesson:** In DuckDB, `information_schema.tables` (unqualified) is not scoped to the
+current database when other databases are attached. Always use `duckdb_tables()` with an
+explicit `database_name` filter when checking table existence in a multi-database context.
