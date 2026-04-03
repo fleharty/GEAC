@@ -4994,12 +4994,15 @@ with tab_pipeline:
                 "Pipeline B", _pc_pipe_b_opts, index=0, key="pipe_cmp_b"
             )
 
+            # Strip any pipeline_sel filter from conditions — this tab manages
+            # pipeline selection internally via its own A/B selectors.
+            _pc_base_conds = [c for c in conditions if not c.startswith("pipeline IN")]
             _pc_wa = " AND ".join(
-                conditions + [f"pipeline = '{_sql_str(str(_pc_pipe_a))}'"]
-            ) if conditions else f"pipeline = '{_sql_str(str(_pc_pipe_a))}'"
+                _pc_base_conds + [f"pipeline = '{_sql_str(str(_pc_pipe_a))}'"]
+            ) if _pc_base_conds else f"pipeline = '{_sql_str(str(_pc_pipe_a))}'"
             _pc_wb = " AND ".join(
-                conditions + [f"pipeline = '{_sql_str(str(_pc_pipe_b))}'"]
-            ) if conditions else f"pipeline = '{_sql_str(str(_pc_pipe_b))}'"
+                _pc_base_conds + [f"pipeline = '{_sql_str(str(_pc_pipe_b))}'"]
+            ) if _pc_base_conds else f"pipeline = '{_sql_str(str(_pc_pipe_b))}'"
 
             # ── Build FULL OUTER JOIN dataset once, reused by all views ───────
             _pc_df = con.execute(f"""
