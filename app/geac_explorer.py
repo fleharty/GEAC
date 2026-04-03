@@ -5095,19 +5095,22 @@ with tab_pipeline:
                 if _pc_shared.empty:
                     st.info("No shared loci for current filters.")
                 else:
+                    import numpy as _np
+                    _pc_plot = _pc_shared.copy()
+                    _pc_plot["log1p_vaf_a"] = _np.log1p(_pc_plot["vaf_a"])
+                    _pc_plot["log1p_vaf_b"] = _np.log1p(_pc_plot["vaf_b"])
+                    _pc_diag_max = float(_np.log1p(1.0))
                     _pc_diag = (
-                        alt.Chart(pd.DataFrame({"x": [0.0, 1.0], "y": [0.0, 1.0]}))
+                        alt.Chart(pd.DataFrame({"x": [0.0, _pc_diag_max], "y": [0.0, _pc_diag_max]}))
                         .mark_line(color="gray", strokeDash=[4, 4], opacity=0.6)
                         .encode(x="x:Q", y="y:Q")
                     )
                     _pc_vaf_scatter = (
-                        alt.Chart(_pc_shared)
+                        alt.Chart(_pc_plot)
                         .mark_circle(opacity=0.5, size=40)
                         .encode(
-                            x=alt.X("vaf_a:Q", title=f"VAF — {_pc_pipe_a}",
-                                    scale=alt.Scale(domain=[0, 1])),
-                            y=alt.Y("vaf_b:Q", title=f"VAF — {_pc_pipe_b}",
-                                    scale=alt.Scale(domain=[0, 1])),
+                            x=alt.X("log1p_vaf_a:Q", title=f"log1p(VAF) — {_pc_pipe_a}"),
+                            y=alt.Y("log1p_vaf_b:Q", title=f"log1p(VAF) — {_pc_pipe_b}"),
                             color=alt.Color("variant_type:N", title="Variant type"),
                             tooltip=[
                                 "sample_id", "chrom", "pos", "alt_allele", "variant_type",
