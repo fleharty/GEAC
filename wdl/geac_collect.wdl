@@ -181,6 +181,15 @@ task Collect {
     command <<<
         set -euo pipefail
 
+        # Ensure tabix indices are co-located with their data files so htslib
+        # can find them automatically, regardless of how Cromwell localizes files.
+        ~{if defined(vcf_index) then
+            "ln -sf \"" + select_first([vcf_index]) + "\" \"" + select_first([vcf]) + ".tbi\""
+          else ""}
+        ~{if defined(gnomad_index) then
+            "ln -sf \"" + select_first([gnomad_index]) + "\" \"" + select_first([gnomad]) + ".tbi\""
+          else ""}
+
         geac collect \
             --input            ~{input_bam} \
             --reference        ~{reference_fasta} \
