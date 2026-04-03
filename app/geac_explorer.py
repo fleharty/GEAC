@@ -5100,6 +5100,15 @@ with tab_pipeline:
                     _pc_plot["log1p_vaf_a"] = _np.log1p(_pc_plot["vaf_a"])
                     _pc_plot["log1p_vaf_b"] = _np.log1p(_pc_plot["vaf_b"])
                     _pc_diag_max = float(_np.log1p(1.0))
+
+                    # Tick positions in log1p space; labels show original VAF values.
+                    _vaf_tick_vals = [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
+                    _log1p_ticks = [float(_np.log1p(v)) for v in _vaf_tick_vals]
+                    _vaf_axis = alt.Axis(
+                        values=_log1p_ticks,
+                        labelExpr="datum.value === 0 ? '0' : format(Math.expm1(datum.value), '.3f')",
+                    )
+
                     _pc_diag = (
                         alt.Chart(pd.DataFrame({"x": [0.0, _pc_diag_max], "y": [0.0, _pc_diag_max]}))
                         .mark_line(color="gray", strokeDash=[4, 4], opacity=0.6)
@@ -5115,8 +5124,8 @@ with tab_pipeline:
                         alt.Chart(_pc_plot)
                         .mark_circle(size=40)
                         .encode(
-                            x=alt.X("log1p_vaf_a:Q", title=f"log1p(VAF) — {_pc_pipe_a}"),
-                            y=alt.Y("log1p_vaf_b:Q", title=f"log1p(VAF) — {_pc_pipe_b}"),
+                            x=alt.X("log1p_vaf_a:Q", title=f"VAF — {_pc_pipe_a}", axis=_vaf_axis),
+                            y=alt.Y("log1p_vaf_b:Q", title=f"VAF — {_pc_pipe_b}", axis=_vaf_axis),
                             color=alt.Color("variant_type:N", title="Variant type"),
                             opacity=alt.condition(_pc_vaf_sel, alt.value(1.0), alt.value(0.4)),
                             size=alt.condition(_pc_vaf_sel, alt.value(120), alt.value(40)),
