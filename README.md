@@ -347,6 +347,9 @@ Key options:
 | `--gene-annotations` | — | GTF, GFF3, or UCSC genePred for gene/transcript annotation |
 | `--sample-id` | SM tag | Override the sample ID stored in the output |
 | `--batch` | — | Batch/group label stored as a column |
+| `--label1` | — | Free-text sample label 1 (e.g. tissue type) |
+| `--label2` | — | Free-text sample label 2 (e.g. library prep method) |
+| `--label3` | — | Free-text sample label 3 (e.g. sequencer type) |
 | `--read-type` | `duplex` | `duplex`, `simplex`, or `raw` |
 | `--pipeline` | `fgbio` | `fgbio`, `dragen`, or `raw` |
 | `--min-map-qual` | `0` | Minimum mapping quality |
@@ -504,9 +507,14 @@ The Coverage Explorer provides interactive analysis of `geac coverage` output. I
 
 - **Summary** — per-sample depth table, mean-depth bar chart, and MAPQ/duplication QC fractions
 - **Depth Distribution** — per-sample depth histograms and fraction-at-depth-threshold summaries
-- **GC Bias** — mean depth vs GC content scatter per sample; reveals systematic GC-related coverage variation
+- **GC Bias** — mean depth vs GC content per sample with a toggle between raw mean depth and normalized depth (area=1) for cross-sample shape comparison; a GC content abundance bar chart is aligned below to show the reference GC distribution across the panel
 - **Low Coverage** — positions below a user-set depth threshold across a user-set fraction of samples; gene bar chart of affected loci; gene coverage summary table (all genes ranked by mean depth with one-click navigation to the Depth Profile)
-- **Depth Profile** — aggregate depth across a selected gene or genomic region across all selected samples. The mean depth line is colored by mean MAPQ or GC content (selectable) — red/orange on the mean MAPQ scale indicates depth dips driven by poor mapping rather than true under-coverage. When `coverage_intervals` data is present (requires `--targets` + `--intervals-output` + `--gene-annotations` at collection time), exon/interval boundaries are shown as shaded bands colored by feature type (CDS, UTR, Exon) with exon number labels. The ACMG Secondary Findings v3.2 gene list can be used to quickly filter the gene selector to actionable genes.
+- **Depth Profile** — four-panel view across a selected gene or arbitrary genomic coordinate (type `chr:start-end` into the region box). Panels share a linked x-axis with x-only panning/zooming:
+  - *Depth* — min/max range, IQR band, and mean line across all selected samples; toggle "Show individual sample lines" to overlay per-sample traces
+  - *Mean MAPQ* — cross-sample average mapping quality; dips here indicate depth drops driven by poor mapping rather than true under-coverage
+  - *Frac MAPQ 0* — fraction of reads with MAPQ=0; highlights multi-mapping regions that the mean MAPQ can obscure
+  - *GC Content* — reference GC% across the window
+  Mixed-resolution data (from `--adaptive-depth-threshold`) is handled correctly by expanding each coverage record to its true genomic interval before aggregation. The ACMG Secondary Findings v3.2 gene list can be used to quickly filter the gene selector to actionable genes.
 - **IGV** — embedded IGV.js viewer; pre-populated with locus from the Low Coverage tab row click; supports GCS BAMs via ADC token
 
 ### Project config (geac.toml)

@@ -7,6 +7,25 @@ were diagnosed, and what the fix was. Updated as new issues arise.
 
 ## Rust / Core Tool
 
+### Segfault on BAM contigs absent from FASTA index (e.g. hs37d5 decoy)
+**Symptom:** `geac collect` (and `geac coverage`) crashed with a segfault after printing:
+```
+[E::faidx_adjust_position] The sequence "hs37d5" was not found
+```
+when run on a DRAGEN BAM aligned to GRCh37 with the `hs37d5` decoy contig, using a
+FASTA that did not include that decoy sequence.
+**Root cause:** `RefCache::get` called `faidx::Reader::fetch_seq` for a contig present
+in the BAM header but absent from the FASTA index. htslib's internal `faidx_adjust_position`
+printed the error message and then crashed instead of returning a recoverable error, so
+the Rust `?` error-handling path was never reached.
+**Fix:** `RefCache::new` now calls `fai.seq_names()` at startup to build a `HashSet` of
+all sequences in the FASTA index. In `get()`, any contig not in that set returns `'N'`
+and logs a one-time `WARN` — the existing `if ref_base == 'N' { continue; }` in the
+pileup loop then skips those positions cleanly.
+**Lesson:** Never call htslib `fetch_seq` for a sequence that might not be in the index.
+Check existence first; htslib does not return a safe Rust error for missing sequences in
+all code paths.
+
 ### Coverage memory growth on large genomes
 **Symptom:** `geac coverage` on a whole-genome BAM would accumulate all
 `CoverageRecord` objects in a `Vec` before writing, consuming multiple GB of RAM.
