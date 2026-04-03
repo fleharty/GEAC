@@ -70,6 +70,10 @@ _has_gene      = "gene" in _cols
 _has_on_target = "on_target" in _cols
 _has_bin_n     = "bin_n" in _cols
 _has_intervals = data_source.is_duckdb and "coverage_intervals" in data_source.available_tables
+_has_batch     = "batch"  in _cols
+_has_label1    = "label1" in _cols
+_has_label2    = "label2" in _cols
+_has_label3    = "label3" in _cols
 
 # ── Sidebar filters ────────────────────────────────────────────────────────────
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
@@ -97,6 +101,32 @@ if _has_on_target:
     )
 else:
     on_target_sel = "All"
+
+def _label_multiselect(col, label, key):
+    vals = data_source.distinct_values(col)
+    if vals:
+        return st.sidebar.multiselect(label, vals, key=key)
+    return []
+
+if _has_batch:
+    cov_batch_sel = _label_multiselect("batch", "Batch (blank = all)", "cov_batch_sel")
+else:
+    cov_batch_sel = []
+
+if _has_label1:
+    cov_label1_sel = _label_multiselect("label1", "Label 1 (blank = all)", "cov_label1_sel")
+else:
+    cov_label1_sel = []
+
+if _has_label2:
+    cov_label2_sel = _label_multiselect("label2", "Label 2 (blank = all)", "cov_label2_sel")
+else:
+    cov_label2_sel = []
+
+if _has_label3:
+    cov_label3_sel = _label_multiselect("label3", "Label 3 (blank = all)", "cov_label3_sel")
+else:
+    cov_label3_sel = []
 
 # ── Manifest (IGV) ─────────────────────────────────────────────────────────────
 st.sidebar.divider()
@@ -161,6 +191,14 @@ def _filter_clauses(extra: list[str] | None = None) -> list[str]:
         clauses.append("on_target = true")
     elif on_target_sel == "Off target":
         clauses.append("on_target = false")
+    def _in_clause(col, sel):
+        if sel:
+            vals = ", ".join(f"'{v.replace(chr(39), chr(39)*2)}'" for v in sel)
+            clauses.append(f"{col} IN ({vals})")
+    _in_clause("batch",  cov_batch_sel)
+    _in_clause("label1", cov_label1_sel)
+    _in_clause("label2", cov_label2_sel)
+    _in_clause("label3", cov_label3_sel)
     if extra:
         clauses.extend(extra)
     return clauses
@@ -426,6 +464,25 @@ with tab_gc:
     if gc_df.empty:
         st.info("No data for current filters.")
     else:
+        _gc_mode = st.radio(
+            "Y axis",
+            ["Mean depth", "Normalized depth"],
+            horizontal=True,
+            help="Normalized depth divides each sample's per-bin mean depth by the sum "
+                 "across all bins for that sample, so the curve integrates to 1. "
+                 "This removes overall depth differences between samples and shows "
+                 "only the shape of GC bias.",
+        )
+
+        if _gc_mode == "Normalized depth":
+            _totals = gc_df.groupby("sample_id")["mean_depth"].transform("sum")
+            gc_df["norm_depth"] = gc_df["mean_depth"] / _totals
+            _y_field = alt.Y("norm_depth:Q", title="Normalized depth")
+            _tip_depth = alt.Tooltip("norm_depth:Q", title="Norm depth", format=".4f")
+        else:
+            _y_field = alt.Y("mean_depth:Q", title="Mean depth")
+            _tip_depth = alt.Tooltip("mean_depth:Q", title="Mean depth", format=".1f")
+
         gc_chart = (
             alt.Chart(gc_df)
             .mark_line(point=True, opacity=0.8)
@@ -436,19 +493,62 @@ with tab_gc:
                     scale=alt.Scale(domain=[0, 1]),
                     axis=alt.Axis(format=".0%"),
                 ),
-                y=alt.Y("mean_depth:Q", title="Mean depth"),
+                y=_y_field,
                 color=alt.Color("sample_id:N", title="Sample"),
                 tooltip=[
                     "sample_id",
                     alt.Tooltip("gc_bin:Q", title="GC bin", format=".0%"),
-                    alt.Tooltip("mean_depth:Q", title="Mean depth", format=".1f"),
+                    _tip_depth,
                     alt.Tooltip("n_positions:Q", title="Positions"),
                 ],
             )
-            .properties(width=700, height=350)
-            .interactive()
+            .properties(height=350, width="container")
         )
-        st.altair_chart(gc_chart, width="stretch")
+
+        # ── GC content abundance ───────────────────────────────────────────
+        _gc_abundance = (
+            gc_df.groupby("gc_bin", as_index=False)["n_positions"]
+            .mean()
+            .rename(columns={"n_positions": "mean_n_positions"})
+        )
+        _total_pos = _gc_abundance["mean_n_positions"].sum()
+        _gc_abundance["frac_positions"] = _gc_abundance["mean_n_positions"] / _total_pos
+        _gc_abundance["gc_bin_end"] = _gc_abundance["gc_bin"] + 0.05
+        _gc_abundance["zero"] = 0.0
+
+        _x_gc = alt.X(
+            "gc_bin:Q",
+            title="GC content (5% bins)",
+            scale=alt.Scale(domain=[0, 1]),
+            axis=alt.Axis(format=".0%"),
+        )
+
+        _abundance_chart = (
+            alt.Chart(_gc_abundance)
+            .mark_bar(color="#888")
+            .encode(
+                x=_x_gc,
+                x2=alt.X2("gc_bin_end:Q"),
+                y2=alt.Y2("zero:Q"),
+                y=alt.Y(
+                    "frac_positions:Q",
+                    title="Fraction of positions",
+                    axis=alt.Axis(format=".1%"),
+                ),
+                tooltip=[
+                    alt.Tooltip("gc_bin:Q", title="GC bin", format=".0%"),
+                    alt.Tooltip("mean_n_positions:Q", title="Mean positions", format=",.0f"),
+                    alt.Tooltip("frac_positions:Q", title="Fraction", format=".2%"),
+                ],
+            )
+            .properties(height=140, width="container")
+        )
+
+        _gc_combined = (
+            alt.vconcat(gc_chart, _abundance_chart, spacing=6)
+            .resolve_scale(x="shared", color="independent")
+        )
+        st.altair_chart(_gc_combined, use_container_width=True)
 
         # Optionally overlay frac_mapq0 on a second y-axis (shown as separate chart)
         mapq_df = con.execute(f"""
@@ -677,9 +777,32 @@ with tab_profile:
         "SRP72", "TERC", "TERT", "TINF2",
     })
 
+    import re as _re
+
+    def _parse_region(text: str):
+        """Parse 'chr:start-end' or 'chr:start' into (chrom, start, end) or None."""
+        text = text.strip().replace(",", "")
+        m = _re.match(r'^(\S+):(\d+)[-–](\d+)$', text)
+        if m:
+            return m.group(1), int(m.group(2)), int(m.group(3))
+        m = _re.match(r'^(\S+):(\d+)$', text)
+        if m:
+            return m.group(1), int(m.group(2)), int(m.group(2)) + 1_000_000
+        return None
+
+    _region_text = st.text_input(
+        "Jump to region",
+        value="",
+        placeholder="e.g. chr1:1,000,000-2,000,000",
+        key="prof_region_text",
+        help="Enter a genomic coordinate to override the gene selector. "
+             "Format: chrom:start-end (commas ignored).",
+    )
+    _parsed_region = _parse_region(_region_text) if _region_text.strip() else None
+
     _prof_col1, _prof_col2 = st.columns([2, 1])
     with _prof_col1:
-        if _has_gene:
+        if _has_gene and not _parsed_region:
             _all_genes = sorted(
                 con.execute(
                     f"SELECT DISTINCT gene FROM {table_expr} "
@@ -709,11 +832,15 @@ with tab_profile:
             _prof_end_val = None
         else:
             _prof_gene = None
-            _prof_chrom_val = st.selectbox(
-                "Chromosome", all_chroms, key="prof_chrom"
-            )
+            if _parsed_region:
+                _prof_chrom_val, _prof_start_val, _prof_end_val = _parsed_region
+                st.caption(f"Region: {_prof_chrom_val}:{_prof_start_val:,}–{_prof_end_val:,}")
+            else:
+                _prof_chrom_val = st.selectbox(
+                    "Chromosome", all_chroms, key="prof_chrom"
+                )
     with _prof_col2:
-        if not _has_gene:
+        if not _has_gene and not _parsed_region:
             _prof_start_val = st.number_input(
                 "Start", min_value=0, value=0, step=1000, key="prof_start"
             )
@@ -737,9 +864,30 @@ with tab_profile:
 
     _prof_where = ("WHERE " + " AND ".join(_prof_clauses)) if _prof_clauses else ""
 
-    # Count positions before fetching
+    # Detect display bin size. When --adaptive-depth-threshold was used, dropout
+    # positions are stored at 1 bp while covered positions use the configured
+    # bin_size. Without normalisation the dropout regions appear 100× denser
+    # in the plot. We detect the largest bin_n in the region and re-bucket
+    # everything to that resolution using a bin_n-weighted depth average.
+    #
+    # The key insight: each display bin may contain BOTH a 100 bp record (depth ≈35)
+    # AND several 1 bp dropout records (depth 0) for the SAME sample. If we compute
+    # percentiles across all raw records, the 1 bp zeros dominate the IQR while the
+    # weighted mean ignores them — they diverge. Fix: a two-level aggregation that
+    # first consolidates per (display_bin, sample_id) with weighted depth, then
+    # computes cross-sample stats over those consolidated values.
+    if _has_bin_n:
+        _disp_bin = int(
+            con.execute(f"SELECT MAX(bin_n) FROM {table_expr} {_prof_where}").fetchone()[0] or 1
+        )
+    else:
+        _disp_bin = 1
+
+    _pos_expr = f"FLOOR(pos / {_disp_bin}) * {_disp_bin}" if _disp_bin > 1 else "pos"
+
+    # Count display positions before fetching
     _prof_n_pos = con.execute(
-        f"SELECT COUNT(DISTINCT pos) FROM {table_expr} {_prof_where}"
+        f"SELECT COUNT(DISTINCT {_pos_expr}) FROM {table_expr} {_prof_where}"
     ).fetchone()[0]
 
     if _prof_n_pos == 0:
@@ -750,244 +898,299 @@ with tab_profile:
             "Consider using a smaller region or re-running `geac coverage` with a larger `--bin-size`."
         )
     else:
-        _prof_df = con.execute(
-            f"""
-            SELECT
-                pos,
-                AVG(total_depth)   AS mean_depth,
-                MIN(total_depth)   AS min_depth,
-                MAX(total_depth)   AS max_depth,
-                PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_depth) AS p25_depth,
-                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_depth) AS p75_depth,
-                COUNT(DISTINCT sample_id) AS n_samples,
-                AVG(mean_mapq)     AS mean_mapq,
-                AVG(frac_mapq0)    AS mean_frac_mapq0,
-                AVG(frac_low_mapq) AS mean_frac_low_mapq,
-                AVG(gc_content)    AS mean_gc_content
-            FROM {table_expr}
-            {_prof_where}
-            GROUP BY pos
-            ORDER BY pos
-            """
-        ).df()
+        _needs_rebin = False
+        if _disp_bin > 1:
+            _mixed = con.execute(
+                f"SELECT COUNT(DISTINCT bin_n) FROM {table_expr} {_prof_where}"
+            ).fetchone()[0]
+            _needs_rebin = _mixed > 1
+            if _needs_rebin:
+                st.info(
+                    f"This dataset uses adaptive depth thresholding — dropout positions are "
+                    f"stored at 1 bp resolution and re-bucketed to {_disp_bin} bp for display."
+                )
 
-        _ctl_col1, _ctl_col2 = st.columns([1, 2])
-        with _ctl_col1:
-            _color_by = st.selectbox(
-                "Color line by",
-                ["Mean MAPQ", "GC content"],
-                key="prof_color_by",
-            )
-        with _ctl_col2:
-            _show_samples = st.checkbox(
-                "Show individual sample lines", value=False, key="prof_show_samples"
-            )
-
-        if _color_by == "Mean MAPQ":
-            _color_field = "mean_mapq"
-            _color_title = "Mean MAPQ"
-            _color_scale = alt.Scale(scheme="redyellowgreen", domainMid=30)
-            _color_fmt   = ".1f"
+        if _needs_rebin:
+            # Two-level aggregation: first consolidate per (display_bin, sample),
+            # then compute cross-sample statistics over consolidated values.
+            _prof_df = con.execute(
+                f"""
+                WITH rebinned AS (
+                    SELECT
+                        {_pos_expr}  AS pos,
+                        sample_id,
+                        SUM(total_depth * bin_n) * 1.0 / NULLIF(SUM(bin_n), 0) AS total_depth,
+                        SUM(mean_mapq * bin_n) * 1.0 / NULLIF(SUM(bin_n), 0) AS mean_mapq,
+                        SUM(frac_mapq0 * bin_n) * 1.0 / NULLIF(SUM(bin_n), 0) AS frac_mapq0,
+                        SUM(frac_low_mapq * bin_n) * 1.0 / NULLIF(SUM(bin_n), 0) AS frac_low_mapq,
+                        SUM(gc_content * bin_n) * 1.0 / NULLIF(SUM(bin_n), 0) AS gc_content
+                    FROM {table_expr}
+                    {_prof_where}
+                    GROUP BY {_pos_expr}, sample_id
+                )
+                SELECT
+                    pos,
+                    AVG(total_depth)   AS mean_depth,
+                    MIN(total_depth)   AS min_depth,
+                    MAX(total_depth)   AS max_depth,
+                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_depth) AS p25_depth,
+                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_depth) AS p75_depth,
+                    COUNT(DISTINCT sample_id)  AS n_samples,
+                    AVG(mean_mapq)             AS mean_mapq,
+                    AVG(frac_mapq0)            AS mean_frac_mapq0,
+                    AVG(frac_low_mapq)         AS mean_frac_low_mapq,
+                    AVG(gc_content)            AS mean_gc_content
+                FROM rebinned
+                GROUP BY pos
+                ORDER BY pos
+                """
+            ).df()
         else:
-            _color_field = "mean_gc_content"
-            _color_title = "GC content"
-            _color_scale = alt.Scale(scheme="blueorange", domainMid=0.5, domain=[0, 1])
-            _color_fmt   = ".1%"
+            _prof_df = con.execute(
+                f"""
+                SELECT
+                    {_pos_expr}                        AS pos,
+                    AVG(total_depth)                   AS mean_depth,
+                    MIN(total_depth)                   AS min_depth,
+                    MAX(total_depth)                   AS max_depth,
+                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_depth) AS p25_depth,
+                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_depth) AS p75_depth,
+                    COUNT(DISTINCT sample_id)          AS n_samples,
+                    AVG(mean_mapq)                     AS mean_mapq,
+                    AVG(frac_mapq0)                    AS mean_frac_mapq0,
+                    AVG(frac_low_mapq)                 AS mean_frac_low_mapq,
+                    AVG(gc_content)                    AS mean_gc_content
+                FROM {table_expr}
+                {_prof_where}
+                GROUP BY {_pos_expr}
+                ORDER BY {_pos_expr}
+                """
+            ).df()
 
-        # ── Aggregate chart ────────────────────────────────────────────────
-        _base = alt.Chart(_prof_df)
+        # ── DEBUG: raw data diagnostics ───────────────────────────────────
+        with st.expander("DEBUG: data diagnostics", expanded=True):
+            _raw_stats = con.execute(f"""
+                SELECT
+                    COUNT(*)                AS n_rows,
+                    COUNT(DISTINCT bin_n)   AS n_distinct_bin_n,
+                    MIN(bin_n)              AS min_bin_n,
+                    MAX(bin_n)              AS max_bin_n,
+                    MIN(total_depth)        AS raw_min_depth,
+                    MAX(total_depth)        AS raw_max_depth,
+                    ROUND(AVG(total_depth), 2) AS raw_avg_depth,
+                    COUNT(DISTINCT sample_id) AS n_samples
+                FROM {table_expr}
+                {_prof_where}
+            """).df() if _has_bin_n else None
+            if _raw_stats is not None:
+                st.code("Raw data stats:\n" + _raw_stats.to_string(index=False), language=None)
 
-        _band_minmax = (
-            _base.mark_area(opacity=0.12, color="#4c78a8")
-            .encode(
-                x=alt.X("pos:Q", title="Position"),
-                y=alt.Y("min_depth:Q", title="Depth"),
-                y2=alt.Y2("max_depth:Q"),
-                tooltip=["pos:Q", alt.Tooltip("min_depth:Q", format=".1f"),
-                         alt.Tooltip("max_depth:Q", format=".1f")],
+            st.code(f"_disp_bin = {_disp_bin}\n_needs_rebin = {_needs_rebin}", language=None)
+            st.code(f"_prof_df shape = {_prof_df.shape}", language=None)
+            st.code(
+                "_prof_df describe:\n"
+                + _prof_df[["pos", "mean_depth", "min_depth", "max_depth", "p25_depth", "p75_depth"]].describe().to_string(),
+                language=None,
             )
+            st.code("_prof_df first 10 rows:\n" + _prof_df.head(10).to_string(index=False), language=None)
+            _high = _prof_df[_prof_df["max_depth"] > 50]
+            st.code(f"_prof_df rows with max_depth > 50: {len(_high)}", language=None)
+            if not _high.empty:
+                st.code(_high.head(10).to_string(index=False), language=None)
+
+            # Per-sample mean depth across the whole region — reveals outlier samples
+            _per_sample = con.execute(f"""
+                SELECT
+                    sample_id,
+                    COUNT(*)                            AS n_records,
+                    ROUND(SUM(total_depth * bin_n) * 1.0
+                          / NULLIF(SUM(bin_n), 0), 2)   AS weighted_mean_depth,
+                    ROUND(AVG(total_depth), 2)           AS unweighted_avg_depth,
+                    MIN(total_depth)                     AS min_td,
+                    MAX(total_depth)                     AS max_td,
+                    MIN(bin_n)                           AS min_bin_n,
+                    MAX(bin_n)                           AS max_bin_n,
+                    ROUND(AVG(raw_read_depth), 2)        AS avg_raw_read_depth
+                FROM {table_expr}
+                {_prof_where}
+                GROUP BY sample_id
+                ORDER BY weighted_mean_depth DESC
+            """).df()
+            st.code("Per-sample stats (sorted by depth desc):\n" + _per_sample.to_string(index=False), language=None)
+
+            # Show raw records for the highest and a median sample at the first display pos
+            _first_pos = _prof_df["pos"].iloc[0]
+            _top_sample = _per_sample["sample_id"].iloc[0]
+            _mid_sample = _per_sample["sample_id"].iloc[len(_per_sample) // 2]
+            _spot_check = con.execute(f"""
+                SELECT sample_id, pos, total_depth, raw_read_depth,
+                       frac_dup, bin_n, min_depth, max_depth
+                FROM {table_expr}
+                WHERE {_pos_expr} = {_first_pos}
+                  AND sample_id IN ('{_top_sample}', '{_mid_sample}')
+                ORDER BY sample_id, pos
+            """).df()
+            st.code(
+                f"Spot check at display pos {_first_pos:.0f} "
+                f"(top: {_top_sample}, mid: {_mid_sample}):\n"
+                + _spot_check.to_string(index=False),
+                language=None,
+            )
+
+        _show_samples = st.checkbox(
+            "Show individual sample lines", value=False, key="prof_show_samples"
         )
 
-        _band_iqr = (
+        # ── Shared x encoding ──────────────────────────────────────────────
+        _base = alt.Chart(_prof_df)
+        _x_enc = alt.X("pos:Q", title="Position")
+        _tip   = [
+            "pos:Q",
+            alt.Tooltip("mean_depth:Q",        format=".1f",  title="Mean depth"),
+            alt.Tooltip("mean_mapq:Q",          format=".1f",  title="Mean MAPQ"),
+            alt.Tooltip("mean_frac_low_mapq:Q", format=".1%",  title="Frac low MAPQ"),
+            alt.Tooltip("mean_gc_content:Q",    format=".1%",  title="GC content"),
+            "n_samples:Q",
+        ]
+
+        # ── Panel 1: Depth distribution ────────────────────────────────────
+        _depth_minmax = (
+            _base.mark_area(opacity=0.12, color="#4c78a8")
+            .encode(
+                x=_x_enc,
+                y=alt.Y("min_depth:Q", title="Depth"),
+                y2=alt.Y2("max_depth:Q"),
+            )
+        )
+        _depth_iqr = (
             _base.mark_area(opacity=0.30, color="#4c78a8")
             .encode(
-                x="pos:Q",
+                x=_x_enc,
                 y=alt.Y("p25_depth:Q"),
                 y2=alt.Y2("p75_depth:Q"),
             )
         )
-
-        _line_mean = (
-            _base.mark_line(strokeWidth=2.5)
+        _depth_mean = (
+            _base.mark_line(strokeWidth=2, color="#4c78a8")
             .encode(
-                x="pos:Q",
+                x=_x_enc,
                 y=alt.Y("mean_depth:Q"),
-                color=alt.Color(
-                    f"{_color_field}:Q",
-                    scale=_color_scale,
-                    legend=alt.Legend(title=_color_title),
-                ),
-                tooltip=["pos:Q",
-                         alt.Tooltip("mean_depth:Q", format=".1f", title="Mean depth"),
-                         alt.Tooltip("mean_mapq:Q", format=".1f", title="Mean MAPQ"),
-                         alt.Tooltip("mean_frac_low_mapq:Q", format=".1%", title="Frac low MAPQ"),
-                         alt.Tooltip("mean_gc_content:Q", format=".1%", title="GC content"),
-                         "n_samples:Q"],
+                tooltip=_tip,
             )
         )
+        _depth_panel = (_depth_minmax + _depth_iqr + _depth_mean).properties(height=220, width="container")
 
-        _prof_chart = _band_minmax + _band_iqr + _line_mean
-
-        # ── Optional per-sample lines ──────────────────────────────────────
         if _show_samples and sample_sel:
-            _samp_df = con.execute(
-                f"""
-                SELECT pos, sample_id, total_depth AS depth
-                FROM {table_expr}
-                {_prof_where}
-                ORDER BY pos
-                """
-            ).df()
-            _samp_chart = (
-                alt.Chart(_samp_df)
-                .mark_line(opacity=0.5, strokeWidth=1)
-                .encode(
-                    x="pos:Q",
-                    y=alt.Y("depth:Q"),
-                    color=alt.Color("sample_id:N", legend=alt.Legend(title="Sample")),
-                    tooltip=["pos:Q", "sample_id:N",
-                             alt.Tooltip("depth:Q", format=".1f")],
-                )
-            )
-            _prof_chart = _prof_chart + _samp_chart
-
-        # ── Exon / interval shaded bands ──────────────────────────────────
-        # Prefer coverage_intervals when available; fall back to deriving
-        # exon extents from the coverage table's feature_type/exon_number
-        # columns (populated when --gene-annotations was provided).
-        _cov_has_feature_type = "feature_type" in _cols
-        _can_shade_exons = (_has_intervals or _cov_has_feature_type) and _has_gene and _prof_gene
-        if _can_shade_exons:
-            _pg2 = _prof_gene.replace("'", "''")
-
-            if _has_intervals:
-                _ivl_cols = con.execute("PRAGMA table_info(coverage_intervals)").df()["name"].tolist()
-                _has_feature_type = "feature_type" in _ivl_cols
-                _has_exon_number  = "exon_number"  in _ivl_cols
-                _ivl_select = ", ".join(filter(None, [
-                    "start", "end", "interval_name",
-                    "feature_type" if _has_feature_type else None,
-                    "exon_number"  if _has_exon_number  else None,
-                ]))
-                _ivl_bounds = con.execute(
+            if _needs_rebin:
+                _samp_df = con.execute(
                     f"""
-                    SELECT DISTINCT {_ivl_select}
-                    FROM coverage_intervals
-                    WHERE gene = '{_pg2}'
-                    ORDER BY start
+                    SELECT
+                        {_pos_expr} AS pos,
+                        sample_id,
+                        SUM(total_depth * bin_n) * 1.0
+                            / NULLIF(SUM(bin_n), 0) AS depth
+                    FROM {table_expr}
+                    {_prof_where}
+                    GROUP BY {_pos_expr}, sample_id
+                    ORDER BY pos
                     """
                 ).df()
             else:
-                # No coverage_intervals table — derive exon extents from the
-                # coverage table directly using feature_type / exon_number.
-                _has_feature_type = True
-                _has_exon_number  = "exon_number" in _cols
-                _exon_select = ", ".join(filter(None, [
-                    "feature_type",
-                    "exon_number" if _has_exon_number else None,
-                ]))
-                _ivl_bounds = con.execute(
+                _samp_df = con.execute(
                     f"""
-                    SELECT
-                        MIN(pos)     AS start,
-                        MAX(pos) + 1 AS end,
-                        {_exon_select},
-                        COALESCE(CAST(exon_number AS VARCHAR), feature_type) AS interval_name
+                    SELECT {_pos_expr} AS pos, sample_id, total_depth AS depth
                     FROM {table_expr}
-                    WHERE gene = '{_pg2}'
-                      AND feature_type IS NOT NULL
-                    GROUP BY {_exon_select}
-                    ORDER BY start
+                    {_prof_where}
+                    ORDER BY pos
                     """
                 ).df()
+            with st.expander("DEBUG: sample lines data", expanded=False):
+                st.code(f"_samp_df shape = {_samp_df.shape}", language=None)
+                st.code("_samp_df describe:\n" + _samp_df.describe().to_string(), language=None)
+                _s_high = _samp_df[_samp_df["depth"] > 50]
+                st.code(f"_samp_df rows with depth > 50: {len(_s_high)}", language=None)
+                if not _s_high.empty:
+                    st.code(_s_high.head(20).to_string(index=False), language=None)
 
-                # Fill missing feature_type so color encoding always has a value
-                if "feature_type" not in _ivl_bounds.columns:
-                    _ivl_bounds["feature_type"] = "Exon"
-                else:
-                    _ivl_bounds["feature_type"] = (
-                        _ivl_bounds["feature_type"].fillna("Exon")
-                    )
-
-                # Zoom x-axis to the exon extent so exons are visible.
-                # Genes include introns, so the full gene span >> exon widths;
-                # without an explicit domain the exons become invisible slivers.
-                _exon_x_min = int(_ivl_bounds["start"].min())
-                _exon_x_max = int(_ivl_bounds["end"].max())
-                _x_padding  = max(500, (_exon_x_max - _exon_x_min) // 10)
-                _x_domain   = [_exon_x_min - _x_padding, _exon_x_max + _x_padding]
-
-                _ft_color = alt.Color(
-                    "feature_type:N",
-                    scale=alt.Scale(
-                        domain=["CDS", "Exon", "UTR", "Gene"],
-                        range=["#4c78a8", "#72b7b2", "#f58518", "#b279a2"],
-                    ),
-                    legend=alt.Legend(title="Feature type"),
+            _samp_lines = (
+                alt.Chart(_samp_df)
+                .mark_line(opacity=0.5, strokeWidth=1)
+                .encode(
+                    x=_x_enc,
+                    y=alt.Y("depth:Q"),
+                    color=alt.Color("sample_id:N", legend=alt.Legend(title="Sample")),
+                    tooltip=["pos:Q", "sample_id:N", alt.Tooltip("depth:Q", format=".1f")],
                 )
+            )
+            _depth_panel = (_depth_panel + _samp_lines).properties(height=220, width="container")
 
-                _tooltip_fields = ["interval_name:N", "start:Q", "end:Q", "feature_type:N"]
-                if "exon_number" in _ivl_bounds.columns:
-                    _tooltip_fields.append("exon_number:Q")
-
-                # Shaded rect bands — higher opacity so they're visible at exon scale
-                _bands = (
-                    alt.Chart(_ivl_bounds)
-                    .mark_rect(opacity=0.30)
-                    .encode(
-                        x=alt.X("start:Q", scale=alt.Scale(domain=_x_domain)),
-                        x2=alt.X2("end:Q"),
-                        color=_ft_color,
-                        tooltip=_tooltip_fields,
-                    )
-                )
-
-                # Border lines at exon boundaries
-                _borders = (
-                    alt.Chart(_ivl_bounds)
-                    .mark_rule(opacity=0.6, strokeWidth=1.5)
-                    .encode(
-                        x=alt.X("start:Q", scale=alt.Scale(domain=_x_domain)),
-                        color=_ft_color,
-                    )
-                )
-
-                # Exon number labels along the top of the chart
-                if "exon_number" in _ivl_bounds.columns:
-                    _mid = _ivl_bounds.copy()
-                    _mid["mid"] = (_mid["start"] + _mid["end"]) / 2
-                    _labels = (
-                        alt.Chart(_mid)
-                        .mark_text(dy=-8, fontSize=9, align="center", color="#555")
-                        .encode(
-                            x=alt.X("mid:Q", scale=alt.Scale(domain=_x_domain)),
-                            text=alt.Text("exon_number:Q"),
-                            tooltip=_tooltip_fields,
-                        )
-                    )
-                    _prof_chart = _prof_chart + _bands + _borders + _labels
-                else:
-                    _prof_chart = _prof_chart + _bands + _borders
-
-                st.caption(
-                    f"{_prof_gene} · {_ivl_bounds['start'].min():,.0f}–{_ivl_bounds['end'].max():,.0f} "
-                    f"(zoomed to exon extents; scroll/pinch to pan)"
-                )
-
-        st.altair_chart(
-            _prof_chart.resolve_scale(color="independent").properties(height=320).interactive(),
-            use_container_width=True,
+        # ── Panel 2: Mean mapping quality ──────────────────────────────────
+        _mapq_panel = (
+            _base.mark_area(opacity=0.7)
+            .encode(
+                x=_x_enc,
+                y=alt.Y(
+                    "mean_mapq:Q",
+                    title="Mean MAPQ",
+                    scale=alt.Scale(domain=[0, 60]),
+                ),
+                color=alt.value("#e45756"),
+                tooltip=_tip,
+            )
+            .properties(height=100, width="container")
         )
+
+        # ── Panel 3: GC content ────────────────────────────────────────────
+        _gc_panel = (
+            _base.mark_area(opacity=0.7)
+            .encode(
+                x=_x_enc,
+                y=alt.Y(
+                    "mean_gc_content:Q",
+                    title="GC content",
+                    scale=alt.Scale(domain=[0, 1]),
+                    axis=alt.Axis(format=".0%"),
+                ),
+                color=alt.value("#72b7b2"),
+                tooltip=_tip,
+            )
+            .properties(height=100, width="container")
+        )
+
+        # ── Panel 4: Fraction MAPQ 0 ──────────────────────────────────────
+        _mapq0_panel = (
+            _base.mark_area(opacity=0.7)
+            .encode(
+                x=_x_enc,
+                y=alt.Y(
+                    "mean_frac_mapq0:Q",
+                    title="Frac MAPQ 0",
+                    scale=alt.Scale(domain=[0, 1]),
+                    axis=alt.Axis(format=".0%"),
+                ),
+                color=alt.value("#d67195"),
+                tooltip=_tip,
+            )
+            .properties(height=100, width="container")
+        )
+
+        # ── Combine panels ─────────────────────────────────────────────────
+        # Restrict interactivity to x-axis only so y-axes stay fixed.
+        _x_brush = alt.selection_interval(bind="scales", encodings=["x"])
+        _combined = (
+            alt.vconcat(
+                _depth_panel.add_params(_x_brush),
+                _mapq_panel.add_params(_x_brush),
+                _mapq0_panel.add_params(_x_brush),
+                _gc_panel.add_params(_x_brush),
+                spacing=6,
+            )
+            .resolve_scale(x="shared", y="independent", color="independent")
+            .configure_view(stroke="black", strokeWidth=1)
+        )
+        _chart_col, _ = st.columns([0.9, 0.1])
+        with _chart_col:
+            st.altair_chart(_combined, use_container_width=True)
 
         # ── Interval-level summary ─────────────────────────────────────────
         if _has_intervals and _has_gene and _prof_gene:

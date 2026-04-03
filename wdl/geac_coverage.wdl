@@ -49,6 +49,9 @@ workflow GeacCoverage {
         Array[File]    input_bam_indices
         Array[String]? sample_ids    # optional; if provided must be same length as input_bams
         Array[String]? batches       # optional; per-sample batch/group label
+        Array[String]? labels1       # optional; per-sample free-text label 1
+        Array[String]? labels2       # optional; per-sample free-text label 2
+        Array[String]? labels3       # optional; per-sample free-text label 3
 
         # Shared inputs
         File   reference_fasta
@@ -67,8 +70,6 @@ workflow GeacCoverage {
         Int     bin_size      = 1
         Int?    adaptive_depth_threshold
         Boolean fill_zeros    = false
-
-        Boolean fill_zeros  = false
 
         String cohort_name = "cohort"
 
@@ -89,6 +90,15 @@ workflow GeacCoverage {
         if (defined(batches)) {
             String this_batch = select_first([batches])[i]
         }
+        if (defined(labels1)) {
+            String this_label1 = select_first([labels1])[i]
+        }
+        if (defined(labels2)) {
+            String this_label2 = select_first([labels2])[i]
+        }
+        if (defined(labels3)) {
+            String this_label3 = select_first([labels3])[i]
+        }
         String this_read_type = if defined(read_types) then select_first([read_types])[i] else "duplex"
         String this_pipeline  = if defined(pipelines)  then select_first([pipelines])[i]  else "fgbio"
 
@@ -102,6 +112,9 @@ workflow GeacCoverage {
                 pipeline              = this_pipeline,
                 sample_id             = this_sample_id,
                 batch                 = this_batch,
+                label1                = this_label1,
+                label2                = this_label2,
+                label3                = this_label3,
                 targets               = targets,
                 emit_intervals        = emit_intervals,
                 gene_annotations      = gene_annotations,
@@ -155,6 +168,9 @@ task Coverage {
 
         String? sample_id
         String? batch
+        String? label1
+        String? label2
+        String? label3
         File?   targets
         Boolean emit_intervals
         File?   gene_annotations
@@ -198,6 +214,9 @@ task Coverage {
             ~{if fill_zeros then "--fill-zeros" else ""} \
             ~{"--sample-id "        + sample_id} \
             ~{"--batch "            + batch} \
+            ~{"--label1 "           + label1} \
+            ~{"--label2 "           + label2} \
+            ~{"--label3 "           + label3} \
             ~{"--targets "          + targets} \
             ~{"--gene-annotations " + gene_annotations} \
             ~{"--region "           + region} \

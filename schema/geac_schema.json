@@ -126,6 +126,9 @@
       "optional_columns": [
         "bin_n",
         "batch",
+        "label1",
+        "label2",
+        "label3",
         "on_target",
         "gene",
         "feature_type",

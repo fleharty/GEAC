@@ -186,6 +186,10 @@ COVERAGE_FILTER_KEYS = (
     "chrom_sel",
     "gene_text",
     "on_target_sel",
+    "cov_batch_sel",
+    "cov_label1_sel",
+    "cov_label2_sel",
+    "cov_label3_sel",
 )
 
 COVERAGE_FILTER_STATE = FilterState(keys=COVERAGE_FILTER_KEYS)

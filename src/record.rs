@@ -251,6 +251,12 @@ pub struct CoverageRecord {
     pub read_type: ReadType,
     pub pipeline: Pipeline,
     pub batch: Option<String>,
+    /// Generic sample label 1 (user-defined; e.g. tissue type).
+    pub label1: Option<String>,
+    /// Generic sample label 2 (user-defined; e.g. library prep method).
+    pub label2: Option<String>,
+    /// Generic sample label 3 (user-defined; e.g. sequencer type).
+    pub label3: Option<String>,
 }
 
 /// One record per alt-supporting read at a locus.
@@ -328,5 +334,8 @@ pub struct IntervalRecord {
     pub read_type: ReadType,
     pub pipeline:  Pipeline,
     pub batch:     Option<String>,
+    pub label1:    Option<String>,
+    pub label2:    Option<String>,
+    pub label3:    Option<String>,
 }
 

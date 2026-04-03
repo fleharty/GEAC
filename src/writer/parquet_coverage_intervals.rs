@@ -92,6 +92,9 @@ fn intervals_schema() -> Arc<Schema> {
         Field::new("read_type",          DataType::Utf8,    false),
         Field::new("pipeline",           DataType::Utf8,    false),
         Field::new("batch",              DataType::Utf8,    true),
+        Field::new("label1",             DataType::Utf8,    true),
+        Field::new("label2",             DataType::Utf8,    true),
+        Field::new("label3",             DataType::Utf8,    true),
     ]))
 }
 
@@ -147,6 +150,15 @@ fn records_to_batch(records: &[IntervalRecord], schema: Arc<Schema>) -> Result<R
     let batch: ArrayRef = Arc::new(StringArray::from(
         records.iter().map(|r| r.batch.as_deref()).collect::<Vec<_>>(),
     ));
+    let label1: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.label1.as_deref()).collect::<Vec<_>>(),
+    ));
+    let label2: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.label2.as_deref()).collect::<Vec<_>>(),
+    ));
+    let label3: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.label3.as_deref()).collect::<Vec<_>>(),
+    ));
 
     RecordBatch::try_new(
         schema,
@@ -156,7 +168,7 @@ fn records_to_batch(records: &[IntervalRecord], schema: Arc<Schema>) -> Result<R
             frac_at_1x, frac_at_10x, frac_at_20x, frac_at_30x, frac_at_50x, frac_at_100x,
             mean_gc_content, mean_mapq, mean_frac_mapq0, mean_frac_dup,
             mean_frac_overlap, mean_base_qual, mean_insert_size,
-            read_type, pipeline, batch,
+            read_type, pipeline, batch, label1, label2, label3,
         ],
     )
     .context("failed to create Arrow record batch")

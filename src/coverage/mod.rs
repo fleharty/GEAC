@@ -356,6 +356,9 @@ struct BinAccumulator {
     read_type: crate::record::ReadType,
     pipeline: crate::record::Pipeline,
     batch: Option<String>,
+    label1: Option<String>,
+    label2: Option<String>,
+    label3: Option<String>,
 }
 
 impl BinAccumulator {
@@ -379,6 +382,9 @@ impl BinAccumulator {
             read_type: crate::record::ReadType::Duplex,
             pipeline: crate::record::Pipeline::Fgbio,
             batch: None,
+            label1: None,
+            label2: None,
+            label3: None,
         }
     }
 
@@ -420,6 +426,9 @@ impl BinAccumulator {
         self.read_type = r.read_type;
         self.pipeline = r.pipeline;
         self.batch = r.batch.clone();
+        self.label1 = r.label1.clone();
+        self.label2 = r.label2.clone();
+        self.label3 = r.label3.clone();
     }
 
     fn accumulate(&mut self, r: &CoverageRecord) {
@@ -520,6 +529,9 @@ impl BinAccumulator {
             read_type: self.read_type,
             pipeline: self.pipeline,
             batch: self.batch.clone(),
+            label1: self.label1.clone(),
+            label2: self.label2.clone(),
+            label3: self.label3.clone(),
         }
     }
 }
@@ -647,6 +659,9 @@ impl IntervalAccumulator {
             read_type: args.read_type,
             pipeline:  args.pipeline,
             batch:     args.batch.clone(),
+            label1:    args.label1.clone(),
+            label2:    args.label2.clone(),
+            label3:    args.label3.clone(),
         }
     }
 }
@@ -892,6 +907,9 @@ fn build_record(
         read_type: args.read_type,
         pipeline: args.pipeline,
         batch: args.batch.clone(),
+        label1: args.label1.clone(),
+        label2: args.label2.clone(),
+        label3: args.label3.clone(),
     }
 }
 
@@ -942,6 +960,9 @@ fn build_zero_record(
         read_type: args.read_type,
         pipeline: args.pipeline,
         batch: args.batch.clone(),
+        label1: args.label1.clone(),
+        label2: args.label2.clone(),
+        label3: args.label3.clone(),
     }
 }
 

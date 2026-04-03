@@ -696,3 +696,61 @@ the fill range to the parsed start/end when coordinates are provided.
 **Lesson:** Any post-pileup fill pass that iterates over all reference contigs must
 respect `--region`. The pileup fetch is the only thing that naturally inherits the
 region restriction; anything that follows the pileup loop does not.
+
+---
+
+### Exon shading in Depth Profile — multiple failed approaches
+
+**Feature goal:** Show exon/feature boundaries as visible shaded bands on the Depth
+Profile chart in the coverage explorer, to help users see which coverage dips fall
+inside vs. outside of exons.
+
+**Data confirmed correct:** Debugging confirmed `_ivl_bounds` contains the right data
+(e.g. 6 exon rows with correct coordinates matching the `_prof_df` position range).
+The problem is entirely in the visualization layer.
+
+#### Attempt 1 — `mark_rect` layered behind depth chart
+Built `mark_rect` bands from `_ivl_bounds` and added them as the first (bottom) layer:
+`_prof_chart = _bands + _borders + _labels + _depth_chart`.
+**Why it failed:** `mark_area` fills from y=0 up to the depth value across the full
+width of each position. It is a solid opaque fill that completely covers any layer
+beneath it, regardless of layer order in Altair.
+
+#### Attempt 2 — `mark_rect` layered on top of depth chart
+Reversed the order: `_prof_chart = _prof_chart + _bands + _borders + _labels`.
+**Why it failed:** Same result. Altair renders the depth `mark_area` over the rect
+bands even when the rects are declared last. Altair layer order does not reliably
+control z-order in the browser SVG renderer for this combination.
+
+#### Attempt 3 — `mark_rule` border lines instead of filled rects
+Replaced `mark_rect` with `mark_rule` vertical lines at exon start/end positions.
+**Why it failed:** Lines were present in theory but invisible at gene scale — the
+gene's intron span is much wider than any single exon, so the domain auto-scales to
+show the entire gene and exon widths compress to sub-pixel size.
+
+#### Attempt 4 — Explicit x-axis domain clamped to exon extents
+Added `_x_domain = [_exon_x_min - _x_padding, _exon_x_max + _x_padding]` and
+passed it to all chart encodings.
+**Why it failed:** The depth `mark_area` chart also needs the matching domain, but
+applying it to only the exon layers (with the main depth chart sharing the same
+x-axis via layering) caused domain conflicts. Exon numbers appeared as small floating
+text but the shaded bands were still not visible.
+
+#### Attempt 5 — `alt.vconcat` genome-browser strip (current approach)
+Built a separate 40px exon track below the depth chart using `mark_rect` on a 0–1
+y-scale, combined with `alt.vconcat(...).resolve_scale(x="shared")`.
+**Status:** Not yet confirmed working. Likely issues to investigate:
+- `resolve_scale(x="shared")` may not propagate the explicit `_x_domain` from the
+  exon track up to the depth chart's x-axis, so the depth chart may still auto-scale
+  to the full gene range while the exon track zooms to exon extents.
+- The `_x_domain` is only applied to the exon track's x encoding; the depth chart
+  (`_prof_chart`) has no domain restriction and will use the data range of `_prof_df`.
+  If `_prof_df` covers the full gene (including introns), the shared x domain will
+  expand to match it.
+- Fix direction: apply `_x_domain` to the depth chart's x-axis as well, or filter
+  `_prof_df` to the exon extent range before plotting.
+
+**Lesson:** Altair's layer z-order does not reliably place `mark_rect` on top of
+`mark_area`. When exon annotation must be visible alongside depth area charts, use
+`vconcat` with a separate exon strip. Ensure the shared x-domain is applied
+consistently to both sub-charts, not just the exon track.

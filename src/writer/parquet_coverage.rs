@@ -124,6 +124,9 @@ fn coverage_schema(track_names: &[String]) -> Arc<Schema> {
         Field::new("read_type",          DataType::Utf8,    false),
         Field::new("pipeline",           DataType::Utf8,    false),
         Field::new("batch",              DataType::Utf8,    true),
+        Field::new("label1",             DataType::Utf8,    true),
+        Field::new("label2",             DataType::Utf8,    true),
+        Field::new("label3",             DataType::Utf8,    true),
     ]);
 
     Arc::new(Schema::new(fields))
@@ -194,6 +197,15 @@ fn records_to_batch(
     let batch: ArrayRef = Arc::new(StringArray::from(
         records.iter().map(|r| r.batch.as_deref()).collect::<Vec<_>>(),
     ));
+    let label1: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.label1.as_deref()).collect::<Vec<_>>(),
+    ));
+    let label2: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.label2.as_deref()).collect::<Vec<_>>(),
+    ));
+    let label3: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.label3.as_deref()).collect::<Vec<_>>(),
+    ));
 
     // Build the column list in schema order.
     let mut columns: Vec<ArrayRef> = vec![
@@ -215,7 +227,7 @@ fn records_to_batch(
         columns.push(col);
     }
 
-    columns.extend([on_target, gene, feature_type, exon_number, read_type, pipeline, batch]);
+    columns.extend([on_target, gene, feature_type, exon_number, read_type, pipeline, batch, label1, label2, label3]);
 
     RecordBatch::try_new(schema, columns).context("failed to create Arrow record batch")
 }
