@@ -1,6 +1,6 @@
 [package]
 name = "geac"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2021"
 description = "Genomic Evidence Atlas of Cohorts — collect alt base metrics across sequencing cohorts"
 

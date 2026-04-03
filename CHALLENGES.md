@@ -754,3 +754,32 @@ y-scale, combined with `alt.vconcat(...).resolve_scale(x="shared")`.
 `mark_area`. When exon annotation must be visible alongside depth area charts, use
 `vconcat` with a separate exon strip. Ensure the shared x-domain is applied
 consistently to both sub-charts, not just the exon track.
+
+### Depth profile distorted with adaptive depth thresholding
+**Symptom:** When a cohort DuckDB was built from runs using `--adaptive-depth-threshold`,
+the depth profile showed inflated depth values for some samples (e.g. 120x when expected
+30–40x) and the mean line no longer sat within the IQR band.
+**Root cause (two issues):**
+1. *Wrong `end` coordinate for partial bins (Rust):* When adaptive thresholding flushes
+   a bin early (e.g. after 20 of a configured 100 positions), `end` was set to
+   `bin_start + bin_size` (100) instead of `bin_start + n` (20). This caused the interval
+   to overstate its genomic span.
+2. *Mixed-resolution aggregation (Python):* The coverage table contains both 100bp bins
+   (covered regions) and 1bp rows (dropout positions). Computing percentiles over all raw
+   records let the 1bp dropout rows dominate the IQR, while the weighted mean ignored them
+   — the two statistics diverged. An earlier attempt used a two-level CTE to re-bucket
+   everything to the largest `bin_n`, but this still aggregated by the left-edge `pos`
+   value and didn't correctly handle records whose intervals overlapped a display bin
+   boundary.
+**Fix:**
+1. `src/coverage/mod.rs`: Changed `end: self.bin_start + self.bin_size` to
+   `end: self.bin_start + self.n as i64`, so partial bins carry the correct half-open
+   interval.
+2. `app/coverage_profile.py`: Replaced re-bucketing with interval expansion using DuckDB's
+   `UNNEST(range(pos, "end"))`, expanding each coverage row to individual base positions
+   before aggregation. Per-sample stats are then computed at base resolution and
+   cross-sample statistics follow. Also fixed the WHERE clause for region queries from
+   `pos >= start` to `"end" > start` so records spanning the boundary are included.
+**Lesson:** When coverage records represent variable-width intervals, always expand to base
+positions (or re-bucket using the `end` coordinate, not `pos + bin_size`) before computing
+cross-sample statistics. Percentiles computed over mixed-width records are not meaningful.
