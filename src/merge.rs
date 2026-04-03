@@ -195,8 +195,9 @@ fn dst_table_exists(conn: &Connection, table: &str) -> Result<bool> {
     let count: i64 = conn
         .query_row(
             &format!(
-                "SELECT COUNT(*) FROM information_schema.tables \
-                 WHERE table_name = '{table}' AND table_schema = 'main'"
+                "SELECT COUNT(*) FROM duckdb_tables() \
+                 WHERE database_name = current_database() AND schema_name = 'main' \
+                 AND table_name = '{table}'"
             ),
             [],
             |row| row.get(0),
