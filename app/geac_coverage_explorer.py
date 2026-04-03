@@ -911,7 +911,6 @@ with tab_profile:
                     """
                 ).df()
 
-            if not _ivl_bounds.empty:
                 # Fill missing feature_type so color encoding always has a value
                 if "feature_type" not in _ivl_bounds.columns:
                     _ivl_bounds["feature_type"] = "Exon"
@@ -976,9 +975,9 @@ with tab_profile:
                             tooltip=_tooltip_fields,
                         )
                     )
-                    _prof_chart = _bands + _borders + _labels + _prof_chart
+                    _prof_chart = _prof_chart + _bands + _borders + _labels
                 else:
-                    _prof_chart = _bands + _borders + _prof_chart
+                    _prof_chart = _prof_chart + _bands + _borders
 
                 st.caption(
                     f"{_prof_gene} · {_ivl_bounds['start'].min():,.0f}–{_ivl_bounds['end'].max():,.0f} "
