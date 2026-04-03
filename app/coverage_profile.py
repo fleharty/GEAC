@@ -96,6 +96,7 @@ def load_expanded_depth_profile(
             MIN(depth)   AS min_depth,
             MAX(depth)   AS max_depth,
             PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY depth) AS p25_depth,
+            PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY depth) AS median_depth,
             PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY depth) AS p75_depth,
             COUNT(DISTINCT sample_id) AS n_samples,
             AVG(mean_mapq)       AS mean_mapq,

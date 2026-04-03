@@ -919,17 +919,10 @@ with tab_profile:
             # Aggregated profile stats
             st.code(
                 "_prof_df describe:\n" +
-                _prof_df[["pos", "mean_depth", "min_depth", "max_depth", "p25_depth", "p75_depth"]].describe().to_string(),
+                _prof_df[["pos", "mean_depth", "median_depth", "min_depth", "max_depth", "p25_depth", "p75_depth"]].describe().to_string(),
                 language=None,
             )
             st.code("_prof_df first 10 rows:\n" + _prof_df.head(10).to_string(index=False), language=None)
-
-            # Aggregated profile stats after two-level aggregation
-            st.code(
-                "_prof_df describe (after two-level aggregation):\n" +
-                _prof_df[["pos", "mean_depth", "min_depth", "max_depth", "p25_depth", "p75_depth"]].describe().to_string(),
-                language=None,
-            )
 
             # Per-sample mean depth to spot outliers
             _dbg_per_sample = con.execute(f"""
@@ -959,10 +952,13 @@ with tab_profile:
         _x_enc = alt.X("pos:Q", title="Position")
         _tip   = [
             "pos:Q",
-            alt.Tooltip("mean_depth:Q",        format=".1f",  title="Mean depth"),
-            alt.Tooltip("mean_mapq:Q",          format=".1f",  title="Mean MAPQ"),
-            alt.Tooltip("mean_frac_low_mapq:Q", format=".1%",  title="Frac low MAPQ"),
-            alt.Tooltip("mean_gc_content:Q",    format=".1%",  title="GC content"),
+            alt.Tooltip("median_depth:Q",       format=".1f",  title="Median depth"),
+            alt.Tooltip("mean_depth:Q",          format=".1f",  title="Mean depth"),
+            alt.Tooltip("p25_depth:Q",           format=".1f",  title="p25 depth"),
+            alt.Tooltip("p75_depth:Q",           format=".1f",  title="p75 depth"),
+            alt.Tooltip("mean_mapq:Q",           format=".1f",  title="Mean MAPQ"),
+            alt.Tooltip("mean_frac_low_mapq:Q",  format=".1%",  title="Frac low MAPQ"),
+            alt.Tooltip("mean_gc_content:Q",     format=".1%",  title="GC content"),
             "n_samples:Q",
         ]
 
@@ -987,7 +983,7 @@ with tab_profile:
             _base.mark_line(strokeWidth=2, color="#4c78a8")
             .encode(
                 x=_x_enc,
-                y=alt.Y("mean_depth:Q"),
+                y=alt.Y("median_depth:Q"),
                 tooltip=_tip,
             )
         )
