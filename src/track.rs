@@ -187,23 +187,10 @@ impl TrackSet {
         &self.names
     }
 
-    pub fn len(&self) -> usize {
-        self.names.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.names.is_empty()
-    }
-
     /// Look up scores for all tracks at `(chrom, pos)`. Returns a `Vec` of length
-    /// `self.len()` in the same order as `self.names()`.
+    /// equal to `self.names().len()` in the same order as `self.names()`.
     pub fn lookup(&self, chrom: &str, pos: i64) -> Vec<Option<f32>> {
         self.tracks.iter().map(|t| t.get(chrom, pos)).collect()
-    }
-
-    /// Return a `Vec<None>` of the correct length (for zero-depth positions).
-    pub fn none_values(&self) -> Vec<Option<f32>> {
-        vec![None; self.len()]
     }
 }
 
@@ -291,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn trackset_none_values_correct_length() {
+    fn trackset_lookup_outside_interval_returns_none_for_each_track() {
         let dir = tempfile::TempDir::new().unwrap();
         let p = write_bedgraph(dir.path(), "chr1\t0\t10\t1.0\n");
         let specs = vec![
@@ -300,6 +287,7 @@ mod tests {
             format!("c:{}", p.display()),
         ];
         let ts = TrackSet::load(&specs).unwrap();
-        assert_eq!(ts.none_values(), vec![None, None, None]);
+        assert_eq!(ts.names().len(), 3);
+        assert_eq!(ts.lookup("chr1", 999), vec![None, None, None]);
     }
 }
