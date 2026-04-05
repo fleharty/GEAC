@@ -10,3 +10,6 @@ __pycache__/
 # Local reference repos cloned for comparison / inspiration.
 # Kept inside the workspace for tooling access but intentionally excluded from GEAC git history.
 third_party_refs/
+
+# Private local-only notes and presentation materials.
+private/
