@@ -17,6 +17,10 @@ from signature_nmf import (
     fit_cosmic_augmented_nmf,
     fit_sbs_nmf,
 )
+from pipeline_compare_helpers import (
+    build_unique_pipeline_characterization_df,
+    summarize_unique_pipeline_groups,
+)
 
 # Altair emits a spurious "Automatically deduplicated selection parameter" UserWarning
 # when a shared cross-panel selection param is present in multiple sub-charts.  The
@@ -5054,7 +5058,7 @@ with tab_pipeline:
                 WITH a AS (
                     SELECT sample_id, chrom, pos, alt_allele, variant_type,
                            ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                           total_depth,
+                           total_depth, alt_count,
                            trinuc_context, ref_allele
                     FROM {table_expr}
                     WHERE {_pc_wa}
@@ -5062,7 +5066,8 @@ with tab_pipeline:
                 b AS (
                     SELECT sample_id, chrom, pos, alt_allele, variant_type,
                            ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                           total_depth
+                           total_depth, alt_count,
+                           trinuc_context, ref_allele
                     FROM {table_expr}
                     WHERE {_pc_wb}
                 )
@@ -5076,8 +5081,10 @@ with tab_pipeline:
                     b.vaf         AS vaf_b,
                     a.total_depth AS depth_a,
                     b.total_depth AS depth_b,
-                    a.trinuc_context,
-                    a.ref_allele,
+                    a.alt_count   AS alt_count_a,
+                    b.alt_count   AS alt_count_b,
+                    COALESCE(a.trinuc_context, b.trinuc_context) AS trinuc_context,
+                    COALESCE(a.ref_allele, b.ref_allele) AS ref_allele,
                     CASE
                         WHEN a.chrom IS NOT NULL AND b.chrom IS NOT NULL THEN 'shared'
                         WHEN a.chrom IS NOT NULL                         THEN 'only_a'
@@ -5140,14 +5147,10 @@ with tab_pipeline:
                 if _pc_shared.empty:
                     st.info("No shared loci for current filters.")
                 else:
-                    import numpy as _np
-                    _pc_plot = _pc_shared.copy()
-                    _pc_plot["log1p_vaf_a"] = _np.log1p(_pc_plot["vaf_a"])
-                    _pc_plot["log1p_vaf_b"] = _np.log1p(_pc_plot["vaf_b"])
-                    _pc_diag_max = float(_np.log1p(1.0))
-
                     _pc_diag = (
-                        alt.Chart(pd.DataFrame({"x": [0.0, _pc_diag_max], "y": [0.0, _pc_diag_max]}))
+                        alt.Chart(
+                            pd.DataFrame({"x": [0.0, 1.0], "y": [0.0, 1.0]})
+                        )
                         .mark_line(color="gray", strokeDash=[4, 4], opacity=0.6)
                         .encode(x="x:Q", y="y:Q")
                     )
@@ -5158,11 +5161,19 @@ with tab_pipeline:
                         toggle="event.shiftKey",
                     )
                     _pc_vaf_scatter = (
-                        alt.Chart(_pc_plot)
+                        alt.Chart(_pc_shared)
                         .mark_circle(size=40)
                         .encode(
-                            x=alt.X("log1p_vaf_a:Q", title=f"VAF — {_pc_pipe_a} (log1p scale)"),
-                            y=alt.Y("log1p_vaf_b:Q", title=f"VAF — {_pc_pipe_b} (log1p scale)"),
+                            x=alt.X(
+                                "vaf_a:Q",
+                                title=f"VAF — {_pc_pipe_a}",
+                                scale=alt.Scale(domain=[0.0, 1.0]),
+                            ),
+                            y=alt.Y(
+                                "vaf_b:Q",
+                                title=f"VAF — {_pc_pipe_b}",
+                                scale=alt.Scale(domain=[0.0, 1.0]),
+                            ),
                             color=alt.Color("variant_type:N", title="Variant type"),
                             opacity=alt.condition(_pc_vaf_sel, alt.value(1.0), alt.value(0.4)),
                             size=alt.condition(_pc_vaf_sel, alt.value(120), alt.value(40)),
@@ -5270,7 +5281,188 @@ with tab_pipeline:
 
                 st.divider()
 
-                # ── View 4: SBS96 spectrum side-by-side ────────────────────────
+                # ── View 4: Unique-loci characterization ──────────────────────
+                st.subheader("Unique loci characterization")
+                st.caption(
+                    "These plots compare loci called by only one pipeline under the current filters. "
+                    "They are intended to help explain whether unique calls differ in VAF, support, "
+                    "or mutational context between the two pipelines."
+                )
+
+                _pc_uniq_cmp = build_unique_pipeline_characterization_df(
+                    _pc_uniq, str(_pc_pipe_a), str(_pc_pipe_b)
+                )
+                _pc_uniq_summary = summarize_unique_pipeline_groups(
+                    _pc_uniq_cmp, str(_pc_pipe_a), str(_pc_pipe_b)
+                )
+                _pc_uniq_group_a = f"Only {_pc_pipe_a}"
+                _pc_uniq_group_b = f"Only {_pc_pipe_b}"
+                _pc_uniq_a = _pc_uniq_cmp[_pc_uniq_cmp["group"] == _pc_uniq_group_a]
+                _pc_uniq_b = _pc_uniq_cmp[_pc_uniq_cmp["group"] == _pc_uniq_group_b]
+
+                if _pc_uniq_a.empty or _pc_uniq_b.empty:
+                    st.info(
+                        "Unique-loci characterization needs at least one unique locus in each pipeline "
+                        "under the current filters."
+                    )
+                else:
+                    def _pc_fmt_metric(v, fmt):
+                        return "NA" if v is None or pd.isna(v) else format(v, fmt)
+
+                    _pc_um = _pc_uniq_summary["metrics"]
+                    _pc_mcols = st.columns(6)
+                    _pc_mcols[0].metric(f"{_pc_pipe_a} unique loci", f"{_pc_um[_pc_uniq_group_a]['count']:,}")
+                    _pc_mcols[1].metric(
+                        f"{_pc_pipe_a} median VAF",
+                        _pc_fmt_metric(_pc_um[_pc_uniq_group_a]["median_vaf"], ".4f"),
+                    )
+                    _pc_mcols[2].metric(
+                        f"{_pc_pipe_a} median depth",
+                        _pc_fmt_metric(_pc_um[_pc_uniq_group_a]["median_depth"], ".1f"),
+                    )
+                    _pc_mcols[3].metric(f"{_pc_pipe_b} unique loci", f"{_pc_um[_pc_uniq_group_b]['count']:,}")
+                    _pc_mcols[4].metric(
+                        f"{_pc_pipe_b} median VAF",
+                        _pc_fmt_metric(_pc_um[_pc_uniq_group_b]["median_vaf"], ".4f"),
+                    )
+                    _pc_mcols[5].metric(
+                        f"{_pc_pipe_b} median depth",
+                        _pc_fmt_metric(_pc_um[_pc_uniq_group_b]["median_depth"], ".1f"),
+                    )
+                    st.caption(_pc_uniq_summary["summary"])
+
+                    def _pc_overlay_dist_chart(
+                        df: pd.DataFrame,
+                        value_col: str,
+                        title: str,
+                        x_title: str,
+                        key_col: str = "group",
+                        domain=None,
+                    ):
+                        _counts = df.groupby(key_col).size()
+                        if not _counts.empty and int(_counts.min()) >= 5:
+                            _density_kwargs = {
+                                "as_": [value_col, "density"],
+                                "groupby": [key_col],
+                                "steps": 100,
+                            }
+                            if domain is not None:
+                                _density_kwargs["extent"] = domain
+                            return (
+                                alt.Chart(df)
+                                .transform_density(value_col, **_density_kwargs)
+                                .mark_line(strokeWidth=2.5)
+                                .encode(
+                                    x=alt.X(
+                                        f"{value_col}:Q",
+                                        title=x_title,
+                                        scale=alt.Scale(domain=domain) if domain else alt.Scale(),
+                                    ),
+                                    y=alt.Y("density:Q", title="Density", stack=None),
+                                    color=alt.Color(f"{key_col}:N", title="Unique set"),
+                                    tooltip=[
+                                        alt.Tooltip(f"{value_col}:Q", format=".4f" if value_col == "vaf" else ".2f"),
+                                        f"{key_col}:N",
+                                        alt.Tooltip("density:Q", format=".3f"),
+                                    ],
+                                )
+                                .properties(title=title, height=260)
+                            )
+                        return (
+                            alt.Chart(df)
+                            .mark_bar(opacity=0.45)
+                            .encode(
+                                x=alt.X(
+                                    f"{value_col}:Q",
+                                    title=x_title,
+                                    bin=alt.Bin(maxbins=40),
+                                    scale=alt.Scale(domain=domain) if domain else alt.Scale(),
+                                ),
+                                y=alt.Y("count():Q", title="Count", stack=None),
+                                color=alt.Color(f"{key_col}:N", title="Unique set"),
+                                tooltip=[
+                                    f"{key_col}:N",
+                                    alt.Tooltip("count():Q", title="Count"),
+                                ],
+                            )
+                            .properties(title=title, height=260)
+                        )
+
+                    _pc_dist_cols = st.columns(2)
+                    with _pc_dist_cols[0]:
+                        st.altair_chart(
+                            _pc_overlay_dist_chart(
+                                _pc_uniq_cmp.dropna(subset=["vaf"]),
+                                "vaf",
+                                "VAF distribution",
+                                "VAF",
+                                domain=[0, 1],
+                            ),
+                            width="stretch",
+                        )
+                    with _pc_dist_cols[1]:
+                        st.altair_chart(
+                            _pc_overlay_dist_chart(
+                                _pc_uniq_cmp.dropna(subset=["depth"]),
+                                "depth",
+                                "Total depth distribution",
+                                "Total depth",
+                            ),
+                            width="stretch",
+                        )
+
+                    st.altair_chart(
+                        _pc_overlay_dist_chart(
+                            _pc_uniq_cmp.dropna(subset=["alt_count"]),
+                            "alt_count",
+                            "Alt-count distribution",
+                            "Alt count",
+                        ),
+                        width="stretch",
+                    )
+
+                    st.markdown("**Unique-only SBS96 spectrum**")
+                    if not _has_data("trinuc_context"):
+                        st.info(
+                            "SBS96 spectrum requires the `trinuc_context` column. "
+                            "Re-run `geac collect` with a reference FASTA."
+                        )
+                    else:
+                        def _pc_uniq_sbs96(group_name: str):
+                            _raw = (
+                                _pc_uniq_cmp[
+                                    (_pc_uniq_cmp["group"] == group_name)
+                                    & (_pc_uniq_cmp["variant_type"] == "SNV")
+                                    & (_pc_uniq_cmp["trinuc_context"].notna())
+                                ][["trinuc_context", "ref_allele", "alt_allele"]]
+                                .groupby(["trinuc_context", "ref_allele", "alt_allele"])
+                                .size()
+                                .reset_index(name="count")
+                            )
+                            return _to_spec96_strat(_raw)
+
+                        _pc_u96_a, _pc_u_total_a = _pc_uniq_sbs96(_pc_uniq_group_a)
+                        _pc_u96_b, _pc_u_total_b = _pc_uniq_sbs96(_pc_uniq_group_b)
+                        if _pc_u96_a is None or _pc_u96_b is None:
+                            st.info("Insufficient unique SNV data for unique-only SBS96 comparison.")
+                        else:
+                            _pc_u_sc1, _pc_u_sc2 = st.columns(2)
+                            with _pc_u_sc1:
+                                st.markdown(f"**{_pc_pipe_a} unique loci** ({_pc_u_total_a:,} SNVs)")
+                                st.altair_chart(
+                                    _strat_sbs96_chart(_pc_u96_a, f"Only {_pc_pipe_a}"),
+                                    width="stretch",
+                                )
+                            with _pc_u_sc2:
+                                st.markdown(f"**{_pc_pipe_b} unique loci** ({_pc_u_total_b:,} SNVs)")
+                                st.altair_chart(
+                                    _strat_sbs96_chart(_pc_u96_b, f"Only {_pc_pipe_b}"),
+                                    width="stretch",
+                                )
+
+                st.divider()
+
+                # ── View 5: SBS96 spectrum side-by-side ────────────────────────
                 st.subheader("SBS96 error spectrum")
 
                 if not _has_data("trinuc_context"):
@@ -5313,7 +5505,7 @@ with tab_pipeline:
 
                 st.divider()
 
-                # ── View 5: Depth comparison ───────────────────────────────────
+                # ── View 6: Depth comparison ───────────────────────────────────
                 st.subheader("Depth comparison (shared loci)")
 
                 if _pc_shared.empty:
@@ -5329,23 +5521,74 @@ with tab_pipeline:
                         .mark_line(color="gray", strokeDash=[4, 4], opacity=0.6)
                         .encode(x="x:Q", y="y:Q")
                     )
+                    _pc_depth_sel = alt.selection_point(
+                        name="pc_depth_select",
+                        fields=["sample_id", "chrom", "pos", "alt_allele"],
+                        on="click",
+                        toggle="event.shiftKey",
+                    )
                     _pc_depth_scatter = (
                         alt.Chart(_pc_shared)
-                        .mark_circle(opacity=0.5, size=40)
+                        .mark_circle(size=40)
                         .encode(
                             x=alt.X("depth_a:Q", title=f"Total depth — {_pc_pipe_a}"),
                             y=alt.Y("depth_b:Q", title=f"Total depth — {_pc_pipe_b}"),
                             color=alt.Color("variant_type:N", title="Variant type"),
+                            opacity=alt.condition(_pc_depth_sel, alt.value(1.0), alt.value(0.4)),
+                            size=alt.condition(_pc_depth_sel, alt.value(120), alt.value(40)),
                             tooltip=[
-                                "sample_id", "chrom", "pos", "alt_allele",
+                                "sample_id", "chrom", "pos", "alt_allele", "variant_type",
                                 alt.Tooltip("depth_a:Q", title=f"Depth ({_pc_pipe_a})"),
                                 alt.Tooltip("depth_b:Q", title=f"Depth ({_pc_pipe_b})"),
                             ],
                         )
+                        .add_params(_pc_depth_sel)
                         .properties(width=450, height=350)
                         .interactive()
                     )
-                    st.altair_chart(_pc_depth_diag + _pc_depth_scatter, width="stretch")
+                    _pc_depth_event = st.altair_chart(
+                        _pc_depth_diag + _pc_depth_scatter,
+                        width="stretch",
+                        on_select="rerun",
+                        key="pc_depth_scatter",
+                    )
+
+                    _pc_depth_pts = (_pc_depth_event.selection or {}).get("pc_depth_select", [])
+                    if _pc_depth_pts:
+                        _pc_depth_or = " OR ".join(
+                            f"(sample_id = '{_sql_str(p['sample_id'])}' AND chrom = '{_sql_str(p['chrom'])}' "
+                            f"AND pos = {int(p['pos'])} AND alt_allele = '{_sql_str(p['alt_allele'])}')"
+                            for p in _pc_depth_pts
+                            if all(k in p for k in ["sample_id", "chrom", "pos", "alt_allele"])
+                        )
+                        if _pc_depth_or:
+                            _pc_depth_sel_df = con.execute(f"""
+                                SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+                                FROM {table_expr}
+                                WHERE ({_pc_depth_or})
+                                ORDER BY sample_id, chrom, pos, pipeline
+                            """).df()
+                            _pc_depth_show_cols = [
+                                c for c in _table_cols + ["pipeline"] if c in _pc_depth_sel_df.columns
+                            ]
+                            st.caption(
+                                f"{len(_pc_depth_sel_df)} records for {len(_pc_depth_pts)} selected "
+                                f"loci (both pipelines shown) — shift-click to select multiple"
+                            )
+                            st.dataframe(
+                                _pc_depth_sel_df[_pc_depth_show_cols],
+                                width="stretch",
+                                hide_index=True,
+                            )
+                            igv_buttons(
+                                [f"({_pc_depth_or})"],
+                                _pc_depth_sel_df,
+                                key=f"pc_depth_{'_'.join(str(int(p['pos'])) for p in _pc_depth_pts[:5] if 'pos' in p)}",
+                                use_global_filters=False,
+                            )
+                    else:
+                        st.caption("Click a point to select it; shift-click to select multiple.")
+
                     st.caption(
                         f"Points above the diagonal: higher depth in {_pc_pipe_b}. "
                         f"Points below: higher depth in {_pc_pipe_a}. "
@@ -5534,7 +5777,9 @@ with tab_read_type:
                     st.info("No shared loci for current filters.")
                 else:
                     _rt_vaf_diag = (
-                        alt.Chart(pd.DataFrame({"x": [0.0, 1.0], "y": [0.0, 1.0]}))
+                        alt.Chart(
+                            pd.DataFrame({"x": [0.0, 1.0], "y": [0.0, 1.0]})
+                        )
                         .mark_line(color="gray", strokeDash=[4, 4], opacity=0.6)
                         .encode(x="x:Q", y="y:Q")
                     )
@@ -5542,10 +5787,16 @@ with tab_read_type:
                         alt.Chart(_rt_shared)
                         .mark_circle(opacity=0.5, size=40)
                         .encode(
-                            x=alt.X("vaf_a:Q", title=f"VAF — {_rt_a}",
-                                    scale=alt.Scale(domain=[0, 1])),
-                            y=alt.Y("vaf_b:Q", title=f"VAF — {_rt_b}",
-                                    scale=alt.Scale(domain=[0, 1])),
+                            x=alt.X(
+                                "vaf_a:Q",
+                                title=f"VAF — {_rt_a}",
+                                scale=alt.Scale(domain=[0.0, 1.0]),
+                            ),
+                            y=alt.Y(
+                                "vaf_b:Q",
+                                title=f"VAF — {_rt_b}",
+                                scale=alt.Scale(domain=[0.0, 1.0]),
+                            ),
                             color=alt.Color("variant_type:N", title="Variant type"),
                             tooltip=[
                                 "sample_id", "chrom", "pos", "alt_allele", "variant_type",
