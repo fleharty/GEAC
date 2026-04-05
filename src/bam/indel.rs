@@ -4,7 +4,7 @@ use rust_htslib::bam::pileup::Indel;
 
 use crate::record::VariantType;
 
-use super::pileup::{aux_i32, hard_clip_counts, ReadDetail};
+use super::pileup::{aux_i32, hard_clip_counts, read_context_metrics, ReadDetail};
 
 /// Per-indel-allele tally at a pileup position.
 pub(super) struct IndelCount {
@@ -146,6 +146,10 @@ pub(super) fn tally_indels(
             let qpos = alignment.qpos().unwrap_or(0);
             let qual = record.qual();
             let tlen = record.insert_size();
+            let seq_bases = (0..record.seq_len())
+                .map(|i| record.seq()[i].to_ascii_uppercase())
+                .collect::<Vec<_>>();
+            let context = read_context_metrics(&seq_bases, qpos);
             let (hc_leading, hc_trailing) = hard_clip_counts(&record);
             let hard_clip_before = if is_reverse { hc_trailing } else { hc_leading };
             Some(ReadDetail {
@@ -164,6 +168,12 @@ pub(super) fn tally_indels(
                 } else {
                     Some(tlen.unsigned_abs() as i32)
                 },
+                n_before_alt: context.n_before_alt,
+                n_after_alt: context.n_after_alt,
+                n_n_before_alt: context.n_n_before_alt,
+                n_n_after_alt: context.n_n_after_alt,
+                leading_n_run_len: context.leading_n_run_len,
+                trailing_n_run_len: context.trailing_n_run_len,
             })
         } else {
             None

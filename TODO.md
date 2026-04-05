@@ -132,6 +132,15 @@ only the records visible in the main table.
   show lower mean family size than recurrent true variants.
 - [ ] **Reads tab review** — work through all plots with real cohort data; assess usefulness,
   make changes, remove plots that don't add value.
+- [ ] **Investigate trailing-N pattern after alt-supporting bases** — in some reads, an alt base
+  is followed by a run of `N` bases. Determine whether this is primarily a property of the input
+  BAM/consensus pipeline, an alignment/context effect (e.g. indels, read-end failure, masking), or
+  something GEAC should explicitly annotate or visualize. Start with real examples in IGV and the
+  Reads tab; collect compact read-context metrics in `alt_reads` (`n_before_alt`, `n_after_alt`,
+  `n_n_before_alt`, `n_n_after_alt`, `leading_n_run_len`, `trailing_n_run_len`) and compare the
+  before/after N burden distributions. Compare by pipeline/read_type where possible and assess
+  whether these loci are enriched for
+  low-confidence or pipeline-unique calls.
 - [ ] **Family size vs VAF click-through** — add click/shift-click selection with drill-down
   table and IGV buttons, same as strand bias plot. Currently blocked: `selection_point` with
   `on_select="rerun"` returns `{"fsvaf_select": {}}` regardless of what is clicked; strand bias

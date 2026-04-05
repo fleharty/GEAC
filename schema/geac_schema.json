@@ -64,6 +64,12 @@
         "ba_count",
         "family_size",
         "insert_size",
+        "n_before_alt",
+        "n_after_alt",
+        "n_n_before_alt",
+        "n_n_after_alt",
+        "leading_n_run_len",
+        "trailing_n_run_len",
         "input_checksum_sha256"
       ]
     },

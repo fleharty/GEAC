@@ -49,6 +49,12 @@ fn alt_read_schema() -> Arc<Schema> {
         Field::new("base_qual", DataType::Int32, false),
         Field::new("map_qual", DataType::Int32, false),
         Field::new("insert_size", DataType::Int32, true),
+        Field::new("n_before_alt", DataType::Int32, false),
+        Field::new("n_after_alt", DataType::Int32, false),
+        Field::new("n_n_before_alt", DataType::Int32, false),
+        Field::new("n_n_after_alt", DataType::Int32, false),
+        Field::new("leading_n_run_len", DataType::Int32, false),
+        Field::new("trailing_n_run_len", DataType::Int32, false),
         Field::new("input_checksum_sha256", DataType::Utf8, true),
     ]))
 }
@@ -91,6 +97,24 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
     let insert_size: ArrayRef = Arc::new(Int32Array::from(
         records.iter().map(|r| r.insert_size).collect::<Vec<_>>(),
     ));
+    let n_before_alt: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.n_before_alt),
+    ));
+    let n_after_alt: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.n_after_alt),
+    ));
+    let n_n_before_alt: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.n_n_before_alt),
+    ));
+    let n_n_after_alt: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.n_n_after_alt),
+    ));
+    let leading_n_run_len: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.leading_n_run_len),
+    ));
+    let trailing_n_run_len: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.trailing_n_run_len),
+    ));
     let input_checksum_sha256: ArrayRef = Arc::new(StringArray::from(
         records
             .iter()
@@ -114,6 +138,12 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
             base_qual,
             map_qual,
             insert_size,
+            n_before_alt,
+            n_after_alt,
+            n_n_before_alt,
+            n_n_after_alt,
+            leading_n_run_len,
+            trailing_n_run_len,
             input_checksum_sha256,
         ],
     )

@@ -852,6 +852,9 @@ fn merge_routes_reads_parquet_to_alt_reads_table() {
     let reads_pq = dir.path().join("s1.reads.parquet");
     assert!(locus_pq.exists(), "locus parquet not created");
     assert!(reads_pq.exists(), "reads parquet not created");
+    let reads_cols = parquet_columns(&reads_pq);
+    assert!(reads_cols.contains(&"n_before_alt".to_string()));
+    assert!(reads_cols.contains(&"trailing_n_run_len".to_string()));
 
     let db = dir.path().join("cohort.duckdb");
     assert_geac_success(&[
@@ -870,6 +873,9 @@ fn merge_routes_reads_parquet_to_alt_reads_table() {
         duckdb_count(&db, "alt_reads") > 0,
         "alt_reads table is empty"
     );
+    let merged_cols = duckdb_columns(&db, "alt_reads");
+    assert!(merged_cols.contains(&"n_before_alt".to_string()));
+    assert!(merged_cols.contains(&"trailing_n_run_len".to_string()));
 }
 
 // ── Cycle number correctness ───────────────────────────────────────────────────
@@ -1042,6 +1048,71 @@ fn reads_reverse_hard_clips_counted_in_cycle() {
     assert_eq!(
         cycle, 11,
         "reverse hard-clip cycle should be trailing_H + read_len − qpos = 11"
+    );
+}
+
+#[test]
+fn reads_record_n_context_metrics() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 200);
+
+    // Forward read: qpos=3 at ref pos 43. Sequence context around alt:
+    // before = A N N, alt = T, after = N N A A
+    // n_before_alt=3, n_after_alt=4
+    // n_n_before_alt=2, n_n_after_alt=2
+    // leading_n_run_len=2, trailing_n_run_len=2
+    let seq = b"ANNTNNAA".to_vec();
+    let quals = vec![40u8; seq.len()];
+    let bam = write_cycle_bam(
+        dir.path(),
+        "nctx.bam",
+        "sample1",
+        200,
+        vec![CycleTestRead {
+            pos: 40,
+            flags: 0,
+            leading_hard_clips: 0,
+            trailing_hard_clips: 0,
+            seq,
+            quals,
+        }],
+    );
+    let out = dir.path().join("nctx.parquet");
+
+    assert_geac_success(&[
+        "collect",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
+        "--reads-output",
+    ]);
+
+    let reads_pq = dir.path().join("nctx.reads.parquet");
+    assert!(reads_pq.exists(), "reads parquet not created");
+    assert_eq!(parquet_query_i32(&reads_pq, "n_before_alt", "alt_allele = 'T'"), 3);
+    assert_eq!(parquet_query_i32(&reads_pq, "n_after_alt", "alt_allele = 'T'"), 4);
+    assert_eq!(
+        parquet_query_i32(&reads_pq, "n_n_before_alt", "alt_allele = 'T'"),
+        2
+    );
+    assert_eq!(
+        parquet_query_i32(&reads_pq, "n_n_after_alt", "alt_allele = 'T'"),
+        2
+    );
+    assert_eq!(
+        parquet_query_i32(&reads_pq, "leading_n_run_len", "alt_allele = 'T'"),
+        2
+    );
+    assert_eq!(
+        parquet_query_i32(&reads_pq, "trailing_n_run_len", "alt_allele = 'T'"),
+        2
     );
 }
 

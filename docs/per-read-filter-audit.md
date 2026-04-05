@@ -39,6 +39,12 @@ The per-read filter system spans three layers:
 | base_qual            | Int32 | no       | `record.qual()[qpos]`                 |
 | map_qual             | Int32 | no       | `record.mapq()`                       |
 | insert_size          | Int32 | **yes**  | `|TLEN|`; NULL when 0 (unpaired)      |
+| n_before_alt         | Int32 | no       | stored read bases before alt          |
+| n_after_alt          | Int32 | no       | stored read bases after alt           |
+| n_n_before_alt       | Int32 | no       | count of `N` bases before alt         |
+| n_n_after_alt        | Int32 | no       | count of `N` bases after alt          |
+| leading_n_run_len    | Int32 | no       | contiguous `N` run immediately before |
+| trailing_n_run_len   | Int32 | no       | contiguous `N` run immediately after  |
 
 ---
 

@@ -108,7 +108,9 @@ For example, `--output SAMPLE_001.parquet --reads-output` produces:
 The reads table is linked to the locus table by `(sample_id, chrom, pos, alt_allele)`.
 
 **When to use:** filtering by family size (fgbio duplex reads), diagnosing end-of-read
-artefacts via cycle number, or read-level phasing (e.g. MNV detection).
+artefacts via cycle number, investigating local read-sequence context around alt-supporting
+reads (for example, alt calls followed by runs of `N`), or read-level phasing
+(e.g. MNV detection).
 
 When `geac merge` is given a mix of `.locus.parquet` and `.reads.parquet` files, it routes
 them automatically: locus files → `alt_bases` table; reads files → `alt_reads` table.
@@ -445,11 +447,12 @@ Features:
     count bar chart stacked by SBS6 substitution type; click a sample row to focus all
     other views
   - *Reads* (DuckDB only, requires `--reads-output`) — family size histogram; read position
-    bias (cycle number); mean base quality by cycle; insert size distribution with
-    gap-correction toggle; insert size by allele frequency class; family size vs VAF
-    scatter; mapping quality distribution; cohort artefact family size comparison (boxplot
-    of family size by cohort frequency); all plots support aggregate / sample / batch
-    color-by options
+    bias (cycle number); mean base quality by cycle; read-context N burden around
+    alt-supporting reads (trailing N runs, fraction N after alt, before-vs-after asymmetry);
+    insert size distribution with gap-correction toggle; insert size by allele frequency
+    class; family size vs VAF scatter; mapping quality distribution; cohort artefact
+    family size comparison (boxplot of family size by cohort frequency); all plots support
+    aggregate / sample / batch color-by options
   - *Duplex/Simplex* (DuckDB only, requires `--reads-output`) — analyses focused on
     error-corrected sequencing: AB/BA strand balance distribution (`aD`/`bD` fgbio tags),
     read position bias by cycle, base quality distribution, family size vs VAF scatter,
@@ -614,6 +617,16 @@ fragment at a locus. Linked to the locus table by `(sample_id, chrom, pos, alt_a
 | `base_qual` | int32 | Base quality at the alt position |
 | `map_qual` | int32 | Mapping quality of the read |
 | `insert_size` | int32? | SAM TLEN (template length / insert size); null when 0 (unpaired or mate unmapped) |
+| `n_before_alt` | int32 | Number of stored read-sequence bases before the alt position |
+| `n_after_alt` | int32 | Number of stored read-sequence bases after the alt position |
+| `n_n_before_alt` | int32 | Number of `N` bases before the alt position |
+| `n_n_after_alt` | int32 | Number of `N` bases after the alt position |
+| `leading_n_run_len` | int32 | Contiguous run of `N` bases immediately before the alt |
+| `trailing_n_run_len` | int32 | Contiguous run of `N` bases immediately after the alt |
+
+The read-context fields are intended for statistical investigation of patterns such as
+alt-supporting reads followed by runs of `N`. “Before” and “after” are defined in read
+sequence order, not genomic left/right orientation.
 
 ### Normal evidence table (`*.normal_evidence.parquet`)
 

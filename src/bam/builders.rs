@@ -155,6 +155,12 @@ impl LocusContext {
             base_qual: detail.base_qual as i32,
             map_qual: detail.map_qual as i32,
             insert_size: detail.insert_size,
+            n_before_alt: detail.n_before_alt as i32,
+            n_after_alt: detail.n_after_alt as i32,
+            n_n_before_alt: detail.n_n_before_alt as i32,
+            n_n_after_alt: detail.n_n_after_alt as i32,
+            leading_n_run_len: detail.leading_n_run_len as i32,
+            trailing_n_run_len: detail.trailing_n_run_len as i32,
             input_checksum_sha256: self.input_checksum_sha256.clone(),
         }
     }

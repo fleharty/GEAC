@@ -21,6 +21,7 @@ from pipeline_compare_helpers import (
     build_unique_pipeline_characterization_df,
     summarize_unique_pipeline_groups,
 )
+from read_context_helpers import add_read_context_fraction_metrics
 
 # Altair emits a spurious "Automatically deduplicated selection parameter" UserWarning
 # when a shared cross-panel selection param is present in multiple sub-charts.  The
@@ -126,6 +127,15 @@ table_expr = data_source.table_expr
 _has_alt_reads = data_source.has_optional_table("alt_reads")
 _has_normal_evidence = data_source.has_optional_table("normal_evidence")
 _has_pon_evidence = data_source.has_optional_table("pon_evidence")
+_alt_reads_cols = (
+    set(con.execute("SELECT * FROM alt_reads LIMIT 0").df().columns)
+    if _has_alt_reads
+    else set()
+)
+
+
+def _has_alt_reads_cols(*cols: str) -> bool:
+    return all(col in _alt_reads_cols for col in cols)
 
 # ── Version check ─────────────────────────────────────────────────────────────
 if data_source.is_duckdb:
@@ -3802,7 +3812,177 @@ with tab_reads:
                 "indicates that alt-supporting reads at those positions may be artefacts."
             )
 
-        # ── Row 3: Insert size distribution ───────────────────────────────────
+        # ── Row 3: N context around alt-supporting reads ──────────────────────
+        st.subheader("N context around alt-supporting reads")
+        if not _has_alt_reads_cols(
+            "n_before_alt",
+            "n_after_alt",
+            "n_n_before_alt",
+            "n_n_after_alt",
+            "leading_n_run_len",
+            "trailing_n_run_len",
+        ):
+            st.info(
+                "N-context analysis requires a newer `alt_reads` schema. "
+                "Re-run `geac collect --reads-output` and `geac merge` to enable these plots."
+            )
+        else:
+            _nctx_ctrl1, _nctx_ctrl2 = st.columns([4, 1])
+            _nctx_color_mode = _nctx_ctrl1.radio(
+                "Group by",
+                ["All reads", "R1/R2"],
+                horizontal=True,
+                key="nctx_group_by",
+            )
+            _nctx_norm_mode = _nctx_ctrl2.radio(
+                "Y axis",
+                ["Fraction", "Count"],
+                horizontal=True,
+                key="nctx_y_mode",
+            )
+            _nctx_df = con.execute(f"""
+                SELECT
+                    ar.is_read1,
+                    ar.n_before_alt,
+                    ar.n_after_alt,
+                    ar.n_n_before_alt,
+                    ar.n_n_after_alt,
+                    ar.leading_n_run_len,
+                    ar.trailing_n_run_len
+                FROM {_r_join}
+            """).df()
+
+            if _nctx_df.empty:
+                st.info("No read-context data available under current filters.")
+            else:
+                _nctx_df = add_read_context_fraction_metrics(_nctx_df)
+                _nctx_df["read_group"] = np.where(_nctx_df["is_read1"], "R1", "R2")
+                _nctx_group_col = "read_group" if _nctx_color_mode == "R1/R2" else None
+
+                def _nctx_dist_chart(
+                    df: pd.DataFrame,
+                    value_col: str,
+                    title: str,
+                    x_title: str,
+                    *,
+                    domain=None,
+                    integer_bins: bool = False,
+                    fraction_format: bool = False,
+                ):
+                    chart_df = df.dropna(subset=[value_col]).copy()
+                    if chart_df.empty:
+                        return None
+                    y_enc = (
+                        alt.Y("proportion:Q", title="Fraction of alt-supporting reads")
+                        if _nctx_norm_mode == "Fraction"
+                        else alt.Y("count():Q", title="Alt-supporting reads")
+                    )
+                    if _nctx_norm_mode == "Fraction":
+                        if _nctx_group_col:
+                            chart_df["proportion"] = chart_df.groupby(_nctx_group_col)[value_col].transform(
+                                lambda x: 1.0 / len(x)
+                            )
+                        else:
+                            chart_df["proportion"] = 1.0 / len(chart_df)
+                    bin_def = alt.Bin(step=1) if integer_bins else alt.Bin(maxbins=40)
+                    enc = dict(
+                        x=alt.X(
+                            f"{value_col}:Q",
+                            title=x_title,
+                            bin=bin_def,
+                            scale=alt.Scale(domain=domain) if domain is not None else alt.Scale(),
+                        ),
+                        y=y_enc,
+                        tooltip=[
+                            *([f"{_nctx_group_col}:N"] if _nctx_group_col else []),
+                            alt.Tooltip("count():Q", title="Count"),
+                        ],
+                    )
+                    if _nctx_group_col:
+                        enc["color"] = alt.Color(f"{_nctx_group_col}:N", title="Read group")
+                    return (
+                        alt.Chart(chart_df)
+                        .mark_bar(opacity=0.7)
+                        .encode(**enc)
+                        .properties(title=title, height=260)
+                    )
+
+                _nctx_row1 = st.columns(2)
+                with _nctx_row1[0]:
+                    _trailing_chart = _nctx_dist_chart(
+                        _nctx_df,
+                        "trailing_n_run_len",
+                        "Trailing N run length",
+                        "Contiguous N run immediately after alt",
+                        integer_bins=True,
+                    )
+                    if _trailing_chart is not None:
+                        st.altair_chart(_trailing_chart, width="stretch")
+                with _nctx_row1[1]:
+                    _frac_after_df = _nctx_df[_nctx_df["n_after_alt"] > 0].copy()
+                    _frac_after_chart = _nctx_dist_chart(
+                        _frac_after_df,
+                        "frac_n_after_alt",
+                        "Fraction N after alt",
+                        "Fraction of bases after alt that are N",
+                        domain=[0, 1],
+                        fraction_format=True,
+                    )
+                    if _frac_after_chart is not None:
+                        st.altair_chart(_frac_after_chart, width="stretch")
+
+                _nctx_compare_rows = []
+                for _side, _col in [
+                    ("Before alt", "frac_n_before_alt"),
+                    ("After alt", "frac_n_after_alt"),
+                ]:
+                    _sub = _nctx_df.dropna(subset=[_col]).copy()
+                    if not _sub.empty:
+                        _sub["side"] = _side
+                        _sub["frac_n"] = _sub[_col]
+                        _nctx_compare_rows.append(_sub[["frac_n", "side"]])
+                _nctx_row2 = st.columns(2)
+                with _nctx_row2[0]:
+                    if _nctx_compare_rows:
+                        _nctx_compare_df = pd.concat(_nctx_compare_rows, ignore_index=True)
+                        _nctx_compare_chart = (
+                            alt.Chart(_nctx_compare_df)
+                            .mark_boxplot(extent="min-max")
+                            .encode(
+                                x=alt.X("side:N", title=None),
+                                y=alt.Y(
+                                    "frac_n:Q",
+                                    title="Fraction N",
+                                    scale=alt.Scale(domain=[0, 1]),
+                                ),
+                                color=alt.Color("side:N", title=None),
+                                tooltip=[
+                                    "side:N",
+                                    alt.Tooltip("median(frac_n):Q", title="Median", format=".3f"),
+                                ],
+                            )
+                            .properties(title="Leading vs trailing N burden", height=260)
+                        )
+                        st.altair_chart(_nctx_compare_chart, width="stretch")
+                with _nctx_row2[1]:
+                    _delta_chart = _nctx_dist_chart(
+                        _nctx_df.dropna(subset=["delta_n_fraction"]),
+                        "delta_n_fraction",
+                        "Before vs after asymmetry",
+                        "delta_n_fraction = frac_N_after - frac_N_before",
+                    )
+                    if _delta_chart is not None:
+                        st.altair_chart(_delta_chart, width="stretch")
+
+                _nctx_trailing_frac = (_nctx_df["trailing_n_run_len"] > 0).mean()
+                _nctx_median_delta = _nctx_df["delta_n_fraction"].median()
+                st.caption(
+                    f"{_nctx_trailing_frac:.1%} of alt-supporting reads have trailing N run length > 0. "
+                    f"Median delta_n_fraction = {_nctx_median_delta:.3f} "
+                    "(`frac_N_after - frac_N_before`). Positive values indicate greater N burden after the alt."
+                )
+
+        # ── Row 4: Insert size distribution ───────────────────────────────────
         if con.execute("SELECT COUNT(*) FROM alt_reads WHERE insert_size IS NOT NULL LIMIT 1").fetchone()[0] > 0:
             # Median read length — used for gap correction in both insert size plots.
             # Fragments longer than 2×read_len have a coverage gap; the correction

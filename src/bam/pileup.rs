@@ -23,6 +23,12 @@ pub(super) struct ReadDetail {
     pub(super) ba_count: Option<i32>,
     pub(super) family_size: Option<i32>,
     pub(super) insert_size: Option<i32>,
+    pub(super) n_before_alt: usize,
+    pub(super) n_after_alt: usize,
+    pub(super) n_n_before_alt: usize,
+    pub(super) n_n_after_alt: usize,
+    pub(super) leading_n_run_len: usize,
+    pub(super) trailing_n_run_len: usize,
 }
 
 /// Position-level summary returned by `tally_pileup`.
@@ -69,6 +75,59 @@ struct LocusRead {
     family_size: Option<i32>,
     /// SAM TLEN (insert size); None when 0 (unpaired / mate unmapped)
     insert_size: Option<i32>,
+    n_before_alt: usize,
+    n_after_alt: usize,
+    n_n_before_alt: usize,
+    n_n_after_alt: usize,
+    leading_n_run_len: usize,
+    trailing_n_run_len: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ReadContextMetrics {
+    pub(super) n_before_alt: usize,
+    pub(super) n_after_alt: usize,
+    pub(super) n_n_before_alt: usize,
+    pub(super) n_n_after_alt: usize,
+    pub(super) leading_n_run_len: usize,
+    pub(super) trailing_n_run_len: usize,
+}
+
+pub(super) fn read_context_metrics(bases: &[u8], qpos: usize) -> ReadContextMetrics {
+    let n_before_alt = qpos;
+    let n_after_alt = bases.len().saturating_sub(qpos + 1);
+    let n_n_before_alt = bases[..qpos].iter().filter(|&&b| b == b'N').count();
+    let n_n_after_alt = bases[qpos.saturating_add(1)..]
+        .iter()
+        .filter(|&&b| b == b'N')
+        .count();
+
+    let mut leading_n_run_len = 0;
+    for &b in bases[..qpos].iter().rev() {
+        if b == b'N' {
+            leading_n_run_len += 1;
+        } else {
+            break;
+        }
+    }
+
+    let mut trailing_n_run_len = 0;
+    for &b in &bases[qpos.saturating_add(1)..] {
+        if b == b'N' {
+            trailing_n_run_len += 1;
+        } else {
+            break;
+        }
+    }
+
+    ReadContextMetrics {
+        n_before_alt,
+        n_after_alt,
+        n_n_before_alt,
+        n_n_after_alt,
+        leading_n_run_len,
+        trailing_n_run_len,
+    }
 }
 
 /// Tally each observed base at a pileup column with overlap detection.
@@ -142,6 +201,21 @@ pub(super) fn tally_pileup(
         let is_first_in_pair = record.flags() & 0x40 != 0;
         let map_qual = record.mapq();
         let read_len = record.seq_len();
+        let context = if collect_reads {
+            let seq_bases = (0..read_len)
+                .map(|i| record.seq()[i].to_ascii_uppercase())
+                .collect::<Vec<_>>();
+            read_context_metrics(&seq_bases, qpos)
+        } else {
+            ReadContextMetrics {
+                n_before_alt: 0,
+                n_after_alt: 0,
+                n_n_before_alt: 0,
+                n_n_after_alt: 0,
+                leading_n_run_len: 0,
+                trailing_n_run_len: 0,
+            }
+        };
         let (hc_leading, hc_trailing) = hard_clip_counts(&record);
         let hard_clip_before = if is_reverse { hc_trailing } else { hc_leading };
 
@@ -176,6 +250,12 @@ pub(super) fn tally_pileup(
                 ba_count,
                 family_size,
                 insert_size,
+                n_before_alt: context.n_before_alt,
+                n_after_alt: context.n_after_alt,
+                n_n_before_alt: context.n_n_before_alt,
+                n_n_after_alt: context.n_n_after_alt,
+                leading_n_run_len: context.leading_n_run_len,
+                trailing_n_run_len: context.trailing_n_run_len,
             });
     }
 
@@ -202,6 +282,12 @@ pub(super) fn tally_pileup(
                     ba_count: $r.ba_count,
                     family_size: $r.family_size,
                     insert_size: $r.insert_size,
+                    n_before_alt: $r.n_before_alt,
+                    n_after_alt: $r.n_after_alt,
+                    n_n_before_alt: $r.n_n_before_alt,
+                    n_n_after_alt: $r.n_n_after_alt,
+                    leading_n_run_len: $r.leading_n_run_len,
+                    trailing_n_run_len: $r.trailing_n_run_len,
                 });
             }
         };
@@ -427,5 +513,56 @@ pub(super) fn true_cycle(
         (hard_clip_before + read_len - qpos) as i32
     } else {
         (hard_clip_before + qpos + 1) as i32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_context_metrics;
+
+    #[test]
+    fn read_context_metrics_handles_trailing_ns() {
+        let m = read_context_metrics(b"ATGNNAA", 2);
+        assert_eq!(m.n_before_alt, 2);
+        assert_eq!(m.n_after_alt, 4);
+        assert_eq!(m.n_n_before_alt, 0);
+        assert_eq!(m.n_n_after_alt, 2);
+        assert_eq!(m.leading_n_run_len, 0);
+        assert_eq!(m.trailing_n_run_len, 2);
+    }
+
+    #[test]
+    fn read_context_metrics_handles_leading_ns() {
+        let m = read_context_metrics(b"ANNTAAA", 3);
+        assert_eq!(m.n_before_alt, 3);
+        assert_eq!(m.n_after_alt, 3);
+        assert_eq!(m.n_n_before_alt, 2);
+        assert_eq!(m.n_n_after_alt, 0);
+        assert_eq!(m.leading_n_run_len, 2);
+        assert_eq!(m.trailing_n_run_len, 0);
+    }
+
+    #[test]
+    fn read_context_metrics_handles_non_adjacent_ns() {
+        let m = read_context_metrics(b"NATANAA", 3);
+        assert_eq!(m.n_n_before_alt, 1);
+        assert_eq!(m.n_n_after_alt, 1);
+        assert_eq!(m.leading_n_run_len, 0);
+        assert_eq!(m.trailing_n_run_len, 1);
+    }
+
+    #[test]
+    fn read_context_metrics_handles_alt_at_read_edges() {
+        let start = read_context_metrics(b"TNNAA", 0);
+        assert_eq!(start.n_before_alt, 0);
+        assert_eq!(start.n_after_alt, 4);
+        assert_eq!(start.leading_n_run_len, 0);
+        assert_eq!(start.trailing_n_run_len, 2);
+
+        let end = read_context_metrics(b"AANNT", 4);
+        assert_eq!(end.n_before_alt, 4);
+        assert_eq!(end.n_after_alt, 0);
+        assert_eq!(end.leading_n_run_len, 2);
+        assert_eq!(end.trailing_n_run_len, 0);
     }
 }

@@ -286,6 +286,18 @@ pub struct AltRead {
     /// SAM TLEN field (template length / insert size). None when TLEN is 0
     /// (unpaired reads or reads where the mate is unmapped).
     pub insert_size: Option<i32>,
+    /// Number of stored read-sequence bases before the alt position.
+    pub n_before_alt: i32,
+    /// Number of stored read-sequence bases after the alt position.
+    pub n_after_alt: i32,
+    /// Count of `N` bases before the alt position.
+    pub n_n_before_alt: i32,
+    /// Count of `N` bases after the alt position.
+    pub n_n_after_alt: i32,
+    /// Contiguous run of `N` bases immediately before the alt.
+    pub leading_n_run_len: i32,
+    /// Contiguous run of `N` bases immediately after the alt.
+    pub trailing_n_run_len: i32,
     /// SHA-256 of the input BAM/CRAM when collect was run with --input-checksum-sha256.
     pub input_checksum_sha256: Option<String>,
 }
@@ -338,4 +350,3 @@ pub struct IntervalRecord {
     pub label2:    Option<String>,
     pub label3:    Option<String>,
 }
-
