@@ -4161,7 +4161,26 @@ with tab_reads:
                     )
                     st.dataframe(_nasym_display, width="stretch", hide_index=True)
 
-                    # ── IGV for scatter selection or full ranked list ───────
+                    # Build a WHERE fragment covering all loci in the ranked table.
+                    _nasym_table_or = " OR ".join(
+                        f"(sample_id = '{_sql_str(r['sample_id'])}' AND chrom = '{_sql_str(r['chrom'])}' "
+                        f"AND pos = {int(r['pos'])} AND alt_allele = '{_sql_str(r['alt_allele'])}')"
+                        for _, r in _nasym_display.iterrows()
+                    )
+                    _nasym_table_df = con.execute(f"""
+                        SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+                        FROM {table_expr}
+                        WHERE ({_nasym_table_or})
+                        ORDER BY chrom, pos
+                    """).df()
+                    igv_buttons(
+                        [f"({_nasym_table_or})"],
+                        _nasym_table_df,
+                        key="nasym_table_igv",
+                        use_global_filters=False,
+                    )
+
+                    # ── IGV for scatter selection ──────────────────────────
                     _nasym_pts = (_nasym_event.selection or {}).get("nasym_select", [])
                     if _nasym_pts:
                         _nasym_or = " OR ".join(
@@ -4177,18 +4196,17 @@ with tab_reads:
                                 WHERE ({_nasym_or})
                             """).df()
                             st.caption(
-                                f"{len(_nasym_pts)} loci selected — shift-click to add more. "
-                                "Click an empty area to deselect."
+                                f"{len(_nasym_pts)} loci selected in scatter — shift-click to add more."
                             )
                             igv_buttons(
                                 [f"({_nasym_or})"],
                                 _nasym_sel_df,
-                                key=f"nasym_{'_'.join(str(int(p['pos'])) for p in _nasym_pts[:5] if 'pos' in p)}",
+                                key=f"nasym_scatter_{'_'.join(str(int(p['pos'])) for p in _nasym_pts[:5] if 'pos' in p)}",
                                 use_global_filters=False,
                             )
                     else:
                         st.caption(
-                            "Click a point in the scatter to select loci and open them in IGV. "
+                            "Click a point in the scatter to load just those loci in IGV. "
                             "Shift-click to select multiple."
                         )
 
