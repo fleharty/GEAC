@@ -127,11 +127,13 @@ table_expr = data_source.table_expr
 _has_alt_reads = data_source.has_optional_table("alt_reads")
 _has_normal_evidence = data_source.has_optional_table("normal_evidence")
 _has_pon_evidence = data_source.has_optional_table("pon_evidence")
-_alt_reads_cols = (
-    set(con.execute("SELECT * FROM alt_reads LIMIT 0").df().columns)
-    if _has_alt_reads
-    else set()
-)
+if "_alt_reads_cols_cached" not in st.session_state:
+    st.session_state["_alt_reads_cols_cached"] = (
+        set(con.execute("SELECT * FROM alt_reads LIMIT 0").df().columns)
+        if _has_alt_reads
+        else set()
+    )
+_alt_reads_cols = st.session_state["_alt_reads_cols_cached"]
 
 
 def _has_alt_reads_cols(*cols: str) -> bool:
@@ -4046,23 +4048,30 @@ with tab_reads:
                 "error enrichment at late cycles. Use the sidebar **Min N-asymmetry score** slider "
                 "to highlight the most extreme sites."
             )
-            _nasym_cache_key = ("nasym_df", hash(_r_join))
+            # Cache keyed on the actual filter strings — stable across rerenders,
+            # unlike hash() which uses a randomised seed per process.
+            _nasym_cache_key = ("nasym_df", where, _r_reads_filter)
             if st.session_state.get("_nasym_cache_key") != _nasym_cache_key:
                 st.session_state["_nasym_cache_key"] = _nasym_cache_key
                 st.session_state["_nasym_df_cache"] = compute_locus_n_asymmetry(con, _r_join)
+                st.session_state["_nasym_locus_cache_key"] = None  # invalidate dependent cache
             _nasym_df = st.session_state["_nasym_df_cache"]
 
             if _nasym_df.empty:
                 st.info("No loci available under current filters.")
             else:
-                # Merge in VAF and variant_type from the locus table for richer display.
-                _nasym_locus = con.execute(f"""
-                    SELECT sample_id, chrom, pos, alt_allele, variant_type,
-                           ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                           alt_count, total_depth
-                    FROM {table_expr}
-                    WHERE {where}
-                """).df()
+                # Merge in VAF and variant_type — cached separately on the locus WHERE clause.
+                _nasym_locus_cache_key = ("nasym_locus", where)
+                if st.session_state.get("_nasym_locus_cache_key") != _nasym_locus_cache_key:
+                    st.session_state["_nasym_locus_cache_key"] = _nasym_locus_cache_key
+                    st.session_state["_nasym_locus_cache"] = con.execute(f"""
+                        SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                               ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                               alt_count, total_depth
+                        FROM {table_expr}
+                        WHERE {where}
+                    """).df()
+                _nasym_locus = st.session_state["_nasym_locus_cache"]
                 _nasym_df = _nasym_df.merge(
                     _nasym_locus,
                     on=["sample_id", "chrom", "pos", "alt_allele"],
@@ -4219,7 +4228,11 @@ with tab_reads:
                         )
 
         # ── Row 4: Insert size distribution ───────────────────────────────────
-        if con.execute("SELECT COUNT(*) FROM alt_reads WHERE insert_size IS NOT NULL LIMIT 1").fetchone()[0] > 0:
+        if "_cached_has_insert_size" not in st.session_state:
+            st.session_state["_cached_has_insert_size"] = (
+                con.execute("SELECT COUNT(*) FROM alt_reads WHERE insert_size IS NOT NULL LIMIT 1").fetchone()[0] > 0
+            )
+        if st.session_state["_cached_has_insert_size"]:
             # Median read length — used for gap correction in both insert size plots.
             # Fragments longer than 2×read_len have a coverage gap; the correction
             # weights each count by 1 / min(1, 2R/L) to recover the unbiased distribution.
@@ -4358,7 +4371,7 @@ with tab_reads:
                 st.caption(_ins_caption)
 
         # ── Row 3b: Insert size by AF class (germline vs somatic) ─────────────
-        if con.execute("SELECT COUNT(*) FROM alt_reads WHERE insert_size IS NOT NULL LIMIT 1").fetchone()[0] > 0:
+        if st.session_state.get("_cached_has_insert_size", False):
             st.subheader("Insert size by allele frequency class")
             _af_ins_color_options = ["All samples (aggregate)", "Sample"]
             if _has_data("batch"):
