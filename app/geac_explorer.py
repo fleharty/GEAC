@@ -1,8 +1,17 @@
 import io
 import json
+import os
+import textwrap
+import traceback
 import warnings
 import zipfile
 from pathlib import Path
+
+try:
+    import anthropic as _anthropic
+    _HAS_ANTHROPIC = True
+except ImportError:
+    _HAS_ANTHROPIC = False
 import numpy as np
 import streamlit as st
 import duckdb
@@ -1511,7 +1520,7 @@ _r_join = f"""
 """
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon, tab_pipeline, tab_read_type = st.tabs(
+tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon, tab_pipeline, tab_read_type, tab_ai = st.tabs(
     [module.LABEL for module in TAB_MODULES],
     key="main_tabs",
 )
@@ -6388,3 +6397,139 @@ with tab_read_type:
                         hide_index=True,
                         key="rt_cmp_uniq_table",
                     )
+
+# ── AI Plot Builder ────────────────────────────────────────────────────────────
+with tab_ai:
+    st.header("AI Plot Builder")
+    st.caption(
+        "Describe a plot in plain English and Claude will write the code to render it. "
+        "The generated code has access to the current filtered dataset, so all sidebar "
+        "filters apply automatically."
+    )
+
+    if not _HAS_ANTHROPIC:
+        st.error(
+            "`anthropic` package is not installed. "
+            "Run `pip install anthropic` in your environment then restart the explorer."
+        )
+    else:
+        # ── API key ────────────────────────────────────────────────────────────
+        _ai_api_key = (
+            _cfg.get("anthropic_api_key")
+            or os.environ.get("ANTHROPIC_API_KEY", "")
+        )
+        if not _ai_api_key:
+            _ai_api_key = st.text_input(
+                "Anthropic API key",
+                type="password",
+                key="ai_api_key_input",
+                help="Set ANTHROPIC_API_KEY in your environment or add anthropic_api_key to config.toml to avoid entering it here.",
+            )
+
+        if not _ai_api_key:
+            st.info("Enter your Anthropic API key above to enable the AI Plot Builder.")
+        else:
+            # ── System prompt with schema + variable context ───────────────────
+            _ai_locus_cols = ", ".join(_table_cols) if _table_cols else "sample_id, chrom, pos, alt_allele, variant_type, total_depth, alt_count, ref_allele, fwd_alt_count, rev_alt_count, pipeline, batch, label1, trinuc_context, gnomad_af, on_target, gene, homopolymer_len, str_len, variant_called, variant_filter"
+            _ai_reads_cols = ", ".join(sorted(_alt_reads_cols)) if _alt_reads_cols else "sample_id, chrom, pos, alt_allele, cycle, read_length, is_read1, base_qual, map_qual, family_size, insert_size, n_before_alt, n_after_alt, n_n_before_alt, n_n_after_alt, leading_n_run_len, trailing_n_run_len"
+
+            _AI_SYSTEM = textwrap.dedent(f"""
+                You are an expert data visualization assistant for the GEAC genomic cohort explorer.
+                The user will describe a plot or analysis. You must return ONLY executable Python code — no
+                explanation, no markdown code fences, no comments unless they clarify non-obvious logic.
+
+                ## Available variables (already in scope when the code runs)
+
+                | Variable | Description |
+                |----------|-------------|
+                | `con` | DuckDB connection to the cohort database |
+                | `table_expr` | SQL table/view expression for the current locus selection (respects all sidebar filters) |
+                | `where` | SQL WHERE clause string encoding the current sidebar filters |
+                | `alt` | altair module |
+                | `pd` | pandas module |
+                | `np` | numpy module |
+                | `st` | streamlit module — use `st.altair_chart`, `st.dataframe`, `st.metric`, etc. to display output |
+                | `_r_join` | SQL FROM expression that joins alt_reads to the current filtered loci (use for read-level queries) |
+
+                ## Schema
+
+                ### Locus table — `{{table_expr}}`
+                Columns: {_ai_locus_cols}
+                - `vaf` is not stored; compute as `ROUND(alt_count * 1.0 / total_depth, 4)` in SQL or `alt_count / total_depth` in pandas.
+                - Query pattern: `con.execute(f"SELECT ... FROM {{table_expr}} WHERE {{where}}").df()`
+
+                ### Alt-reads table — `alt_reads`
+                Columns: {_ai_reads_cols}
+                - Query pattern: `con.execute(f"SELECT ... FROM {{_r_join}}").df()`
+                - `_r_join` already filters alt_reads to only the loci matching the current sidebar filters.
+
+                ## Display conventions
+                - Use `st.altair_chart(chart, use_container_width=True)` to render Altair charts.
+                - Use `st.dataframe(df, use_container_width=True, hide_index=True)` for tables.
+                - If the query returns no rows, show `st.info("No data available under current filters.")`.
+                - Prefer Altair for charts. Only use matplotlib if the user explicitly asks for it.
+                - Do not call `st.set_page_config` or `st.sidebar` anything.
+            """).strip()
+
+            # ── Request input ─────────────────────────────────────────────────
+            _ai_request = st.text_area(
+                "Describe the plot or analysis you want",
+                placeholder=(
+                    "e.g. 'Show a scatter plot of VAF vs. sequencing cycle for alt reads, "
+                    "colored by variant type' or 'Plot the distribution of base quality scores "
+                    "split by R1 and R2'"
+                ),
+                height=100,
+                key="ai_plot_request",
+            )
+
+            _ai_col1, _ai_col2 = st.columns([1, 5])
+            _ai_generate = _ai_col1.button("Generate", key="ai_generate_btn", type="primary")
+            if _ai_col2.button("Clear", key="ai_clear_btn"):
+                st.session_state.pop("ai_last_code", None)
+                st.session_state.pop("ai_last_request", None)
+                st.rerun()
+
+            if _ai_generate and _ai_request.strip():
+                st.session_state["ai_last_request"] = _ai_request.strip()
+                with st.spinner("Generating…"):
+                    try:
+                        _ai_client = _anthropic.Anthropic(api_key=_ai_api_key)
+                        _ai_code_parts = []
+                        _ai_placeholder = st.empty()
+                        with _ai_client.messages.stream(
+                            model="claude-opus-4-6",
+                            max_tokens=4096,
+                            system=_AI_SYSTEM,
+                            messages=[{"role": "user", "content": _ai_request.strip()}],
+                        ) as _ai_stream:
+                            for _ai_chunk in _ai_stream.text_stream:
+                                _ai_code_parts.append(_ai_chunk)
+                                _ai_placeholder.code("".join(_ai_code_parts), language="python")
+                        st.session_state["ai_last_code"] = "".join(_ai_code_parts).strip()
+                    except Exception as _ai_err:
+                        st.error(f"Claude API error: {_ai_err}")
+
+            # ── Render generated code ──────────────────────────────────────────
+            if "ai_last_code" in st.session_state:
+                _ai_code = st.session_state["ai_last_code"]
+                with st.expander("Generated code", expanded=False):
+                    st.code(_ai_code, language="python")
+
+                st.divider()
+                _ai_namespace = {
+                    "con": con,
+                    "table_expr": table_expr,
+                    "where": where,
+                    "alt": alt,
+                    "pd": pd,
+                    "np": np,
+                    "st": st,
+                    "_r_join": _r_join,
+                }
+                try:
+                    exec(_ai_code, _ai_namespace)  # noqa: S102
+                except Exception:
+                    st.error("The generated code raised an error:")
+                    st.code(traceback.format_exc(), language="text")
+                    st.caption("Try rephrasing your request or click Generate again.")

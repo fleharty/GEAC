@@ -1,3 +1,4 @@
+from . import ai_plot_builder
 from . import cohort
 from . import duplex_simplex
 from . import error_spectrum
@@ -22,4 +23,5 @@ TAB_MODULES = (
     panel_of_normals,
     pipeline_comparison,
     read_type_comparison,
+    ai_plot_builder,
 )
