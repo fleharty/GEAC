@@ -115,6 +115,7 @@ MAIN_FILTER_KEYS = (
     "map_qual_range",
     "insert_size_range",
     "read_strand_sel",
+    "min_delta_n_frac",
 )
 
 MAIN_TAB_UI_KEYS = (
@@ -180,6 +181,7 @@ MAIN_FILTER_STATE = FilterState(
         "table_limit_sel": 500,
         "recompute_vaf": False,
         "read_strand_sel": "All",
+        "min_delta_n_frac": 0.0,
     },
 )
 

@@ -21,7 +21,7 @@ from pipeline_compare_helpers import (
     build_unique_pipeline_characterization_df,
     summarize_unique_pipeline_groups,
 )
-from read_context_helpers import add_read_context_fraction_metrics
+from read_context_helpers import add_read_context_fraction_metrics, compute_locus_n_asymmetry
 
 # Altair emits a spurious "Automatically deduplicated selection parameter" UserWarning
 # when a shared cross-panel selection param is present in multiple sub-charts.  The
@@ -485,6 +485,20 @@ if _has_alt_reads:
         key="read_strand_sel",
         help="Filter to R1 reads (BAM flag 0x40 set), R2 reads, or all reads.",
     )
+
+    if _n_total_has_data:
+        min_delta_n_frac = st.sidebar.slider(
+            "Min N-asymmetry score (locus discovery)",
+            min_value=0.0,
+            max_value=1.0,
+            value=st.session_state.get("min_delta_n_frac", 0.0),
+            step=0.05,
+            key="min_delta_n_frac",
+            help="In the Read Context tab, show only loci where mean(frac_N_after) − mean(frac_N_before) "
+                 "is at least this value. Does not affect other tabs.",
+        )
+    else:
+        min_delta_n_frac = 0.0
 
     _fs_lo, _fs_hi = family_size_range
     _cycle_lo, _cycle_hi = cycle_range
@@ -4014,6 +4028,169 @@ with tab_reads:
                         "bases after the alt contributes 0.05. The curves show the density of those per-read fractions "
                         "before versus after the alt."
                     )
+
+        # ── Row 3b: N-asymmetry locus discovery ───────────────────────────────
+        st.subheader("N-asymmetry locus discovery")
+        if not _has_alt_reads_cols(
+            "n_before_alt", "n_after_alt", "n_n_before_alt", "n_n_after_alt"
+        ):
+            st.info(
+                "N-asymmetry analysis requires a newer `alt_reads` schema. "
+                "Re-run `geac collect --reads-output` and `geac merge` to enable this section."
+            )
+        else:
+            st.caption(
+                "Each point is one locus. The x-axis shows the mean fraction of upstream bases "
+                "that are N; the y-axis shows the same for downstream bases. Loci in the upper-left "
+                "have many Ns **after** the alt base and few before — a hallmark of sequencing "
+                "error enrichment at late cycles. Use the sidebar **Min N-asymmetry score** slider "
+                "to highlight the most extreme sites."
+            )
+            _nasym_df = compute_locus_n_asymmetry(con, _r_join)
+
+            if _nasym_df.empty:
+                st.info("No loci available under current filters.")
+            else:
+                # Merge in VAF and variant_type from the locus table for richer display.
+                _nasym_locus = con.execute(f"""
+                    SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                           ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                           alt_count, total_depth
+                    FROM {table_expr}
+                    WHERE {where}
+                """).df()
+                _nasym_df = _nasym_df.merge(
+                    _nasym_locus,
+                    on=["sample_id", "chrom", "pos", "alt_allele"],
+                    how="left",
+                )
+                _nasym_df = _nasym_df.dropna(subset=["mean_delta_n_frac"])
+
+                # Apply the sidebar threshold filter.
+                if min_delta_n_frac > 0.0:
+                    _nasym_df = _nasym_df[_nasym_df["mean_delta_n_frac"] >= min_delta_n_frac]
+
+                if _nasym_df.empty:
+                    st.info(
+                        f"No loci with N-asymmetry score ≥ {min_delta_n_frac:.2f} under current filters. "
+                        "Try lowering the sidebar threshold."
+                    )
+                else:
+                    # ── Scatter: frac_n_before vs frac_n_after ─────────────
+                    _nasym_sel = alt.selection_point(
+                        name="nasym_select",
+                        fields=["sample_id", "chrom", "pos", "alt_allele"],
+                        on="click",
+                        toggle="event.shiftKey",
+                    )
+                    _nasym_diag_max = float(_nasym_df[["mean_frac_n_before", "mean_frac_n_after"]].max().max())
+                    _nasym_diag = (
+                        alt.Chart(
+                            pd.DataFrame({"x": [0.0, _nasym_diag_max], "y": [0.0, _nasym_diag_max]})
+                        )
+                        .mark_line(color="gray", strokeDash=[4, 4], opacity=0.5)
+                        .encode(x="x:Q", y="y:Q")
+                    )
+                    _nasym_scatter = (
+                        alt.Chart(_nasym_df)
+                        .mark_circle(size=50)
+                        .encode(
+                            x=alt.X(
+                                "mean_frac_n_before:Q",
+                                title="Mean frac N before alt",
+                                scale=alt.Scale(zero=True),
+                            ),
+                            y=alt.Y(
+                                "mean_frac_n_after:Q",
+                                title="Mean frac N after alt",
+                                scale=alt.Scale(zero=True),
+                            ),
+                            color=alt.Color("variant_type:N", title="Variant type"),
+                            opacity=alt.condition(_nasym_sel, alt.value(1.0), alt.value(0.4)),
+                            size=alt.condition(_nasym_sel, alt.value(150), alt.value(50)),
+                            tooltip=[
+                                "sample_id", "chrom", "pos", "alt_allele", "variant_type",
+                                alt.Tooltip("vaf:Q", format=".4f"),
+                                alt.Tooltip("mean_frac_n_before:Q", title="Mean frac N before", format=".4f"),
+                                alt.Tooltip("mean_frac_n_after:Q", title="Mean frac N after", format=".4f"),
+                                alt.Tooltip("mean_delta_n_frac:Q", title="Delta (after−before)", format=".4f"),
+                                alt.Tooltip("frac_reads_asymmetric:Q", title="Frac reads asymmetric", format=".3f"),
+                                alt.Tooltip("n_alt_reads:Q", title="Alt reads"),
+                            ],
+                        )
+                        .add_params(_nasym_sel)
+                        .properties(width=420, height=380, title="N-asymmetry scatter (upper-left = high downstream N)")
+                        .interactive()
+                    )
+
+                    # ── Histogram of mean_delta_n_frac ─────────────────────
+                    _nasym_hist = (
+                        alt.Chart(_nasym_df)
+                        .mark_bar(opacity=0.8)
+                        .encode(
+                            x=alt.X(
+                                "mean_delta_n_frac:Q",
+                                bin=alt.Bin(maxbins=40),
+                                title="N-asymmetry score (mean frac N after − before)",
+                            ),
+                            y=alt.Y("count():Q", title="Loci"),
+                            tooltip=[
+                                alt.Tooltip("mean_delta_n_frac:Q", title="Score", format=".3f"),
+                                alt.Tooltip("count():Q", title="Loci"),
+                            ],
+                        )
+                        .properties(width=380, height=380, title="Distribution of N-asymmetry score")
+                    )
+
+                    _nasym_event = st.altair_chart(
+                        _nasym_diag + _nasym_scatter | _nasym_hist,
+                        on_select="rerun",
+                        key="nasym_scatter",
+                    )
+
+                    # ── Ranked table + IGV ─────────────────────────────────
+                    st.subheader("Most N-asymmetric loci")
+                    _nasym_display = (
+                        _nasym_df
+                        .sort_values("mean_delta_n_frac", ascending=False)
+                        [["sample_id", "chrom", "pos", "alt_allele", "variant_type",
+                          "vaf", "alt_count", "total_depth", "n_alt_reads",
+                          "mean_frac_n_before", "mean_frac_n_after",
+                          "mean_delta_n_frac", "frac_reads_asymmetric"]]
+                        .reset_index(drop=True)
+                    )
+                    st.dataframe(_nasym_display, width="stretch", hide_index=True)
+
+                    # ── IGV for scatter selection or full ranked list ───────
+                    _nasym_pts = (_nasym_event.selection or {}).get("nasym_select", [])
+                    if _nasym_pts:
+                        _nasym_or = " OR ".join(
+                            f"(sample_id = '{_sql_str(p['sample_id'])}' AND chrom = '{_sql_str(p['chrom'])}' "
+                            f"AND pos = {int(p['pos'])} AND alt_allele = '{_sql_str(p['alt_allele'])}')"
+                            for p in _nasym_pts
+                            if all(k in p for k in ["sample_id", "chrom", "pos", "alt_allele"])
+                        )
+                        if _nasym_or:
+                            _nasym_sel_df = con.execute(f"""
+                                SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+                                FROM {table_expr}
+                                WHERE ({_nasym_or})
+                            """).df()
+                            st.caption(
+                                f"{len(_nasym_pts)} loci selected — shift-click to add more. "
+                                "Click an empty area to deselect."
+                            )
+                            igv_buttons(
+                                [f"({_nasym_or})"],
+                                _nasym_sel_df,
+                                key=f"nasym_{'_'.join(str(int(p['pos'])) for p in _nasym_pts[:5] if 'pos' in p)}",
+                                use_global_filters=False,
+                            )
+                    else:
+                        st.caption(
+                            "Click a point in the scatter to select loci and open them in IGV. "
+                            "Shift-click to select multiple."
+                        )
 
         # ── Row 4: Insert size distribution ───────────────────────────────────
         if con.execute("SELECT COUNT(*) FROM alt_reads WHERE insert_size IS NOT NULL LIMIT 1").fetchone()[0] > 0:
