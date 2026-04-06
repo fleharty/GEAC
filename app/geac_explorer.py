@@ -6434,6 +6434,43 @@ with tab_ai:
 
         if not _ai_api_key:
             st.info("Enter your Anthropic API key above to enable the AI Plot Builder.")
+            st.caption("Example output — VAF vs. sequencing cycle, colored by variant type:")
+            if _has_alt_reads:
+                _demo_df = con.execute(f"""
+                    SELECT
+                        ar.cycle,
+                        ROUND(l.alt_count * 1.0 / l.total_depth, 4) AS vaf,
+                        l.variant_type
+                    FROM {_r_join}
+                    INNER JOIN (
+                        SELECT sample_id, chrom, pos, alt_allele, alt_count, total_depth, variant_type
+                        FROM {table_expr} WHERE {where}
+                    ) l
+                    ON ar.sample_id = l.sample_id
+                    AND ar.chrom    = l.chrom
+                    AND ar.pos      = l.pos
+                    AND ar.alt_allele = l.alt_allele
+                    WHERE l.total_depth > 0
+                    LIMIT 5000
+                """).df()
+                if _demo_df.empty:
+                    st.info("No alt-read data available under current filters.")
+                else:
+                    st.altair_chart(
+                        alt.Chart(_demo_df)
+                        .mark_circle(size=30, opacity=0.5)
+                        .encode(
+                            x=alt.X("cycle:Q", title="Sequencing cycle"),
+                            y=alt.Y("vaf:Q", title="VAF", scale=alt.Scale(domain=[0, 1])),
+                            color=alt.Color("variant_type:N", title="Variant type"),
+                            tooltip=["cycle:Q", alt.Tooltip("vaf:Q", format=".4f"), "variant_type:N"],
+                        )
+                        .properties(title="VAF vs. sequencing cycle (alt reads)", height=350)
+                        .interactive(),
+                        use_container_width=True,
+                    )
+            else:
+                st.info("No alt-reads table available — run `geac collect --reads-output` to enable this plot.")
         else:
             # ── System prompt with schema + variable context ───────────────────
             _ai_locus_cols = ", ".join(_table_cols) if _table_cols else "sample_id, chrom, pos, alt_allele, variant_type, total_depth, alt_count, ref_allele, fwd_alt_count, rev_alt_count, pipeline, batch, label1, trinuc_context, gnomad_af, on_target, gene, homopolymer_len, str_len, variant_called, variant_filter"
