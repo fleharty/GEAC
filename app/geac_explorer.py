@@ -4046,7 +4046,11 @@ with tab_reads:
                 "error enrichment at late cycles. Use the sidebar **Min N-asymmetry score** slider "
                 "to highlight the most extreme sites."
             )
-            _nasym_df = compute_locus_n_asymmetry(con, _r_join)
+            _nasym_cache_key = ("nasym_df", hash(_r_join))
+            if st.session_state.get("_nasym_cache_key") != _nasym_cache_key:
+                st.session_state["_nasym_cache_key"] = _nasym_cache_key
+                st.session_state["_nasym_df_cache"] = compute_locus_n_asymmetry(con, _r_join)
+            _nasym_df = st.session_state["_nasym_df_cache"]
 
             if _nasym_df.empty:
                 st.info("No loci available under current filters.")
