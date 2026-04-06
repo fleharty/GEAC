@@ -376,23 +376,32 @@ max_depth = st.sidebar.number_input("Max depth (0 = no maximum)", min_value=0, s
 _reads_conditions = []
 if _has_alt_reads:
     if "_cached_fs_max" not in st.session_state:
-        _reads_maxes = con.execute("""
+        _n_total_expr = (
+            "COALESCE(MAX(n_n_before_alt + n_n_after_alt), 0)"
+            if _has_alt_reads_cols("n_n_before_alt", "n_n_after_alt")
+            else "0"
+        )
+        _reads_maxes = con.execute(f"""
             SELECT
                 MAX(family_size),
                 COALESCE(MAX(cycle), 300),
                 COALESCE(MAX(map_qual), 60),
-                COUNT(insert_size) > 0
+                COUNT(insert_size) > 0,
+                {_n_total_expr}
             FROM alt_reads
         """).fetchone()
         st.session_state["_cached_fs_max"]     = _reads_maxes[0]   # None if all NULL
         st.session_state["_cached_cycle_max"]   = int(_reads_maxes[1])
         st.session_state["_cached_mq_max"]     = int(_reads_maxes[2])
         st.session_state["_cached_is_has_data"] = bool(_reads_maxes[3])
+        st.session_state["_cached_n_total_max"] = int(_reads_maxes[4])
     _fs_max_raw  = st.session_state["_cached_fs_max"]
     _cycle_max   = st.session_state["_cached_cycle_max"]
     _mq_max      = st.session_state["_cached_mq_max"]
     _is_has_data = st.session_state["_cached_is_has_data"]
+    _n_total_max = st.session_state.get("_cached_n_total_max", 0)
     _fs_has_data = _fs_max_raw is not None
+    _n_total_has_data = _has_alt_reads_cols("n_n_before_alt", "n_n_after_alt")
     _fs_max = int(_fs_max_raw) if _fs_has_data else 0
 
     st.sidebar.divider()
@@ -433,6 +442,20 @@ if _has_alt_reads:
         help="Filter alt-supporting reads by mapping quality (MAPQ).",
     )
 
+    if _n_total_has_data:
+        n_in_read_range = st.sidebar.slider(
+            "N in read range",
+            min_value=0,
+            max_value=max(0, _n_total_max),
+            value=(0, max(0, _n_total_max)),
+            step=1,
+            key="n_in_read_range",
+            help="Filter alt-supporting reads by total tracked `N` bases in the stored read sequence, "
+                 "defined as `n_n_before_alt + n_n_after_alt`.",
+        )
+    else:
+        n_in_read_range = (0, 0)
+
     if _is_has_data:
         insert_size_range = st.sidebar.slider(
             "Insert size range",
@@ -466,6 +489,7 @@ if _has_alt_reads:
     _fs_lo, _fs_hi = family_size_range
     _cycle_lo, _cycle_hi = cycle_range
     _mq_lo, _mq_hi = map_qual_range
+    _n_total_lo, _n_total_hi = n_in_read_range
     _is_lo, _is_hi = insert_size_range
 
     if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
@@ -476,6 +500,11 @@ if _has_alt_reads:
 
     if _mq_lo > 0 or _mq_hi < _mq_max:
         _reads_conditions.append(f"map_qual BETWEEN {_mq_lo} AND {_mq_hi}")
+
+    if _n_total_has_data and (_n_total_lo > 0 or _n_total_hi < _n_total_max):
+        _reads_conditions.append(
+            f"(COALESCE(n_n_before_alt, 0) + COALESCE(n_n_after_alt, 0)) BETWEEN {_n_total_lo} AND {_n_total_hi}"
+        )
 
     if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
         # Unpaired reads (insert_size IS NULL) are excluded when a range is active
@@ -501,9 +530,17 @@ else:
     family_size_range = (0, 0)
     cycle_range = (1, 1)
     map_qual_range = (0, 0)
+    n_in_read_range = (0, 0)
     insert_size_range = (0, 0)
     read_strand_sel = "All"
-    _fs_lo = _fs_hi = _cycle_lo = _cycle_hi = _mq_lo = _mq_hi = _is_lo = _is_hi = 0
+    _fs_has_data = False
+    _is_has_data = False
+    _n_total_has_data = False
+    _fs_max = 0
+    _cycle_max = 1
+    _mq_max = 0
+    _n_total_max = 0
+    _fs_lo = _fs_hi = _cycle_lo = _cycle_hi = _mq_lo = _mq_hi = _n_total_lo = _n_total_hi = _is_lo = _is_hi = 0
 
 _base_table_expr = table_expr  # pre-reads-filter; used for sample-recurrence counts
 
@@ -1219,6 +1256,8 @@ if _reads_active:
         _active_parts.append(f"cycle number: {_cycle_lo}–{_cycle_hi}")
     if _mq_lo > 0 or _mq_hi < _mq_max:
         _active_parts.append(f"map qual: {_mq_lo}–{_mq_hi}")
+    if _n_total_has_data and (_n_total_lo > 0 or _n_total_hi < _n_total_max):
+        _active_parts.append(f"N in read: {_n_total_lo}–{_n_total_hi}")
     if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
         _active_parts.append(f"insert size: {_is_lo}–{_is_hi}")
     if read_strand_sel != "All":
@@ -1350,6 +1389,13 @@ def _build_active_filter_provenance(
         "mapping_quality",
         f"{_mq_lo}-{_mq_hi}",
         active=_has_alt_reads and (_mq_lo > 0 or _mq_hi < _mq_max),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "n_in_read",
+        f"{_n_total_lo}-{_n_total_hi}",
+        active=_has_alt_reads and _n_total_has_data and (_n_total_lo > 0 or _n_total_hi < _n_total_max),
     )
     _append_provenance_row(
         rows,
@@ -3827,18 +3873,11 @@ with tab_reads:
                 "Re-run `geac collect --reads-output` and `geac merge` to enable these plots."
             )
         else:
-            _nctx_ctrl1, _nctx_ctrl2 = st.columns([4, 1])
-            _nctx_color_mode = _nctx_ctrl1.radio(
+            _nctx_color_mode = st.radio(
                 "Group by",
                 ["All reads", "R1/R2"],
                 horizontal=True,
                 key="nctx_group_by",
-            )
-            _nctx_norm_mode = _nctx_ctrl2.radio(
-                "Y axis",
-                ["Fraction", "Count"],
-                horizontal=True,
-                key="nctx_y_mode",
             )
             _nctx_df = con.execute(f"""
                 SELECT
@@ -3857,81 +3896,7 @@ with tab_reads:
             else:
                 _nctx_df = add_read_context_fraction_metrics(_nctx_df)
                 _nctx_df["read_group"] = np.where(_nctx_df["is_read1"], "R1", "R2")
-                _nctx_group_col = "read_group" if _nctx_color_mode == "R1/R2" else None
-
-                def _nctx_dist_chart(
-                    df: pd.DataFrame,
-                    value_col: str,
-                    title: str,
-                    x_title: str,
-                    *,
-                    domain=None,
-                    integer_bins: bool = False,
-                    fraction_format: bool = False,
-                ):
-                    chart_df = df.dropna(subset=[value_col]).copy()
-                    if chart_df.empty:
-                        return None
-                    y_enc = (
-                        alt.Y("proportion:Q", title="Fraction of alt-supporting reads")
-                        if _nctx_norm_mode == "Fraction"
-                        else alt.Y("count():Q", title="Alt-supporting reads")
-                    )
-                    if _nctx_norm_mode == "Fraction":
-                        if _nctx_group_col:
-                            chart_df["proportion"] = chart_df.groupby(_nctx_group_col)[value_col].transform(
-                                lambda x: 1.0 / len(x)
-                            )
-                        else:
-                            chart_df["proportion"] = 1.0 / len(chart_df)
-                    bin_def = alt.Bin(step=1) if integer_bins else alt.Bin(maxbins=40)
-                    enc = dict(
-                        x=alt.X(
-                            f"{value_col}:Q",
-                            title=x_title,
-                            bin=bin_def,
-                            scale=alt.Scale(domain=domain) if domain is not None else alt.Scale(),
-                        ),
-                        y=y_enc,
-                        tooltip=[
-                            *([f"{_nctx_group_col}:N"] if _nctx_group_col else []),
-                            alt.Tooltip("count():Q", title="Count"),
-                        ],
-                    )
-                    if _nctx_group_col:
-                        enc["color"] = alt.Color(f"{_nctx_group_col}:N", title="Read group")
-                    return (
-                        alt.Chart(chart_df)
-                        .mark_bar(opacity=0.7)
-                        .encode(**enc)
-                        .properties(title=title, height=260)
-                    )
-
-                _nctx_row1 = st.columns(2)
-                with _nctx_row1[0]:
-                    _trailing_chart = _nctx_dist_chart(
-                        _nctx_df,
-                        "trailing_n_run_len",
-                        "Trailing N run length",
-                        "Contiguous N run immediately after alt",
-                        integer_bins=True,
-                    )
-                    if _trailing_chart is not None:
-                        st.altair_chart(_trailing_chart, width="stretch")
-                with _nctx_row1[1]:
-                    _frac_after_df = _nctx_df[_nctx_df["n_after_alt"] > 0].copy()
-                    _frac_after_chart = _nctx_dist_chart(
-                        _frac_after_df,
-                        "frac_n_after_alt",
-                        "Fraction N after alt",
-                        "Fraction of bases after alt that are N",
-                        domain=[0, 1],
-                        fraction_format=True,
-                    )
-                    if _frac_after_chart is not None:
-                        st.altair_chart(_frac_after_chart, width="stretch")
-
-                _nctx_compare_rows = []
+                _nctx_long_rows = []
                 for _side, _col in [
                     ("Before alt", "frac_n_before_alt"),
                     ("After alt", "frac_n_after_alt"),
@@ -3940,47 +3905,115 @@ with tab_reads:
                     if not _sub.empty:
                         _sub["side"] = _side
                         _sub["frac_n"] = _sub[_col]
-                        _nctx_compare_rows.append(_sub[["frac_n", "side"]])
-                _nctx_row2 = st.columns(2)
-                with _nctx_row2[0]:
-                    if _nctx_compare_rows:
-                        _nctx_compare_df = pd.concat(_nctx_compare_rows, ignore_index=True)
-                        _nctx_compare_chart = (
-                            alt.Chart(_nctx_compare_df)
-                            .mark_boxplot(extent="min-max")
-                            .encode(
-                                x=alt.X("side:N", title=None),
-                                y=alt.Y(
-                                    "frac_n:Q",
-                                    title="Fraction N",
-                                    scale=alt.Scale(domain=[0, 1]),
-                                ),
-                                color=alt.Color("side:N", title=None),
-                                tooltip=[
-                                    "side:N",
-                                    alt.Tooltip("median(frac_n):Q", title="Median", format=".3f"),
-                                ],
-                            )
-                            .properties(title="Leading vs trailing N burden", height=260)
-                        )
-                        st.altair_chart(_nctx_compare_chart, width="stretch")
-                with _nctx_row2[1]:
-                    _delta_chart = _nctx_dist_chart(
-                        _nctx_df.dropna(subset=["delta_n_fraction"]),
-                        "delta_n_fraction",
-                        "Before vs after asymmetry",
-                        "delta_n_fraction = frac_N_after - frac_N_before",
-                    )
-                    if _delta_chart is not None:
-                        st.altair_chart(_delta_chart, width="stretch")
+                        _nctx_long_rows.append(_sub[["read_group", "side", "frac_n"]])
 
-                _nctx_trailing_frac = (_nctx_df["trailing_n_run_len"] > 0).mean()
-                _nctx_median_delta = _nctx_df["delta_n_fraction"].median()
-                st.caption(
-                    f"{_nctx_trailing_frac:.1%} of alt-supporting reads have trailing N run length > 0. "
-                    f"Median delta_n_fraction = {_nctx_median_delta:.3f} "
-                    "(`frac_N_after - frac_N_before`). Positive values indicate greater N burden after the alt."
-                )
+                if not _nctx_long_rows:
+                    st.info("No before/after N-burden values are available under current filters.")
+                else:
+                    _nctx_long = pd.concat(_nctx_long_rows, ignore_index=True)
+                    _nctx_summary = (
+                        _nctx_long.groupby("side")["frac_n"]
+                        .agg(["median", "mean"])
+                        .to_dict("index")
+                    )
+                    _nctx_any_before = (_nctx_df["n_n_before_alt"] > 0).mean()
+                    _nctx_any_after = (_nctx_df["n_n_after_alt"] > 0).mean()
+                    _nctx_mean_before = _nctx_summary.get("Before alt", {}).get("mean", float("nan"))
+                    _nctx_mean_after = _nctx_summary.get("After alt", {}).get("mean", float("nan"))
+                    _nctx_mean_delta = _nctx_mean_after - _nctx_mean_before
+
+                    _nctx_metrics = st.columns(4)
+                    _nctx_metrics[0].metric(
+                        "Mean frac N before",
+                        f"{_nctx_mean_before:.3f}",
+                    )
+                    _nctx_metrics[1].metric(
+                        "Mean frac N after",
+                        f"{_nctx_mean_after:.3f}",
+                        delta=f"{_nctx_mean_delta:+.3f} vs before",
+                    )
+                    _nctx_metrics[2].metric(
+                        "Reads with any N before",
+                        f"{_nctx_any_before:.1%}",
+                    )
+                    _nctx_metrics[3].metric(
+                        "Reads with any N after",
+                        f"{_nctx_any_after:.1%}",
+                    )
+
+                    _nctx_any_df = pd.DataFrame(
+                        [
+                            {"side": "Before alt", "fraction": _nctx_any_before},
+                            {"side": "After alt", "fraction": _nctx_any_after},
+                        ]
+                    )
+
+                    st.altair_chart(
+                        alt.Chart(_nctx_any_df)
+                        .mark_bar(opacity=0.85)
+                        .encode(
+                            x=alt.X("side:N", title=None),
+                            y=alt.Y(
+                                "fraction:Q",
+                                title="Fraction of alt-supporting reads with any N",
+                                scale=alt.Scale(domain=[0, 1]),
+                            ),
+                            color=alt.Color("side:N", title=None),
+                            tooltip=[
+                                "side:N",
+                                alt.Tooltip("fraction:Q", title="Fraction", format=".3%"),
+                            ],
+                        )
+                        .properties(title="Fraction of alt-supporting reads with any N", height=220),
+                        width="stretch",
+                    )
+
+                    _density_groupby = ["side"] + (
+                        ["read_group"] if _nctx_color_mode == "R1/R2" else []
+                    )
+                    _nctx_chart = (
+                        alt.Chart(_nctx_long)
+                        .transform_density(
+                            "frac_n",
+                            as_=["frac_n", "density"],
+                            groupby=_density_groupby,
+                            extent=[0, 0.05],
+                            steps=100,
+                        )
+                        .mark_line(strokeWidth=3)
+                        .encode(
+                            x=alt.X(
+                                "frac_n:Q",
+                                title="Fraction of available bases that are N",
+                                scale=alt.Scale(domain=[0, 0.05]),
+                            ),
+                            y=alt.Y("density:Q", title="Density"),
+                            color=alt.Color("side:N", title=None),
+                            tooltip=[
+                                "side:N",
+                                alt.Tooltip("frac_n:Q", title="Fraction N", format=".3f"),
+                                alt.Tooltip("density:Q", title="Density", format=".3f"),
+                                *(
+                                    [alt.Tooltip("read_group:N", title="Read group")]
+                                    if _nctx_color_mode == "R1/R2"
+                                    else []
+                                ),
+                            ],
+                        )
+                        .properties(title="Leading vs trailing N burden", height=320)
+                    )
+                    if _nctx_color_mode == "R1/R2":
+                        _nctx_chart = _nctx_chart.facet(
+                            column=alt.Column("read_group:N", title=None)
+                        )
+                    st.altair_chart(_nctx_chart, width="stretch")
+
+                    st.caption(
+                        "Each read is normalized by the number of available bases on that side of the alt. "
+                        "For example, 1 `N` out of 1 base after the alt contributes 1.00, while 5 `N`s out of 100 "
+                        "bases after the alt contributes 0.05. The curves show the density of those per-read fractions "
+                        "before versus after the alt."
+                    )
 
         # ── Row 4: Insert size distribution ───────────────────────────────────
         if con.execute("SELECT COUNT(*) FROM alt_reads WHERE insert_size IS NOT NULL LIMIT 1").fetchone()[0] > 0:

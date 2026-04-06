@@ -141,6 +141,11 @@ only the records visible in the main table.
   before/after N burden distributions. Compare by pipeline/read_type where possible and assess
   whether these loci are enriched for
   low-confidence or pipeline-unique calls.
+- [ ] **Identify N-rich supporting loci** — add a locus-level view/filter for sites where the
+  alt-supporting reads are systematically enriched for `N` bases. Candidate summaries include mean
+  per-read N burden, fraction of alt-supporting reads with any `N`, fraction with trailing-N runs,
+  and fraction with elevated post-alt N burden. Use this to surface loci where the apparent signal
+  may be dominated by N-rich / low-confidence read context rather than clean support.
 - [ ] **Family size vs VAF click-through** — add click/shift-click selection with drill-down
   table and IGV buttons, same as strand bias plot. Currently blocked: `selection_point` with
   `on_select="rerun"` returns `{"fsvaf_select": {}}` regardless of what is clicked; strand bias
