@@ -1551,7 +1551,7 @@ with tab1:
                 .encode(
                     alt.X("vaf_bin:Q",     title="VAF", scale=alt.Scale(domain=[0, 1])),
                     alt.X2("vaf_bin_end:Q"),
-                    alt.Y("count:Q", title="Count", scale=alt.Scale(type="log", domainMin=1)),
+                    alt.Y("count:Q",       title="Count"),
                     opacity=alt.condition(sel_param, alt.value(1.0), alt.value(0.4)),
                     tooltip=[
                         alt.Tooltip("vaf_bin:Q",     title="Bin start", format=".3f"),
