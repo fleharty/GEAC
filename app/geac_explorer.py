@@ -6406,6 +6406,12 @@ with tab_ai:
         "The generated code has access to the current filtered dataset, so all sidebar "
         "filters apply automatically."
     )
+    st.error(
+        "⚠️ **Data privacy warning:** Generating a plot sends a description of your data "
+        "schema and query results to the Anthropic API. "
+        "**Do not use this feature with clinical, patient-identifiable, or proprietary data.**",
+        icon="🔴",
+    )
 
     if not _HAS_ANTHROPIC:
         st.error(
