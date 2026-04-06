@@ -4123,7 +4123,7 @@ with tab_reads:
                             ],
                         )
                         .add_params(_nasym_sel)
-                        .properties(width=420, height=380, title="N-asymmetry scatter (upper-left = high downstream N)")
+                        .properties(height=380, title="N-asymmetry scatter (upper-left = high downstream N)")
                         .interactive()
                     )
 
@@ -4143,14 +4143,18 @@ with tab_reads:
                                 alt.Tooltip("count():Q", title="Loci"),
                             ],
                         )
-                        .properties(width=380, height=380, title="Distribution of N-asymmetry score")
+                        .properties(height=380, title="Distribution of N-asymmetry score")
                     )
 
-                    _nasym_event = st.altair_chart(
-                        _nasym_diag + _nasym_scatter | _nasym_hist,
-                        on_select="rerun",
-                        key="nasym_scatter",
-                    )
+                    _nasym_col_scatter, _nasym_col_hist = st.columns(2)
+                    with _nasym_col_scatter:
+                        _nasym_event = st.altair_chart(
+                            _nasym_diag + _nasym_scatter,
+                            on_select="rerun",
+                            key="nasym_scatter",
+                        )
+                    with _nasym_col_hist:
+                        st.altair_chart(_nasym_hist, use_container_width=True)
 
                     # ── Ranked table + IGV ─────────────────────────────────
                     st.subheader("Most N-asymmetric loci")
