@@ -71,6 +71,11 @@ fn alt_base_schema() -> Arc<Schema> {
         Field::new("str_len", DataType::Int32, false),
         Field::new("trinuc_context", DataType::Utf8, true),
         Field::new("gnomad_af", DataType::Float32, true),
+        Field::new("n_alt_reads_with_n_ctx", DataType::Int32, true),
+        Field::new("mean_frac_n_before", DataType::Float32, true),
+        Field::new("mean_frac_n_after", DataType::Float32, true),
+        Field::new("mean_delta_n_frac", DataType::Float32, true),
+        Field::new("frac_reads_asymmetric", DataType::Float32, true),
     ]))
 }
 
@@ -202,6 +207,36 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
     let gnomad_af: ArrayRef = Arc::new(Float32Array::from(
         records.iter().map(|r| r.gnomad_af).collect::<Vec<_>>(),
     ));
+    let n_alt_reads_with_n_ctx: ArrayRef = Arc::new(Int32Array::from(
+        records
+            .iter()
+            .map(|r| r.n_alt_reads_with_n_ctx)
+            .collect::<Vec<_>>(),
+    ));
+    let mean_frac_n_before: ArrayRef = Arc::new(Float32Array::from(
+        records
+            .iter()
+            .map(|r| r.mean_frac_n_before)
+            .collect::<Vec<_>>(),
+    ));
+    let mean_frac_n_after: ArrayRef = Arc::new(Float32Array::from(
+        records
+            .iter()
+            .map(|r| r.mean_frac_n_after)
+            .collect::<Vec<_>>(),
+    ));
+    let mean_delta_n_frac: ArrayRef = Arc::new(Float32Array::from(
+        records
+            .iter()
+            .map(|r| r.mean_delta_n_frac)
+            .collect::<Vec<_>>(),
+    ));
+    let frac_reads_asymmetric: ArrayRef = Arc::new(Float32Array::from(
+        records
+            .iter()
+            .map(|r| r.frac_reads_asymmetric)
+            .collect::<Vec<_>>(),
+    ));
 
     RecordBatch::try_new(
         schema,
@@ -241,6 +276,11 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
             str_len,
             trinuc_context,
             gnomad_af,
+            n_alt_reads_with_n_ctx,
+            mean_frac_n_before,
+            mean_frac_n_after,
+            mean_delta_n_frac,
+            frac_reads_asymmetric,
         ],
     )
     .context("failed to create Arrow record batch")

@@ -22,7 +22,7 @@ use crate::vcf::VariantAnnotator;
 
 use builders::LocusContext;
 use indel::tally_indels;
-use pileup::{tally_pileup, PileupResult};
+use pileup::{locus_n_context_summary, tally_pileup, PileupResult};
 
 pub(crate) use ref_utils::RefCache;
 pub use ref_utils::{open_bam, read_group_sample_id};
@@ -174,6 +174,14 @@ pub fn collect_alt_bases(
                 None
             };
 
+            let n_ctx_summary = if collect_reads {
+                read_details
+                    .get(base)
+                    .map(|details| locus_n_context_summary(details))
+            } else {
+                None
+            };
+
             locus.push_snv_record(
                 &mut records,
                 *base,
@@ -181,6 +189,7 @@ pub fn collect_alt_bases(
                 variant_called,
                 variant_filter,
                 gnomad_af,
+                n_ctx_summary,
             );
 
             if collect_reads {
@@ -218,12 +227,21 @@ pub fn collect_alt_bases(
                 None
             };
 
+            let n_ctx_summary = if collect_reads {
+                indel_read_details
+                    .get(&indel.alt_allele)
+                    .map(|details| locus_n_context_summary(details))
+            } else {
+                None
+            };
+
             locus.push_indel_record(
                 &mut records,
                 indel,
                 variant_called,
                 variant_filter,
                 gnomad_af,
+                n_ctx_summary,
             );
         }
 

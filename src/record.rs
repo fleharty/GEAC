@@ -134,6 +134,19 @@ pub struct AltBase {
     /// Allele frequency from gnomAD INFO/AF field. Null when --gnomad is not supplied
     /// or when this exact allele is not present in the gnomAD VCF.
     pub gnomad_af: Option<f32>,
+
+    // Per-locus N-context summary, aggregated from alt-supporting reads.
+    // Only populated when collect was run with reads-output enabled; None otherwise.
+    /// Number of alt-supporting reads contributing to the N-context summary.
+    pub n_alt_reads_with_n_ctx: Option<i32>,
+    /// Mean fraction of N bases in the window before the alt position, across alt reads.
+    pub mean_frac_n_before: Option<f32>,
+    /// Mean fraction of N bases in the window after the alt position, across alt reads.
+    pub mean_frac_n_after: Option<f32>,
+    /// mean_frac_n_after - mean_frac_n_before. Positive = trailing N bias.
+    pub mean_delta_n_frac: Option<f32>,
+    /// Fraction of alt reads where N context is asymmetric (high after, low/none before).
+    pub frac_reads_asymmetric: Option<f32>,
 }
 
 /// Cross-annotation of tumor alt-base loci against a paired normal sample.

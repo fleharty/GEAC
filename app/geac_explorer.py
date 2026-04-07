@@ -30,7 +30,11 @@ from pipeline_compare_helpers import (
     build_unique_pipeline_characterization_df,
     summarize_unique_pipeline_groups,
 )
-from read_context_helpers import add_read_context_fraction_metrics, compute_locus_n_asymmetry
+from read_context_helpers import (
+    add_read_context_fraction_metrics,
+    compute_locus_n_asymmetry,
+    compute_locus_n_asymmetry_precomputed,
+)
 
 # Altair emits a spurious "Automatically deduplicated selection parameter" UserWarning
 # when a shared cross-panel selection param is present in multiple sub-charts.  The
@@ -171,7 +175,9 @@ if _db_created is not None:
     _created_str = str(_db_created)[:10]  # YYYY-MM-DD
     st.sidebar.caption(f"DB created {_created_str}")
 
-_missing_required_cols = data_source.required_columns_missing()
+if "_cached_missing_required_cols" not in st.session_state:
+    st.session_state["_cached_missing_required_cols"] = data_source.required_columns_missing()
+_missing_required_cols = st.session_state["_cached_missing_required_cols"]
 if _missing_required_cols:
     st.warning(
         "This dataset is missing required `alt_bases` columns expected by the current Explorer: "
@@ -180,7 +186,9 @@ if _missing_required_cols:
     )
 
 # ── Summary stats ─────────────────────────────────────────────────────────────
-stats = data_source.summary_stats()
+if "_cached_summary_stats" not in st.session_state:
+    st.session_state["_cached_summary_stats"] = data_source.summary_stats()
+stats = st.session_state["_cached_summary_stats"]
 
 n_annotated = int(stats["n_annotated"][0])
 n_called    = int(stats["n_called"][0])
@@ -193,8 +201,13 @@ _sidebar_logo = _LOGO_COMPACT if _LOGO_COMPACT.exists() else _LOGO
 if _sidebar_logo.exists():
     st.sidebar.image(str(_sidebar_logo), width="stretch")
 
-chroms = data_source.distinct_values("chrom")
-samples = data_source.distinct_values("sample_id")
+if "_cached_chroms" not in st.session_state:
+    st.session_state["_cached_chroms"] = data_source.distinct_values("chrom")
+chroms = st.session_state["_cached_chroms"]
+
+if "_cached_samples" not in st.session_state:
+    st.session_state["_cached_samples"] = data_source.distinct_values("sample_id")
+samples = st.session_state["_cached_samples"]
 
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
 _hdr_col.header("🔧 Filters")
@@ -255,32 +268,41 @@ else:
 _schema_cols = set(data_source.schema_cols)
 
 # Probe all optional columns in a single query rather than N+1 individual queries.
-_optional_cols = data_source.has_non_null_batch([
-    "batch", "label1", "label2", "label3", "gene",
-    "variant_filter", "gnomad_af", "homopolymer_len",
-    "trinuc_context", "on_target", "variant_called",
-    "overlap_alt_agree",
-])
+# Cache result — column presence doesn't change during a session.
+if "_cached_optional_cols" not in st.session_state:
+    st.session_state["_cached_optional_cols"] = data_source.has_non_null_batch([
+        "batch", "label1", "label2", "label3", "gene",
+        "variant_filter", "gnomad_af", "homopolymer_len",
+        "trinuc_context", "on_target", "variant_called",
+        "overlap_alt_agree",
+    ])
+_optional_cols = st.session_state["_cached_optional_cols"]
 
 def _has_data(col: str) -> bool:
     """True iff col exists in the schema AND has at least one non-null value."""
     return _optional_cols.get(col, data_source.has_non_null(col))
 
 if _has_data("batch"):
-    _batches = con.execute(f"SELECT DISTINCT batch FROM {table_expr} WHERE batch IS NOT NULL ORDER BY batch").df()["batch"].tolist()
+    if "_cached_batches" not in st.session_state:
+        st.session_state["_cached_batches"] = con.execute(f"SELECT DISTINCT batch FROM {table_expr} WHERE batch IS NOT NULL ORDER BY batch").df()["batch"].tolist()
+    _batches = st.session_state["_cached_batches"]
     if "batch_sel" not in st.session_state:
         st.session_state["batch_sel"] = []
     batch_sel = st.sidebar.multiselect("Batch (blank = all)", _batches, key="batch_sel")
 else:
     batch_sel = []
 
-_pipelines = con.execute(f"SELECT DISTINCT pipeline FROM {table_expr} WHERE pipeline IS NOT NULL ORDER BY pipeline").df()["pipeline"].tolist()
+if "_cached_pipelines" not in st.session_state:
+    st.session_state["_cached_pipelines"] = con.execute(f"SELECT DISTINCT pipeline FROM {table_expr} WHERE pipeline IS NOT NULL ORDER BY pipeline").df()["pipeline"].tolist()
+_pipelines = st.session_state["_cached_pipelines"]
 if "pipeline_sel" not in st.session_state:
     st.session_state["pipeline_sel"] = []
 pipeline_sel = st.sidebar.multiselect("Pipeline (blank = all)", _pipelines, key="pipeline_sel")
 
 if _has_data("label1"):
-    _label1_vals = con.execute(f"SELECT DISTINCT label1 FROM {table_expr} WHERE label1 IS NOT NULL ORDER BY label1").df()["label1"].tolist()
+    if "_cached_label1_vals" not in st.session_state:
+        st.session_state["_cached_label1_vals"] = con.execute(f"SELECT DISTINCT label1 FROM {table_expr} WHERE label1 IS NOT NULL ORDER BY label1").df()["label1"].tolist()
+    _label1_vals = st.session_state["_cached_label1_vals"]
     if "label1_sel" not in st.session_state:
         st.session_state["label1_sel"] = []
     label1_sel = st.sidebar.multiselect("Label 1 (blank = all)", _label1_vals, key="label1_sel")
@@ -288,7 +310,9 @@ else:
     label1_sel = []
 
 if _has_data("label2"):
-    _label2_vals = con.execute(f"SELECT DISTINCT label2 FROM {table_expr} WHERE label2 IS NOT NULL ORDER BY label2").df()["label2"].tolist()
+    if "_cached_label2_vals" not in st.session_state:
+        st.session_state["_cached_label2_vals"] = con.execute(f"SELECT DISTINCT label2 FROM {table_expr} WHERE label2 IS NOT NULL ORDER BY label2").df()["label2"].tolist()
+    _label2_vals = st.session_state["_cached_label2_vals"]
     if "label2_sel" not in st.session_state:
         st.session_state["label2_sel"] = []
     label2_sel = st.sidebar.multiselect("Label 2 (blank = all)", _label2_vals, key="label2_sel")
@@ -296,7 +320,9 @@ else:
     label2_sel = []
 
 if _has_data("label3"):
-    _label3_vals = con.execute(f"SELECT DISTINCT label3 FROM {table_expr} WHERE label3 IS NOT NULL ORDER BY label3").df()["label3"].tolist()
+    if "_cached_label3_vals" not in st.session_state:
+        st.session_state["_cached_label3_vals"] = con.execute(f"SELECT DISTINCT label3 FROM {table_expr} WHERE label3 IS NOT NULL ORDER BY label3").df()["label3"].tolist()
+    _label3_vals = st.session_state["_cached_label3_vals"]
     if "label3_sel" not in st.session_state:
         st.session_state["label3_sel"] = []
     label3_sel = st.sidebar.multiselect("Label 3 (blank = all)", _label3_vals, key="label3_sel")
@@ -326,9 +352,11 @@ min_overlap_disagree = st.sidebar.number_input("Min overlap alt disagree (0 = no
 variant_called_sel = st.sidebar.selectbox("Variant called", ["All", "Yes", "No", "Unknown (no VCF/TSV)"], key="variant_called_sel")
 _vf_has_data = _has_data("variant_filter")
 if _vf_has_data:
-    _vf_options = con.execute(
-        f"SELECT DISTINCT variant_filter FROM {table_expr} WHERE variant_filter IS NOT NULL ORDER BY variant_filter"
-    ).df()["variant_filter"].tolist()
+    if "_cached_vf_options" not in st.session_state:
+        st.session_state["_cached_vf_options"] = con.execute(
+            f"SELECT DISTINCT variant_filter FROM {table_expr} WHERE variant_filter IS NOT NULL ORDER BY variant_filter"
+        ).df()["variant_filter"].tolist()
+    _vf_options = st.session_state["_cached_vf_options"]
     if "variant_filter_sel" not in st.session_state:
         st.session_state["variant_filter_sel"] = []
     variant_filter_sel = st.sidebar.multiselect(
@@ -3904,17 +3932,23 @@ with tab_reads:
                 horizontal=True,
                 key="nctx_group_by",
             )
-            _nctx_df = con.execute(f"""
-                SELECT
-                    ar.is_read1,
-                    ar.n_before_alt,
-                    ar.n_after_alt,
-                    ar.n_n_before_alt,
-                    ar.n_n_after_alt,
-                    ar.leading_n_run_len,
-                    ar.trailing_n_run_len
-                FROM {_r_join}
-            """).df()
+            # Cache on the filter strings — this query scans alt_reads and runs
+            # on every rerun because Streamlit evaluates tab bodies eagerly.
+            _nctx_cache_key = ("nctx_df", where, _r_reads_filter)
+            if st.session_state.get("_nctx_cache_key") != _nctx_cache_key:
+                st.session_state["_nctx_cache_key"] = _nctx_cache_key
+                st.session_state["_nctx_df_cache"] = con.execute(f"""
+                    SELECT
+                        ar.is_read1,
+                        ar.n_before_alt,
+                        ar.n_after_alt,
+                        ar.n_n_before_alt,
+                        ar.n_n_after_alt,
+                        ar.leading_n_run_len,
+                        ar.trailing_n_run_len
+                    FROM {_r_join}
+                """).df()
+            _nctx_df = st.session_state["_nctx_df_cache"]
 
             if _nctx_df.empty:
                 st.info("No read-context data available under current filters.")
@@ -4057,24 +4091,50 @@ with tab_reads:
                 "error enrichment at late cycles. Use the sidebar **Min N-asymmetry score** slider "
                 "to highlight the most extreme sites."
             )
+            # Fast path: read precomputed per-locus N-asymmetry columns directly
+            # from alt_bases (added in v0.4.7) when no read-level filters are
+            # active. This avoids the multi-million-row alt_reads GROUP BY
+            # entirely. Falls back to the slow path when read filters change
+            # the per-read denominator.
+            _use_fast_nasym = (
+                not _reads_active
+                and "mean_delta_n_frac" in _schema_cols
+                and "n_alt_reads_with_n_ctx" in _schema_cols
+            )
             # Cache keyed on the actual filter strings — stable across rerenders,
             # unlike hash() which uses a randomised seed per process.
-            _nasym_cache_key = ("nasym_df", where, _r_reads_filter)
+            _nasym_cache_key = ("nasym_df", where, _r_reads_filter, _use_fast_nasym)
             if st.session_state.get("_nasym_cache_key") != _nasym_cache_key:
                 st.session_state["_nasym_cache_key"] = _nasym_cache_key
-                st.session_state["_nasym_df_cache"] = compute_locus_n_asymmetry(con, _r_join)
+                if _use_fast_nasym:
+                    st.session_state["_nasym_df_cache"] = (
+                        compute_locus_n_asymmetry_precomputed(con, table_expr, where)
+                    )
+                else:
+                    st.session_state["_nasym_df_cache"] = compute_locus_n_asymmetry(
+                        con, _r_join
+                    )
                 st.session_state["_nasym_locus_cache_key"] = None  # invalidate dependent cache
             _nasym_df = st.session_state["_nasym_df_cache"]
 
             if _nasym_df.empty:
                 st.info("No loci available under current filters.")
             else:
+                # When the fast path is in use, alt_bases gives one row per
+                # (sample, locus, alt, pipeline), so we merge per-pipeline.
+                # The slow path collapses across pipelines via the alt_reads
+                # GROUP BY, so we merge on the locus key only.
+                _nasym_merge_keys = ["sample_id", "chrom", "pos", "alt_allele"]
+                if _use_fast_nasym:
+                    _nasym_merge_keys.append("pipeline")
+                _nasym_locus_select_extra = ", pipeline" if _use_fast_nasym else ""
+
                 # Merge in VAF and variant_type — cached separately on the locus WHERE clause.
-                _nasym_locus_cache_key = ("nasym_locus", where)
+                _nasym_locus_cache_key = ("nasym_locus", where, _use_fast_nasym)
                 if st.session_state.get("_nasym_locus_cache_key") != _nasym_locus_cache_key:
                     st.session_state["_nasym_locus_cache_key"] = _nasym_locus_cache_key
                     st.session_state["_nasym_locus_cache"] = con.execute(f"""
-                        SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                        SELECT sample_id, chrom, pos, alt_allele, variant_type{_nasym_locus_select_extra},
                                ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
                                alt_count, total_depth
                         FROM {table_expr}
@@ -4083,7 +4143,7 @@ with tab_reads:
                 _nasym_locus = st.session_state["_nasym_locus_cache"]
                 _nasym_df = _nasym_df.merge(
                     _nasym_locus,
-                    on=["sample_id", "chrom", "pos", "alt_allele"],
+                    on=_nasym_merge_keys,
                     how="left",
                 )
                 _nasym_df = _nasym_df.dropna(subset=["mean_delta_n_frac"])
@@ -4188,17 +4248,27 @@ with tab_reads:
                     st.dataframe(_nasym_display, width="stretch", hide_index=True)
 
                     # Build a WHERE fragment covering all loci in the ranked table.
-                    _nasym_table_or = " OR ".join(
-                        f"(sample_id = '{_sql_str(r['sample_id'])}' AND chrom = '{_sql_str(r['chrom'])}' "
-                        f"AND pos = {int(r['pos'])} AND alt_allele = '{_sql_str(r['alt_allele'])}')"
-                        for _, r in _nasym_display.iterrows()
+                    # Cache on the filter + threshold — this query rebuilds a huge
+                    # OR clause and re-scans table_expr on every rerun otherwise.
+                    _nasym_tbl_cache_key = (
+                        "nasym_table_df", where, _r_reads_filter, float(min_delta_n_frac)
                     )
-                    _nasym_table_df = con.execute(f"""
-                        SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
-                        FROM {table_expr}
-                        WHERE ({_nasym_table_or})
-                        ORDER BY chrom, pos
-                    """).df()
+                    if st.session_state.get("_nasym_tbl_cache_key") != _nasym_tbl_cache_key:
+                        _nasym_table_or = " OR ".join(
+                            f"(sample_id = '{_sql_str(r['sample_id'])}' AND chrom = '{_sql_str(r['chrom'])}' "
+                            f"AND pos = {int(r['pos'])} AND alt_allele = '{_sql_str(r['alt_allele'])}')"
+                            for _, r in _nasym_display.iterrows()
+                        )
+                        st.session_state["_nasym_tbl_cache_key"] = _nasym_tbl_cache_key
+                        st.session_state["_nasym_tbl_or_cache"] = _nasym_table_or
+                        st.session_state["_nasym_tbl_df_cache"] = con.execute(f"""
+                            SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+                            FROM {table_expr}
+                            WHERE ({_nasym_table_or})
+                            ORDER BY chrom, pos
+                        """).df()
+                    _nasym_table_or = st.session_state["_nasym_tbl_or_cache"]
+                    _nasym_table_df = st.session_state["_nasym_tbl_df_cache"]
                     igv_buttons(
                         [f"({_nasym_table_or})"],
                         _nasym_table_df,
@@ -5492,49 +5562,56 @@ with tab_pipeline:
             ) if _pc_base_conds else f"pipeline = '{_sql_str(str(_pc_pipe_b))}'"
 
             # ── Build FULL OUTER JOIN dataset once, reused by all views ───────
-            _pc_df = con.execute(f"""
-                WITH a AS (
-                    SELECT sample_id, chrom, pos, alt_allele, variant_type,
-                           ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                           total_depth, alt_count,
-                           trinuc_context, ref_allele
-                    FROM {table_expr}
-                    WHERE {_pc_wa}
-                ),
-                b AS (
-                    SELECT sample_id, chrom, pos, alt_allele, variant_type,
-                           ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                           total_depth, alt_count,
-                           trinuc_context, ref_allele
-                    FROM {table_expr}
-                    WHERE {_pc_wb}
-                )
-                SELECT
-                    COALESCE(a.sample_id,    b.sample_id)    AS sample_id,
-                    COALESCE(a.chrom,        b.chrom)        AS chrom,
-                    COALESCE(a.pos,          b.pos)          AS pos,
-                    COALESCE(a.alt_allele,   b.alt_allele)   AS alt_allele,
-                    COALESCE(a.variant_type, b.variant_type) AS variant_type,
-                    a.vaf         AS vaf_a,
-                    b.vaf         AS vaf_b,
-                    a.total_depth AS depth_a,
-                    b.total_depth AS depth_b,
-                    a.alt_count   AS alt_count_a,
-                    b.alt_count   AS alt_count_b,
-                    COALESCE(a.trinuc_context, b.trinuc_context) AS trinuc_context,
-                    COALESCE(a.ref_allele, b.ref_allele) AS ref_allele,
-                    CASE
-                        WHEN a.chrom IS NOT NULL AND b.chrom IS NOT NULL THEN 'shared'
-                        WHEN a.chrom IS NOT NULL                         THEN 'only_a'
-                        ELSE                                                  'only_b'
-                    END AS concordance
-                FROM a
-                FULL OUTER JOIN b
-                    ON  a.sample_id  = b.sample_id
-                    AND a.chrom      = b.chrom
-                    AND a.pos        = b.pos
-                    AND a.alt_allele = b.alt_allele
-            """).df()
+            # Cache on the two WHERE fragments — this full-outer-join scans
+            # table_expr twice and runs on every rerun (Streamlit evaluates all
+            # tab bodies eagerly, not just the active tab).
+            _pc_cache_key = ("pc_df", _pc_wa, _pc_wb)
+            if st.session_state.get("_pc_cache_key") != _pc_cache_key:
+                st.session_state["_pc_cache_key"] = _pc_cache_key
+                st.session_state["_pc_df_cache"] = con.execute(f"""
+                    WITH a AS (
+                        SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                               ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                               total_depth, alt_count,
+                               trinuc_context, ref_allele
+                        FROM {table_expr}
+                        WHERE {_pc_wa}
+                    ),
+                    b AS (
+                        SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                               ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                               total_depth, alt_count,
+                               trinuc_context, ref_allele
+                        FROM {table_expr}
+                        WHERE {_pc_wb}
+                    )
+                    SELECT
+                        COALESCE(a.sample_id,    b.sample_id)    AS sample_id,
+                        COALESCE(a.chrom,        b.chrom)        AS chrom,
+                        COALESCE(a.pos,          b.pos)          AS pos,
+                        COALESCE(a.alt_allele,   b.alt_allele)   AS alt_allele,
+                        COALESCE(a.variant_type, b.variant_type) AS variant_type,
+                        a.vaf         AS vaf_a,
+                        b.vaf         AS vaf_b,
+                        a.total_depth AS depth_a,
+                        b.total_depth AS depth_b,
+                        a.alt_count   AS alt_count_a,
+                        b.alt_count   AS alt_count_b,
+                        COALESCE(a.trinuc_context, b.trinuc_context) AS trinuc_context,
+                        COALESCE(a.ref_allele, b.ref_allele) AS ref_allele,
+                        CASE
+                            WHEN a.chrom IS NOT NULL AND b.chrom IS NOT NULL THEN 'shared'
+                            WHEN a.chrom IS NOT NULL                         THEN 'only_a'
+                            ELSE                                                  'only_b'
+                        END AS concordance
+                    FROM a
+                    FULL OUTER JOIN b
+                        ON  a.sample_id  = b.sample_id
+                        AND a.chrom      = b.chrom
+                        AND a.pos        = b.pos
+                        AND a.alt_allele = b.alt_allele
+                """).df()
+            _pc_df = st.session_state["_pc_df_cache"]
 
             if _pc_df.empty:
                 st.info("No records for either pipeline under the current filters.")
@@ -6074,52 +6151,59 @@ with tab_read_type:
             ) if conditions else f"read_type = '{_sql_str(str(_rt_b))}'"
 
             # ── Build FULL OUTER JOIN dataset once, reused by all views ───────
-            _rt_df = con.execute(f"""
-                WITH a AS (
-                    SELECT sample_id, chrom, pos, alt_allele, variant_type,
-                           ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                           total_depth,
-                           fwd_alt_count, rev_alt_count,
-                           trinuc_context, ref_allele
-                    FROM {table_expr}
-                    WHERE {_rt_wa}
-                ),
-                b AS (
-                    SELECT sample_id, chrom, pos, alt_allele, variant_type,
-                           ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                           total_depth,
-                           fwd_alt_count, rev_alt_count
-                    FROM {table_expr}
-                    WHERE {_rt_wb}
-                )
-                SELECT
-                    COALESCE(a.sample_id,    b.sample_id)    AS sample_id,
-                    COALESCE(a.chrom,        b.chrom)        AS chrom,
-                    COALESCE(a.pos,          b.pos)          AS pos,
-                    COALESCE(a.alt_allele,   b.alt_allele)   AS alt_allele,
-                    COALESCE(a.variant_type, b.variant_type) AS variant_type,
-                    a.vaf            AS vaf_a,
-                    b.vaf            AS vaf_b,
-                    a.total_depth    AS depth_a,
-                    b.total_depth    AS depth_b,
-                    a.fwd_alt_count  AS fwd_alt_a,
-                    a.rev_alt_count  AS rev_alt_a,
-                    b.fwd_alt_count  AS fwd_alt_b,
-                    b.rev_alt_count  AS rev_alt_b,
-                    a.trinuc_context,
-                    a.ref_allele,
-                    CASE
-                        WHEN a.chrom IS NOT NULL AND b.chrom IS NOT NULL THEN 'shared'
-                        WHEN a.chrom IS NOT NULL                         THEN 'only_a'
-                        ELSE                                                  'only_b'
-                    END AS concordance
-                FROM a
-                FULL OUTER JOIN b
-                    ON  a.sample_id  = b.sample_id
-                    AND a.chrom      = b.chrom
-                    AND a.pos        = b.pos
-                    AND a.alt_allele = b.alt_allele
-            """).df()
+            # Cache on the two WHERE fragments — Streamlit evaluates all tab
+            # bodies on every rerun, so without caching this runs on every
+            # widget interaction anywhere in the app.
+            _rt_cache_key = ("rt_df", _rt_wa, _rt_wb)
+            if st.session_state.get("_rt_cache_key") != _rt_cache_key:
+                st.session_state["_rt_cache_key"] = _rt_cache_key
+                st.session_state["_rt_df_cache"] = con.execute(f"""
+                    WITH a AS (
+                        SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                               ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                               total_depth,
+                               fwd_alt_count, rev_alt_count,
+                               trinuc_context, ref_allele
+                        FROM {table_expr}
+                        WHERE {_rt_wa}
+                    ),
+                    b AS (
+                        SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                               ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                               total_depth,
+                               fwd_alt_count, rev_alt_count
+                        FROM {table_expr}
+                        WHERE {_rt_wb}
+                    )
+                    SELECT
+                        COALESCE(a.sample_id,    b.sample_id)    AS sample_id,
+                        COALESCE(a.chrom,        b.chrom)        AS chrom,
+                        COALESCE(a.pos,          b.pos)          AS pos,
+                        COALESCE(a.alt_allele,   b.alt_allele)   AS alt_allele,
+                        COALESCE(a.variant_type, b.variant_type) AS variant_type,
+                        a.vaf            AS vaf_a,
+                        b.vaf            AS vaf_b,
+                        a.total_depth    AS depth_a,
+                        b.total_depth    AS depth_b,
+                        a.fwd_alt_count  AS fwd_alt_a,
+                        a.rev_alt_count  AS rev_alt_a,
+                        b.fwd_alt_count  AS fwd_alt_b,
+                        b.rev_alt_count  AS rev_alt_b,
+                        a.trinuc_context,
+                        a.ref_allele,
+                        CASE
+                            WHEN a.chrom IS NOT NULL AND b.chrom IS NOT NULL THEN 'shared'
+                            WHEN a.chrom IS NOT NULL                         THEN 'only_a'
+                            ELSE                                                  'only_b'
+                        END AS concordance
+                    FROM a
+                    FULL OUTER JOIN b
+                        ON  a.sample_id  = b.sample_id
+                        AND a.chrom      = b.chrom
+                        AND a.pos        = b.pos
+                        AND a.alt_allele = b.alt_allele
+                """).df()
+            _rt_df = st.session_state["_rt_df_cache"]
 
             if _rt_df.empty:
                 st.info("No records for either read type under the current filters.")
@@ -6407,7 +6491,7 @@ with tab_ai:
         "filters apply automatically."
     )
     st.error(
-        "⚠️ **Data privacy warning:** Generating a plot sends a description of your data "
+        "⚠️ **Data privacy warning:** Generating a plot using the AI Plot Builder sends a description of your data "
         "schema and query results to the Anthropic API. "
         "**Do not use this feature with clinical, patient-identifiable, or proprietary data.**",
         icon="🔴",
@@ -6434,44 +6518,22 @@ with tab_ai:
 
         if not _ai_api_key:
             st.info("Enter your Anthropic API key above to enable the AI Plot Builder.")
-            st.caption("Example output — VAF vs. sequencing cycle, colored by variant type:")
-            if _has_alt_reads:
-                _demo_df = con.execute(f"""
-                    SELECT
-                        ar.cycle,
-                        ROUND(l.alt_count * 1.0 / l.total_depth, 4) AS vaf,
-                        l.variant_type
-                    FROM {_r_join}
-                    INNER JOIN (
-                        SELECT sample_id, chrom, pos, alt_allele, alt_count, total_depth, variant_type
-                        FROM {table_expr} WHERE {where}
-                    ) l
-                    ON ar.sample_id = l.sample_id
-                    AND ar.chrom    = l.chrom
-                    AND ar.pos      = l.pos
-                    AND ar.alt_allele = l.alt_allele
-                    WHERE l.total_depth > 0
-                    LIMIT 5000
-                """).df()
-                if _demo_df.empty:
-                    st.info("No alt-read data available under current filters.")
-                else:
-                    st.altair_chart(
-                        alt.Chart(_demo_df)
-                        .mark_circle(size=30, opacity=0.5)
-                        .encode(
-                            x=alt.X("cycle:Q", title="Sequencing cycle"),
-                            y=alt.Y("vaf:Q", title="VAF", scale=alt.Scale(domain=[0, 1])),
-                            color=alt.Color("variant_type:N", title="Variant type"),
-                            tooltip=["cycle:Q", alt.Tooltip("vaf:Q", format=".4f"), "variant_type:N"],
-                        )
-                        .properties(title="VAF vs. sequencing cycle (alt reads)", height=350)
-                        .interactive(),
-                        use_container_width=True,
-                    )
-            else:
-                st.info("No alt-reads table available — run `geac collect --reads-output` to enable this plot.")
         else:
+            # ── Acknowledgement gate ───────────────────────────────────────────
+            _AI_ACK_PHRASE = "I understand the data privacy risks with using the AI Plot Builder."
+            _ai_ack = st.text_input(
+                f'Type exactly: "{_AI_ACK_PHRASE}"',
+                key="ai_ack_input",
+                help="Required acknowledgement before the AI Plot Builder can be used.",
+            )
+            _ai_ack_ok = _ai_ack.strip() == _AI_ACK_PHRASE
+
+        if _ai_api_key and not _ai_ack_ok:
+            st.info(
+                "Type the acknowledgement phrase above (exactly as shown) to enable "
+                "the AI Plot Builder."
+            )
+        elif _ai_api_key and _ai_ack_ok:
             # ── System prompt with schema + variable context ───────────────────
             _ai_locus_cols = ", ".join(_table_cols) if _table_cols else "sample_id, chrom, pos, alt_allele, variant_type, total_depth, alt_count, ref_allele, fwd_alt_count, rev_alt_count, pipeline, batch, label1, trinuc_context, gnomad_af, on_target, gene, homopolymer_len, str_len, variant_called, variant_filter"
             _ai_reads_cols = ", ".join(sorted(_alt_reads_cols)) if _alt_reads_cols else "sample_id, chrom, pos, alt_allele, cycle, read_length, is_read1, base_qual, map_qual, family_size, insert_size, n_before_alt, n_after_alt, n_n_before_alt, n_n_after_alt, leading_n_run_len, trailing_n_run_len"

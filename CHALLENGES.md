@@ -845,3 +845,39 @@ Did you mean "_src0.alt_bases"?
 **Lesson:** In DuckDB, `information_schema.tables` (unqualified) is not scoped to the
 current database when other databases are attached. Always use `duckdb_tables()` with an
 explicit `database_name` filter when checking table existence in a multi-database context.
+
+### Explorer slowdown after adding pipeline comparison and N-in-reads features
+**Symptom:** After the v0.4.5/v0.4.6 additions (pipeline column + pipeline comparison
+tab expansion + read-context N-tracking), the Streamlit explorer became noticeably
+sluggish. Every sidebar widget interaction — even toggling a filter on a tab that
+didn't use any of the new features — took seconds to respond.
+**Initial (wrong) diagnosis:** Uncached sidebar `SELECT DISTINCT` queries
+(`chroms`, `samples`, `batch`, `pipeline`, `label1/2/3`, `variant_filter`). These
+were indeed firing on every rerun and were worth caching in `st.session_state`, but
+fixing them did not resolve the perceived slowness.
+**Root cause:** Streamlit evaluates the body of **every** `st.tabs()` tab on every
+rerun — tabs are pure containers, not lazy. Four heavy queries added by the new
+features were running unconditionally inside tab bodies, so interacting with *any*
+widget (even on an unrelated tab) forced them to re-execute:
+1. `_nctx_df` (Read Context tab): `SELECT ... FROM alt_reads JOIN filtered_loci`
+   for N-context fraction metrics. Full `alt_reads` scan.
+2. `_nasym_table_df` (Read Context tab): IGV-backing query that builds a huge
+   `OR`-chain WHERE clause over the ranked N-asymmetry table and re-scans
+   `table_expr`.
+3. `_pc_df` (Pipeline Comparison tab): `FULL OUTER JOIN` scanning `table_expr`
+   twice (once per pipeline).
+4. `_rt_df` (Read Type Comparison tab): another `FULL OUTER JOIN` scanning
+   `table_expr` twice (once per read type).
+The `alt_reads` table got wider with the new N-tracking columns
+(`n_before_alt`, `n_after_alt`, `n_n_before_alt`, `n_n_after_alt`,
+`leading_n_run_len`, `trailing_n_run_len`), making query (1) more expensive than
+it would have been before that feature landed.
+**Fix:** Wrap each query in a `st.session_state` cache guard keyed on the filter
+strings that determine its output (`where`, `_r_reads_filter`, `_pc_wa`/`_pc_wb`,
+`_rt_wa`/`_rt_wb`). The queries only re-run when those strings change, not on
+every widget interaction.
+**Lesson:** `st.tabs()` is not lazy — every tab body runs on every rerun. Any
+expensive query inside a tab body must be cached on its filter inputs, or it will
+bleed performance into every other tab in the app. When investigating "the
+explorer got slow after feature X," look for uncached queries in tab bodies
+**anywhere** in the app, not just in the tabs that feature X touched.

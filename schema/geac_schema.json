@@ -44,7 +44,12 @@
         "str_period",
         "str_len",
         "trinuc_context",
-        "gnomad_af"
+        "gnomad_af",
+        "n_alt_reads_with_n_ctx",
+        "mean_frac_n_before",
+        "mean_frac_n_after",
+        "mean_delta_n_frac",
+        "frac_reads_asymmetric"
       ]
     },
     "alt_reads": {

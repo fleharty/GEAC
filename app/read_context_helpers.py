@@ -19,6 +19,36 @@ def add_read_context_fraction_metrics(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def compute_locus_n_asymmetry_precomputed(
+    con, table_expr: str, where: str
+) -> pd.DataFrame:
+    """Read per-locus N-asymmetry scores from precomputed columns on alt_bases.
+
+    Available when `geac collect --reads-output` was run with v0.4.7+ and the
+    new optional columns (`n_alt_reads_with_n_ctx`, `mean_frac_n_before`,
+    `mean_frac_n_after`, `mean_delta_n_frac`, `frac_reads_asymmetric`) are
+    present on `alt_bases`.
+
+    Returns one row per (sample_id, chrom, pos, alt_allele, pipeline) so the
+    caller can merge against per-pipeline locus rows in multi-pipeline cohorts.
+    """
+    return con.execute(f"""
+        SELECT sample_id,
+               chrom,
+               pos,
+               alt_allele,
+               pipeline,
+               n_alt_reads_with_n_ctx AS n_alt_reads,
+               mean_frac_n_before,
+               mean_frac_n_after,
+               mean_delta_n_frac,
+               frac_reads_asymmetric
+        FROM {table_expr}
+        WHERE {where}
+          AND n_alt_reads_with_n_ctx IS NOT NULL
+    """).df()
+
+
 def compute_locus_n_asymmetry(con, r_join: str) -> pd.DataFrame:
     """Aggregate per-read N-context metrics to per-locus asymmetry scores.
 

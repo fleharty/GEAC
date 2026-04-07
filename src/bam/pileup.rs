@@ -488,6 +488,94 @@ pub(super) fn hard_clip_counts(record: &bam::Record) -> (usize, usize) {
     (leading, trailing)
 }
 
+/// Per-locus N-context summary computed from the alt-supporting reads at one
+/// `(sample, chrom, pos, alt_allele)`. Mirrors the SQL aggregation in
+/// `app/read_context_helpers.py::compute_locus_n_asymmetry`.
+///
+/// Available only when `--reads-output` is enabled (i.e. `collect_reads = true`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct LocusNContextSummary {
+    pub(crate) n_alt_reads: i32,
+    /// Mean per-read fraction of upstream bases that are N (over reads with
+    /// `n_before_alt > 0`). `None` if no qualifying reads.
+    pub(crate) mean_frac_n_before: Option<f32>,
+    /// Mean per-read fraction of downstream bases that are N (over reads with
+    /// `n_after_alt > 0`). `None` if no qualifying reads.
+    pub(crate) mean_frac_n_after: Option<f32>,
+    /// `mean_frac_n_after - mean_frac_n_before`. `None` if either side is `None`.
+    pub(crate) mean_delta_n_frac: Option<f32>,
+    /// Fraction of reads where downstream is mostly N (frac_n_after > 0.5) AND
+    /// upstream is essentially clean (n_before_alt == 0 or frac_n_before < 0.1).
+    /// Denominator is `n_alt_reads`. `None` only when there are no reads.
+    pub(crate) frac_reads_asymmetric: Option<f32>,
+}
+
+pub(crate) fn locus_n_context_summary(details: &[ReadDetail]) -> LocusNContextSummary {
+    if details.is_empty() {
+        return LocusNContextSummary::default();
+    }
+
+    let mut sum_before = 0f64;
+    let mut n_with_before = 0i32;
+    let mut sum_after = 0f64;
+    let mut n_with_after = 0i32;
+    let mut n_asym = 0i32;
+
+    for d in details {
+        let frac_before = if d.n_before_alt > 0 {
+            let f = d.n_n_before_alt as f64 / d.n_before_alt as f64;
+            sum_before += f;
+            n_with_before += 1;
+            Some(f)
+        } else {
+            None
+        };
+        let frac_after = if d.n_after_alt > 0 {
+            let f = d.n_n_after_alt as f64 / d.n_after_alt as f64;
+            sum_after += f;
+            n_with_after += 1;
+            Some(f)
+        } else {
+            None
+        };
+        // Asymmetry rule (matches Python SQL): downstream mostly N AND
+        // upstream either has no context or is essentially clean.
+        let asym = match frac_after {
+            Some(fa) if fa > 0.5 => match frac_before {
+                None => true,
+                Some(fb) => fb < 0.1,
+            },
+            _ => false,
+        };
+        if asym {
+            n_asym += 1;
+        }
+    }
+
+    let mean_before = if n_with_before > 0 {
+        Some((sum_before / n_with_before as f64) as f32)
+    } else {
+        None
+    };
+    let mean_after = if n_with_after > 0 {
+        Some((sum_after / n_with_after as f64) as f32)
+    } else {
+        None
+    };
+    let mean_delta = match (mean_before, mean_after) {
+        (Some(b), Some(a)) => Some(a - b),
+        _ => None,
+    };
+    let n_reads = details.len() as i32;
+    LocusNContextSummary {
+        n_alt_reads: n_reads,
+        mean_frac_n_before: mean_before,
+        mean_frac_n_after: mean_after,
+        mean_delta_n_frac: mean_delta,
+        frac_reads_asymmetric: Some(n_asym as f32 / n_reads as f32),
+    }
+}
+
 /// Compute the 1-based sequencing cycle for an alt-supporting base.
 ///
 /// The cycle number reflects the position in synthesis order (cycle 1 = first base
@@ -518,7 +606,88 @@ pub(super) fn true_cycle(
 
 #[cfg(test)]
 mod tests {
-    use super::read_context_metrics;
+    use super::{locus_n_context_summary, read_context_metrics, ReadDetail};
+
+    fn detail(n_before: i32, n_n_before: i32, n_after: i32, n_n_after: i32) -> ReadDetail {
+        ReadDetail {
+            qpos: 0,
+            read_len: 0,
+            is_first_in_pair: true,
+            is_reverse: false,
+            hard_clip_before: 0,
+            base_qual: 30,
+            map_qual: 60,
+            ab_count: None,
+            ba_count: None,
+            family_size: None,
+            insert_size: None,
+            n_before_alt: n_before as usize,
+            n_after_alt: n_after as usize,
+            n_n_before_alt: n_n_before as usize,
+            n_n_after_alt: n_n_after as usize,
+            leading_n_run_len: 0,
+            trailing_n_run_len: 0,
+        }
+    }
+
+    #[test]
+    fn locus_n_context_summary_empty() {
+        let s = locus_n_context_summary(&[]);
+        assert_eq!(s.n_alt_reads, 0);
+        assert!(s.mean_frac_n_before.is_none());
+        assert!(s.mean_frac_n_after.is_none());
+        assert!(s.mean_delta_n_frac.is_none());
+        assert!(s.frac_reads_asymmetric.is_none());
+    }
+
+    #[test]
+    fn locus_n_context_summary_matches_python_aggregation() {
+        // Two reads at the same locus, mirroring test_compute_locus_n_asymmetry
+        // in app/tests/test_read_context_helpers.py:
+        //   r1: n_before=10, n_n_before=1, n_after=90, n_n_after=45
+        //   r2: n_before=10, n_n_before=0, n_after= 5, n_n_after= 0
+        let r1 = detail(10, 1, 90, 45);
+        let r2 = detail(10, 0, 5, 0);
+        let s = locus_n_context_summary(&[r1, r2]);
+
+        assert_eq!(s.n_alt_reads, 2);
+        // mean_frac_n_before = avg(0.1, 0.0) = 0.05
+        assert!((s.mean_frac_n_before.unwrap() - 0.05).abs() < 1e-6);
+        // mean_frac_n_after = avg(0.5, 0.0) = 0.25
+        assert!((s.mean_frac_n_after.unwrap() - 0.25).abs() < 1e-6);
+        assert!((s.mean_delta_n_frac.unwrap() - 0.20).abs() < 1e-6);
+        // Neither read passes the asymmetry rule:
+        //   r1: frac_after=0.5 (NOT > 0.5) → not asymmetric
+        //   r2: frac_after=0.0 → not asymmetric
+        assert!((s.frac_reads_asymmetric.unwrap() - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn locus_n_context_summary_zero_safe_when_no_context() {
+        // Read with no upstream or downstream context at all.
+        let r = detail(0, 0, 0, 0);
+        let s = locus_n_context_summary(&[r]);
+        assert_eq!(s.n_alt_reads, 1);
+        assert!(s.mean_frac_n_before.is_none());
+        assert!(s.mean_frac_n_after.is_none());
+        assert!(s.mean_delta_n_frac.is_none());
+        // No asymmetry possible (n_after_alt == 0).
+        assert_eq!(s.frac_reads_asymmetric, Some(0.0));
+    }
+
+    #[test]
+    fn locus_n_context_summary_counts_asymmetric_reads() {
+        // r1 is clearly asymmetric: frac_after = 0.8, frac_before = 0.0
+        // r2 is symmetric:          frac_after = 0.6, frac_before = 0.5
+        // r3 has only downstream:   frac_after = 0.7, no upstream context → asymmetric
+        let r1 = detail(10, 0, 10, 8);
+        let r2 = detail(10, 5, 10, 6);
+        let r3 = detail(0, 0, 10, 7);
+        let s = locus_n_context_summary(&[r1, r2, r3]);
+        assert_eq!(s.n_alt_reads, 3);
+        // 2 of 3 reads asymmetric
+        assert!((s.frac_reads_asymmetric.unwrap() - (2.0 / 3.0)).abs() < 1e-6);
+    }
 
     #[test]
     fn read_context_metrics_handles_trailing_ns() {

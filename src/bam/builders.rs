@@ -3,7 +3,7 @@ use crate::record::{AltBase, AltRead, VariantType};
 use crate::repeat::RepeatMetrics;
 
 use super::indel::IndelCount;
-use super::pileup::{true_cycle, BaseTally, ReadDetail};
+use super::pileup::{true_cycle, BaseTally, LocusNContextSummary, ReadDetail};
 
 pub(super) struct LocusContext {
     sample_id: String,
@@ -95,7 +95,24 @@ impl LocusContext {
         variant_filter: Option<String>,
         gnomad_af: Option<f32>,
         trinuc_context: Option<String>,
+        n_ctx_summary: Option<LocusNContextSummary>,
     ) -> AltBase {
+        let (
+            n_alt_reads_with_n_ctx,
+            mean_frac_n_before,
+            mean_frac_n_after,
+            mean_delta_n_frac,
+            frac_reads_asymmetric,
+        ) = match n_ctx_summary {
+            Some(s) => (
+                Some(s.n_alt_reads),
+                s.mean_frac_n_before,
+                s.mean_frac_n_after,
+                s.mean_delta_n_frac,
+                s.frac_reads_asymmetric,
+            ),
+            None => (None, None, None, None, None),
+        };
         AltBase {
             sample_id: self.sample_id.clone(),
             chrom: self.chrom.clone(),
@@ -132,6 +149,11 @@ impl LocusContext {
             str_len: self.str_len,
             trinuc_context,
             gnomad_af,
+            n_alt_reads_with_n_ctx,
+            mean_frac_n_before,
+            mean_frac_n_after,
+            mean_delta_n_frac,
+            frac_reads_asymmetric,
         }
     }
 
@@ -173,6 +195,7 @@ impl LocusContext {
         variant_called: Option<bool>,
         variant_filter: Option<String>,
         gnomad_af: Option<f32>,
+        n_ctx_summary: Option<LocusNContextSummary>,
     ) {
         records.push(self.build_alt_base(
             base.to_string(),
@@ -186,6 +209,7 @@ impl LocusContext {
             variant_filter,
             gnomad_af,
             self.trinuc_context.clone(),
+            n_ctx_summary,
         ));
     }
 
@@ -196,6 +220,7 @@ impl LocusContext {
         variant_called: Option<bool>,
         variant_filter: Option<String>,
         gnomad_af: Option<f32>,
+        n_ctx_summary: Option<LocusNContextSummary>,
     ) {
         records.push(self.build_alt_base(
             indel.alt_allele.clone(),
@@ -209,6 +234,7 @@ impl LocusContext {
             variant_filter,
             gnomad_af,
             None,
+            n_ctx_summary,
         ));
     }
 }
