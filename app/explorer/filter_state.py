@@ -182,6 +182,8 @@ MAIN_FILTER_STATE = FilterState(
         "recompute_vaf": False,
         "read_strand_sel": "All",
         "min_delta_n_frac": 0.0,
+        "nctx_enabled": False,
+        "nasym_enabled": False,
     },
 )
 

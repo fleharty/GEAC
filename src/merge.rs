@@ -83,6 +83,35 @@ const TABLE_SPECS: &[TableSpec] = &[
         ),
         rebuild_samples_summary: false,
     },
+    TableSpec {
+        table: "locus_depth",
+        suffix: Some(".locus_depth.parquet"),
+        index_sql: Some(
+            "CREATE INDEX IF NOT EXISTS idx_locus_depth_locus \
+             ON locus_depth (sample_id, chrom, pos);",
+        ),
+        rebuild_samples_summary: false,
+    },
+    TableSpec {
+        table: "ref_bases",
+        suffix: Some(".ref_bases.parquet"),
+        index_sql: Some(
+            "CREATE INDEX IF NOT EXISTS idx_ref_bases_locus \
+             ON ref_bases (chrom, pos); \
+             CREATE INDEX IF NOT EXISTS idx_ref_bases_sample \
+             ON ref_bases (sample_id);",
+        ),
+        rebuild_samples_summary: false,
+    },
+    TableSpec {
+        table: "ref_reads",
+        suffix: Some(".ref_reads.parquet"),
+        index_sql: Some(
+            "CREATE INDEX IF NOT EXISTS idx_ref_reads_locus \
+             ON ref_reads (sample_id, chrom, pos);",
+        ),
+        rebuild_samples_summary: false,
+    },
 ];
 
 fn escape_path(path: &Path) -> String {

@@ -2,9 +2,11 @@ import io
 import json
 import os
 import textwrap
+import time
 import traceback
 import warnings
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 
 try:
@@ -96,6 +98,26 @@ def _compute_recurrence_loci(
     _c.close()
     return result
 
+# ── Debug timing ──────────────────────────────────────────────────────────────
+# Enabled via the sidebar checkbox "Show query timings". All @_timed("label")
+# calls accumulate into _TIMINGS for the current rerun; the table is rendered
+# at the very end of the script when the flag is on.
+if "_debug_timings" not in st.session_state:
+    st.session_state["_debug_timings"] = []
+_TIMINGS: list[tuple[str, float]] = st.session_state["_debug_timings"]
+_TIMINGS.clear()  # reset at the start of every rerun
+
+
+@contextmanager
+def _timed(label: str):
+    """Context manager that records wall-clock milliseconds for *label*."""
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        _TIMINGS.append((label, (time.perf_counter() - t0) * 1000))
+
+
 st.set_page_config(page_title="GEAC Explorer", layout="wide")
 
 _LOGO = Path(__file__).parent / "geac-logo.svg"
@@ -140,6 +162,8 @@ table_expr = data_source.table_expr
 _has_alt_reads = data_source.has_optional_table("alt_reads")
 _has_normal_evidence = data_source.has_optional_table("normal_evidence")
 _has_pon_evidence = data_source.has_optional_table("pon_evidence")
+_has_ref_bases = data_source.has_optional_table("ref_bases")
+_has_ref_reads = data_source.has_optional_table("ref_reads")
 if "_alt_reads_cols_cached" not in st.session_state:
     st.session_state["_alt_reads_cols_cached"] = (
         set(con.execute("SELECT * FROM alt_reads LIMIT 0").df().columns)
@@ -174,6 +198,16 @@ if data_source.is_duckdb:
 if _db_created is not None:
     _created_str = str(_db_created)[:10]  # YYYY-MM-DD
     st.sidebar.caption(f"DB created {_created_str}")
+
+_debug_mode = st.sidebar.checkbox(
+    "Show query timings",
+    value=False,
+    key="debug_mode",
+    help="Display a per-query wall-clock timing table directly below this checkbox after each rerun.",
+)
+# Placeholder reserved here so the timing table appears immediately below the
+# checkbox rather than at the very bottom of the sidebar after all filters.
+_timing_placeholder = st.sidebar.empty()
 
 if "_cached_missing_required_cols" not in st.session_state:
     st.session_state["_cached_missing_required_cols"] = data_source.required_columns_missing()
@@ -1260,276 +1294,6 @@ if _repeat_cols_present:
 
 where = " AND ".join(conditions) if conditions else "TRUE"
 
-# ── Summary stats display ──────────────────────────────────────────────────────
-fstats = con.execute(f"""
-    SELECT
-        COUNT(*)                                            AS n_records,
-        COUNT(DISTINCT sample_id)                           AS n_samples,
-        COALESCE(SUM(alt_count), 0)                         AS total_alt_bases,
-        COALESCE(ROUND(AVG(alt_count * 1.0 / total_depth), 4), 0) AS mean_vaf,
-        COALESCE(ROUND(AVG(total_depth), 1), 0)             AS mean_depth,
-        COUNT(*) FILTER (WHERE variant_called IS NOT NULL)  AS n_annotated,
-        COUNT(*) FILTER (WHERE variant_called = true)       AS n_called
-    FROM {table_expr}
-    WHERE {where}
-""").df()
-
-fn_annotated = int(fstats["n_annotated"][0])
-fn_called    = int(fstats["n_called"][0])
-fpct_called  = f"{100 * fn_called / fn_annotated:.1f}%" if fn_annotated > 0 else "N/A"
-
-render_summary_metrics(stats, fstats, pct_called, fpct_called)
-
-def query_records(extra: list[str] = [], limit: int | None = None) -> pd.DataFrame:
-    """Query records with current filters plus any extra conditions."""
-    w = " AND ".join(conditions + extra)
-    limit_clause = f"LIMIT {limit}" if limit is not None else ""
-    return con.execute(f"""
-        SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
-        FROM {table_expr}
-        WHERE {w}
-        ORDER BY chrom, pos, alt_allele, sample_id
-        {limit_clause}
-    """).df()
-
-total_count = con.execute(f"SELECT COUNT(*) FROM {table_expr} WHERE {where}").fetchone()[0]
-
-if total_count == 0:
-    st.warning("No records match the current filters.", icon="🔎")
-    st.stop()
-
-st.info(f"**{total_count:,}** records match the current filters.", icon="✅")
-
-_reads_banner = st.empty()
-if _reads_active:
-    _active_parts = []
-    if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
-        _active_parts.append(f"family size: {_fs_lo}–{_fs_hi}")
-    if _cycle_lo > 1 or _cycle_hi < _cycle_max:
-        _active_parts.append(f"cycle number: {_cycle_lo}–{_cycle_hi}")
-    if _mq_lo > 0 or _mq_hi < _mq_max:
-        _active_parts.append(f"map qual: {_mq_lo}–{_mq_hi}")
-    if _n_total_has_data and (_n_total_lo > 0 or _n_total_hi < _n_total_max):
-        _active_parts.append(f"N in read: {_n_total_lo}–{_n_total_hi}")
-    if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
-        _active_parts.append(f"insert size: {_is_lo}–{_is_hi}")
-    if read_strand_sel != "All":
-        _active_parts.append(read_strand_sel.lower())
-    _reads_banner.warning(
-        f"**Per-read filters active** ({'; '.join(_active_parts)}). "
-        f"{per_read_warning_note(recompute_vaf)}"
-    )
-
-
-def _append_provenance_row(
-    rows: list[dict[str, str]],
-    section: str,
-    name: str,
-    value,
-    *,
-    active: bool = True,
-) -> None:
-    if not active:
-        return
-    if isinstance(value, bool):
-        value_str = "true" if value else "false"
-    elif isinstance(value, (list, tuple)):
-        value_str = ", ".join(str(v) for v in value)
-    else:
-        value_str = str(value)
-    rows.append({"section": section, "name": name, "value": value_str})
-
-
-def _build_active_filter_provenance(
-    *,
-    discovery_mode: str,
-    discovery_items: list[tuple[str, object]] | None = None,
-) -> pd.DataFrame:
-    rows: list[dict[str, str]] = []
-    _append_provenance_row(rows, "data", "data_file", path)
-    _append_provenance_row(rows, "query", "where_sql", where)
-    _append_provenance_row(rows, "filters", "chromosome", chrom_sel, active=chrom_sel != "All")
-    _append_provenance_row(rows, "filters", "samples", sample_sel, active=bool(sample_sel))
-    _append_provenance_row(
-        rows,
-        "filters",
-        "sample_recurrence",
-        f"{_sr_lo}-{_sr_hi}",
-        active=_n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total),
-    )
-    _append_provenance_row(rows, "filters", "batch", batch_sel, active=bool(batch_sel))
-    _append_provenance_row(rows, "filters", "label1", label1_sel, active=bool(label1_sel))
-    _append_provenance_row(rows, "filters", "label2", label2_sel, active=bool(label2_sel))
-    _append_provenance_row(rows, "filters", "label3", label3_sel, active=bool(label3_sel))
-    _append_provenance_row(
-        rows,
-        "filters",
-        "gene",
-        gene_text.strip(),
-        active=bool(gene_text.strip()) and "gene" in _schema_cols,
-    )
-    _append_provenance_row(
-        rows,
-        "filters",
-        "variant_type",
-        variant_sel,
-        active=bool(variant_sel) and set(variant_sel) != {"SNV", "insertion", "deletion"},
-    )
-    _append_provenance_row(rows, "filters", "vaf_range", f"{vaf_range[0]}-{vaf_range[1]}", active=vaf_range != (0.0, 1.0))
-    _append_provenance_row(rows, "filters", "min_alt_count", min_alt, active=min_alt > 1)
-    _append_provenance_row(rows, "filters", "max_alt_count", max_alt, active=max_alt > 0)
-    _append_provenance_row(rows, "filters", "min_fwd_alt_count", min_fwd_alt, active=min_fwd_alt > 0)
-    _append_provenance_row(rows, "filters", "min_rev_alt_count", min_rev_alt, active=min_rev_alt > 0)
-    _append_provenance_row(rows, "filters", "min_overlap_alt_agree", min_overlap_agree, active=min_overlap_agree > 0)
-    _append_provenance_row(rows, "filters", "min_overlap_alt_disagree", min_overlap_disagree, active=min_overlap_disagree > 0)
-    _append_provenance_row(rows, "filters", "min_depth", min_depth, active=min_depth > 0)
-    _append_provenance_row(rows, "filters", "max_depth", max_depth, active=max_depth > 0)
-    _append_provenance_row(rows, "filters", "variant_called", variant_called_sel, active=variant_called_sel != "All")
-    _append_provenance_row(rows, "filters", "variant_filter", variant_filter_sel, active=bool(variant_filter_sel))
-    _append_provenance_row(rows, "filters", "target_bases", on_target_sel, active=on_target_sel != "All")
-    _append_provenance_row(
-        rows,
-        "filters",
-        "gnomad_af_range",
-        f"{gnomad_af_range[0]}-{gnomad_af_range[1]}",
-        active=("gnomad_af" in _schema_cols) and gnomad_af_range != ("0", "1.0"),
-    )
-    _append_provenance_row(
-        rows,
-        "filters",
-        "include_sites_absent_from_gnomad",
-        gnomad_include_null,
-        active=("gnomad_af" in _schema_cols) and (gnomad_af_range != ("0", "1.0") or not gnomad_include_null),
-    )
-    _append_provenance_row(
-        rows,
-        "filters",
-        "homopolymer_length_range",
-        f"{homopolymer_range[0]}-{homopolymer_range[1]}",
-        active=_repeat_cols_present and homopolymer_range != (0, 20),
-    )
-    _append_provenance_row(
-        rows,
-        "filters",
-        "str_length_range",
-        f"{str_len_range[0]}-{str_len_range[1]}",
-        active=_repeat_cols_present and str_len_range != (0, 50),
-    )
-    _append_provenance_row(
-        rows,
-        "per_read_filters",
-        "application_mode",
-        "recompute alt count from filtered reads" if recompute_vaf else "hide loci with no passing reads",
-        active=_reads_active,
-    )
-    _append_provenance_row(
-        rows,
-        "per_read_filters",
-        "family_size",
-        f"{_fs_lo}-{_fs_hi}",
-        active=_has_alt_reads and _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max),
-    )
-    _append_provenance_row(
-        rows,
-        "per_read_filters",
-        "cycle_number",
-        f"{_cycle_lo}-{_cycle_hi}",
-        active=_has_alt_reads and (_cycle_lo > 1 or _cycle_hi < _cycle_max),
-    )
-    _append_provenance_row(
-        rows,
-        "per_read_filters",
-        "mapping_quality",
-        f"{_mq_lo}-{_mq_hi}",
-        active=_has_alt_reads and (_mq_lo > 0 or _mq_hi < _mq_max),
-    )
-    _append_provenance_row(
-        rows,
-        "per_read_filters",
-        "n_in_read",
-        f"{_n_total_lo}-{_n_total_hi}",
-        active=_has_alt_reads and _n_total_has_data and (_n_total_lo > 0 or _n_total_hi < _n_total_max),
-    )
-    _append_provenance_row(
-        rows,
-        "per_read_filters",
-        "insert_size",
-        f"{_is_lo}-{_is_hi}",
-        active=_has_alt_reads and _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX),
-    )
-    _append_provenance_row(
-        rows,
-        "per_read_filters",
-        "read",
-        read_strand_sel,
-        active=_has_alt_reads and read_strand_sel != "All",
-    )
-    _append_provenance_row(rows, "signature_discovery", "discovery_mode", discovery_mode)
-    if discovery_items:
-        for _name, _value in discovery_items:
-            _append_provenance_row(
-                rows,
-                "signature_discovery",
-                _name,
-                _value,
-                active=_value not in (None, "", [], ()),
-            )
-
-    return pd.DataFrame(rows, columns=["section", "name", "value"])
-
-# ── Data table ────────────────────────────────────────────────────────────────
-_tbl_limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
-_tbl_limit_sel = st.selectbox(
-    "Table row limit",
-    _tbl_limit_options,
-    index=1,
-    key="table_limit_sel",
-    help="Limits rows shown in the data table below. Has no effect on plots — they always use the full filtered dataset.",
-)
-_tbl_limit = None if _tbl_limit_sel == "All" else int(_tbl_limit_sel)
-
-df = query_records(limit=_tbl_limit)
-
-_table_cols = [
-    c for c in [
-        "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
-        "variant_type", "vaf", *( ["original_vaf"] if _reads_active else []), "alt_count", "ref_count", "total_depth",
-        "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
-        "overlap_alt_disagree", "variant_called", "variant_filter", "on_target", "gene", "gnomad_af",
-    ]
-    if c in df.columns
-]
-
-_tbl_event = render_records_table(
-    df,
-    total_count,
-    _table_cols,
-    igv_buttons=igv_buttons,
-    key="main",
-)
-
-# ── Position-level drill-down ──────────────────────────────────────────────────
-_selected_rows = (_tbl_event.selection or {}).get("rows", [])
-if _selected_rows:
-    _row = df.iloc[_selected_rows[0]]
-    _new_locus = (str(_row["chrom"]), int(_row["pos"]), str(_row["alt_allele"]))
-    if st.session_state.get("_drill_locus") != _new_locus:
-        st.session_state["_drill_locus"] = _new_locus
-
-if "_drill_locus" in st.session_state:
-    _chrom, _pos, _selected_alt = st.session_state["_drill_locus"]
-    render_position_drilldown(
-        con=con,
-        table_expr=table_expr,
-        schema_cols=_schema_cols,
-        chrom=_chrom,
-        pos=_pos,
-        selected_alt=_selected_alt,
-        has_alt_reads=_has_alt_reads,
-        sql_str=_sql_str,
-        igv_buttons=igv_buttons,
-    )
-
 # ── Shared alt_reads join subquery (used by Duplex/Simplex and Reads tabs) ────
 # Joins alt_reads to the current filtered locus set so all reads plots respect
 # the active sidebar filters.  Defined here so both tabs can share it.
@@ -1547,11 +1311,285 @@ _r_join = f"""
     AND ar.alt_allele = _filt.alt_allele
 """
 
+
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon, tab_pipeline, tab_read_type, tab_ai = st.tabs(
+tab_summary, tab1, tab2, tab3, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon, tab_pipeline, tab_read_type, tab_ai = st.tabs(
     [module.LABEL for module in TAB_MODULES],
     key="main_tabs",
 )
+
+with tab_summary:
+    # ── Summary stats display ──────────────────────────────────────────────────────
+    fstats = con.execute(f"""
+        SELECT
+            COUNT(*)                                            AS n_records,
+            COUNT(DISTINCT sample_id)                           AS n_samples,
+            COALESCE(SUM(alt_count), 0)                         AS total_alt_bases,
+            COALESCE(ROUND(AVG(alt_count * 1.0 / total_depth), 4), 0) AS mean_vaf,
+            COALESCE(ROUND(AVG(total_depth), 1), 0)             AS mean_depth,
+            COUNT(*) FILTER (WHERE variant_called IS NOT NULL)  AS n_annotated,
+            COUNT(*) FILTER (WHERE variant_called = true)       AS n_called
+        FROM {table_expr}
+        WHERE {where}
+    """).df()
+
+    fn_annotated = int(fstats["n_annotated"][0])
+    fn_called    = int(fstats["n_called"][0])
+    fpct_called  = f"{100 * fn_called / fn_annotated:.1f}%" if fn_annotated > 0 else "N/A"
+
+    render_summary_metrics(stats, fstats, pct_called, fpct_called)
+
+    def query_records(extra: list[str] = [], limit: int | None = None) -> pd.DataFrame:
+        """Query records with current filters plus any extra conditions."""
+        w = " AND ".join(conditions + extra)
+        limit_clause = f"LIMIT {limit}" if limit is not None else ""
+        return con.execute(f"""
+            SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+            FROM {table_expr}
+            WHERE {w}
+            ORDER BY chrom, pos, alt_allele, sample_id
+            {limit_clause}
+        """).df()
+
+    with _timed("total_count"):
+        total_count = con.execute(f"SELECT COUNT(*) FROM {table_expr} WHERE {where}").fetchone()[0]
+
+    if total_count == 0:
+        st.warning("No records match the current filters.", icon="🔎")
+        st.stop()
+
+    st.info(f"**{total_count:,}** records match the current filters.", icon="✅")
+
+    _reads_banner = st.empty()
+    if _reads_active:
+        _active_parts = []
+        if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
+            _active_parts.append(f"family size: {_fs_lo}–{_fs_hi}")
+        if _cycle_lo > 1 or _cycle_hi < _cycle_max:
+            _active_parts.append(f"cycle number: {_cycle_lo}–{_cycle_hi}")
+        if _mq_lo > 0 or _mq_hi < _mq_max:
+            _active_parts.append(f"map qual: {_mq_lo}–{_mq_hi}")
+        if _n_total_has_data and (_n_total_lo > 0 or _n_total_hi < _n_total_max):
+            _active_parts.append(f"N in read: {_n_total_lo}–{_n_total_hi}")
+        if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
+            _active_parts.append(f"insert size: {_is_lo}–{_is_hi}")
+        if read_strand_sel != "All":
+            _active_parts.append(read_strand_sel.lower())
+        _reads_banner.warning(
+            f"**Per-read filters active** ({'; '.join(_active_parts)}). "
+            f"{per_read_warning_note(recompute_vaf)}"
+        )
+
+
+    def _append_provenance_row(
+        rows: list[dict[str, str]],
+        section: str,
+        name: str,
+        value,
+        *,
+        active: bool = True,
+    ) -> None:
+        if not active:
+            return
+        if isinstance(value, bool):
+            value_str = "true" if value else "false"
+        elif isinstance(value, (list, tuple)):
+            value_str = ", ".join(str(v) for v in value)
+        else:
+            value_str = str(value)
+        rows.append({"section": section, "name": name, "value": value_str})
+
+
+    def _build_active_filter_provenance(
+        *,
+        discovery_mode: str,
+        discovery_items: list[tuple[str, object]] | None = None,
+    ) -> pd.DataFrame:
+        rows: list[dict[str, str]] = []
+        _append_provenance_row(rows, "data", "data_file", path)
+        _append_provenance_row(rows, "query", "where_sql", where)
+        _append_provenance_row(rows, "filters", "chromosome", chrom_sel, active=chrom_sel != "All")
+        _append_provenance_row(rows, "filters", "samples", sample_sel, active=bool(sample_sel))
+        _append_provenance_row(
+            rows,
+            "filters",
+            "sample_recurrence",
+            f"{_sr_lo}-{_sr_hi}",
+            active=_n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total),
+        )
+        _append_provenance_row(rows, "filters", "batch", batch_sel, active=bool(batch_sel))
+        _append_provenance_row(rows, "filters", "label1", label1_sel, active=bool(label1_sel))
+        _append_provenance_row(rows, "filters", "label2", label2_sel, active=bool(label2_sel))
+        _append_provenance_row(rows, "filters", "label3", label3_sel, active=bool(label3_sel))
+        _append_provenance_row(
+            rows,
+            "filters",
+            "gene",
+            gene_text.strip(),
+            active=bool(gene_text.strip()) and "gene" in _schema_cols,
+        )
+        _append_provenance_row(
+            rows,
+            "filters",
+            "variant_type",
+            variant_sel,
+            active=bool(variant_sel) and set(variant_sel) != {"SNV", "insertion", "deletion"},
+        )
+        _append_provenance_row(rows, "filters", "vaf_range", f"{vaf_range[0]}-{vaf_range[1]}", active=vaf_range != (0.0, 1.0))
+        _append_provenance_row(rows, "filters", "min_alt_count", min_alt, active=min_alt > 1)
+        _append_provenance_row(rows, "filters", "max_alt_count", max_alt, active=max_alt > 0)
+        _append_provenance_row(rows, "filters", "min_fwd_alt_count", min_fwd_alt, active=min_fwd_alt > 0)
+        _append_provenance_row(rows, "filters", "min_rev_alt_count", min_rev_alt, active=min_rev_alt > 0)
+        _append_provenance_row(rows, "filters", "min_overlap_alt_agree", min_overlap_agree, active=min_overlap_agree > 0)
+        _append_provenance_row(rows, "filters", "min_overlap_alt_disagree", min_overlap_disagree, active=min_overlap_disagree > 0)
+        _append_provenance_row(rows, "filters", "min_depth", min_depth, active=min_depth > 0)
+        _append_provenance_row(rows, "filters", "max_depth", max_depth, active=max_depth > 0)
+        _append_provenance_row(rows, "filters", "variant_called", variant_called_sel, active=variant_called_sel != "All")
+        _append_provenance_row(rows, "filters", "variant_filter", variant_filter_sel, active=bool(variant_filter_sel))
+        _append_provenance_row(rows, "filters", "target_bases", on_target_sel, active=on_target_sel != "All")
+        _append_provenance_row(
+            rows,
+            "filters",
+            "gnomad_af_range",
+            f"{gnomad_af_range[0]}-{gnomad_af_range[1]}",
+            active=("gnomad_af" in _schema_cols) and gnomad_af_range != ("0", "1.0"),
+        )
+        _append_provenance_row(
+            rows,
+            "filters",
+            "include_sites_absent_from_gnomad",
+            gnomad_include_null,
+            active=("gnomad_af" in _schema_cols) and (gnomad_af_range != ("0", "1.0") or not gnomad_include_null),
+        )
+        _append_provenance_row(
+            rows,
+            "filters",
+            "homopolymer_length_range",
+            f"{homopolymer_range[0]}-{homopolymer_range[1]}",
+            active=_repeat_cols_present and homopolymer_range != (0, 20),
+        )
+        _append_provenance_row(
+            rows,
+            "filters",
+            "str_length_range",
+            f"{str_len_range[0]}-{str_len_range[1]}",
+            active=_repeat_cols_present and str_len_range != (0, 50),
+        )
+        _append_provenance_row(
+            rows,
+            "per_read_filters",
+            "application_mode",
+            "recompute alt count from filtered reads" if recompute_vaf else "hide loci with no passing reads",
+            active=_reads_active,
+        )
+        _append_provenance_row(
+            rows,
+            "per_read_filters",
+            "family_size",
+            f"{_fs_lo}-{_fs_hi}",
+            active=_has_alt_reads and _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max),
+        )
+        _append_provenance_row(
+            rows,
+            "per_read_filters",
+            "cycle_number",
+            f"{_cycle_lo}-{_cycle_hi}",
+            active=_has_alt_reads and (_cycle_lo > 1 or _cycle_hi < _cycle_max),
+        )
+        _append_provenance_row(
+            rows,
+            "per_read_filters",
+            "mapping_quality",
+            f"{_mq_lo}-{_mq_hi}",
+            active=_has_alt_reads and (_mq_lo > 0 or _mq_hi < _mq_max),
+        )
+        _append_provenance_row(
+            rows,
+            "per_read_filters",
+            "n_in_read",
+            f"{_n_total_lo}-{_n_total_hi}",
+            active=_has_alt_reads and _n_total_has_data and (_n_total_lo > 0 or _n_total_hi < _n_total_max),
+        )
+        _append_provenance_row(
+            rows,
+            "per_read_filters",
+            "insert_size",
+            f"{_is_lo}-{_is_hi}",
+            active=_has_alt_reads and _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX),
+        )
+        _append_provenance_row(
+            rows,
+            "per_read_filters",
+            "read",
+            read_strand_sel,
+            active=_has_alt_reads and read_strand_sel != "All",
+        )
+        _append_provenance_row(rows, "signature_discovery", "discovery_mode", discovery_mode)
+        if discovery_items:
+            for _name, _value in discovery_items:
+                _append_provenance_row(
+                    rows,
+                    "signature_discovery",
+                    _name,
+                    _value,
+                    active=_value not in (None, "", [], ()),
+                )
+
+        return pd.DataFrame(rows, columns=["section", "name", "value"])
+
+    # ── Data table ────────────────────────────────────────────────────────────────
+    _tbl_limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
+    _tbl_limit_sel = st.selectbox(
+        "Table row limit",
+        _tbl_limit_options,
+        index=1,
+        key="table_limit_sel",
+        help="Limits rows shown in the data table below. Has no effect on plots — they always use the full filtered dataset.",
+    )
+    _tbl_limit = None if _tbl_limit_sel == "All" else int(_tbl_limit_sel)
+
+    with _timed("main_table_query"):
+        df = query_records(limit=_tbl_limit)
+
+    _table_cols = [
+        c for c in [
+            "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
+            "variant_type", "vaf", *( ["original_vaf"] if _reads_active else []), "alt_count", "ref_count", "total_depth",
+            "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
+            "overlap_alt_disagree", "variant_called", "variant_filter", "on_target", "gene", "gnomad_af",
+        ]
+        if c in df.columns
+    ]
+
+    _tbl_event = render_records_table(
+        df,
+        total_count,
+        _table_cols,
+        igv_buttons=igv_buttons,
+        key="main",
+    )
+
+    # ── Position-level drill-down ──────────────────────────────────────────────────
+    _selected_rows = (_tbl_event.selection or {}).get("rows", [])
+    if _selected_rows:
+        _row = df.iloc[_selected_rows[0]]
+        _new_locus = (str(_row["chrom"]), int(_row["pos"]), str(_row["alt_allele"]))
+        if st.session_state.get("_drill_locus") != _new_locus:
+            st.session_state["_drill_locus"] = _new_locus
+
+    if "_drill_locus" in st.session_state:
+        _chrom, _pos, _selected_alt = st.session_state["_drill_locus"]
+        render_position_drilldown(
+            con=con,
+            table_expr=table_expr,
+            schema_cols=_schema_cols,
+            chrom=_chrom,
+            pos=_pos,
+            selected_alt=_selected_alt,
+            has_alt_reads=_has_alt_reads,
+            sql_str=_sql_str,
+            igv_buttons=igv_buttons,
+        )
 
 with tab1:
     for vtype, color in [
@@ -1559,19 +1597,20 @@ with tab1:
         ("insertion", "#f58518"),
         ("deletion",  "#e45756"),
     ]:
-        counts = con.execute(f"""
-            SELECT
-                FLOOR(ROUND(alt_count * 1.0 / total_depth, 4) * 50) / 50.0 AS vaf_bin,
-                FLOOR(ROUND(alt_count * 1.0 / total_depth, 4) * 50) / 50.0 + 0.02 AS vaf_bin_end,
-                COUNT(*) AS count
-            FROM {table_expr}
-            WHERE {where} AND variant_type = '{vtype}'
-              AND total_depth > 0
-              AND alt_count <= total_depth
-            GROUP BY vaf_bin, vaf_bin_end
-            HAVING vaf_bin IS NOT NULL AND vaf_bin >= 0.0
-            ORDER BY vaf_bin
-        """).df()
+        with _timed(f"vaf_histogram_{vtype}"):
+            counts = con.execute(f"""
+                SELECT
+                    FLOOR(ROUND(alt_count * 1.0 / total_depth, 4) * 50) / 50.0 AS vaf_bin,
+                    FLOOR(ROUND(alt_count * 1.0 / total_depth, 4) * 50) / 50.0 + 0.02 AS vaf_bin_end,
+                    COUNT(*) AS count
+                FROM {table_expr}
+                WHERE {where} AND variant_type = '{vtype}'
+                  AND total_depth > 0
+                  AND alt_count <= total_depth
+                GROUP BY vaf_bin, vaf_bin_end
+                HAVING vaf_bin IS NOT NULL AND vaf_bin >= 0.0
+                ORDER BY vaf_bin
+            """).df()
 
         if counts.empty:
             st.info(f"No {vtype}s in current selection.")
@@ -1626,6 +1665,494 @@ with tab1:
                         f"ROUND(alt_count * 1.0 / total_depth, 4) >= {bin_start}",
                         f"ROUND(alt_count * 1.0 / total_depth, 4) < {bin_end}",
                     ], sel, key=f"vaf_{vtype}_{bin_start}")
+
+    # ── Depth by variant type ──────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Depth by variant type")
+    st.caption(
+        "Comparing sequencing depth across SNVs, insertions, and deletions can "
+        "reveal bait bias. Hybrid-capture baits are designed around the reference "
+        "sequence, so reads carrying indels may hybridise less efficiently and "
+        "produce systematically lower depth at indel loci. A leftward shift in "
+        "the insertion or deletion ECDF relative to SNVs is a hallmark of this effect."
+    )
+    with _timed("depth_by_vtype_raw"):
+        _depth_df = con.execute(f"""
+            SELECT variant_type, total_depth
+            FROM {table_expr}
+            WHERE {where} AND total_depth > 0
+            ORDER BY variant_type, total_depth
+        """).df()
+
+    if _depth_df.empty:
+        st.info("No records under current filters.")
+    else:
+        _vtype_colors = {"SNV": "#4c78a8", "insertion": "#f58518", "deletion": "#e45756"}
+        _vtype_scale = alt.Scale(
+            domain=list(_vtype_colors.keys()),
+            range=list(_vtype_colors.values()),
+        )
+
+        # ECDF — compute rank / total per group in DuckDB so Altair doesn't
+        # need to materialise millions of rows.
+        with _timed("depth_ecdf"):
+            _depth_ecdf_df = con.execute(f"""
+                WITH ranked AS (
+                    SELECT
+                        variant_type,
+                        total_depth,
+                        ROW_NUMBER() OVER (PARTITION BY variant_type ORDER BY total_depth) AS rn,
+                        COUNT(*) OVER (PARTITION BY variant_type) AS n
+                    FROM {table_expr}
+                    WHERE {where} AND total_depth > 0
+                )
+                SELECT variant_type, total_depth, rn * 1.0 / n AS ecdf
+                FROM ranked
+            """).df()
+
+        _ecdf_chart = (
+            alt.Chart(_depth_ecdf_df)
+            .mark_line(interpolate="step-after", strokeWidth=2)
+            .encode(
+                x=alt.X("total_depth:Q", title="Total depth"),
+                y=alt.Y("ecdf:Q", title="Cumulative fraction", scale=alt.Scale(domain=[0, 1])),
+                color=alt.Color("variant_type:N", title="Variant type", scale=_vtype_scale),
+                tooltip=[
+                    "variant_type",
+                    alt.Tooltip("total_depth:Q", title="Depth"),
+                    alt.Tooltip("ecdf:Q", title="Cumulative fraction", format=".3f"),
+                ],
+            )
+            .properties(height=320, title="ECDF of total depth by variant type")
+            .interactive()
+        )
+
+        _box_chart = (
+            alt.Chart(_depth_df)
+            .mark_boxplot(extent="min-max", size=40)
+            .encode(
+                x=alt.X("variant_type:N", title="Variant type", axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("total_depth:Q", title="Total depth"),
+                color=alt.Color("variant_type:N", title="Variant type", scale=_vtype_scale, legend=None),
+                tooltip=["variant_type", alt.Tooltip("total_depth:Q", title="Depth")],
+            )
+            .properties(height=320, title="Depth distribution by variant type")
+        )
+
+        _depth_col_ecdf, _depth_col_box = st.columns(2)
+        with _depth_col_ecdf:
+            st.altair_chart(_ecdf_chart, use_container_width=True)
+        with _depth_col_box:
+            st.altair_chart(_box_chart, use_container_width=True)
+
+        # ── Median depth vs. VAF bin ───────────────────────────────────────
+        st.caption(
+            "Because most alt alleles are at very low fraction, a depth difference "
+            "between SNVs and indels may be invisible in the marginal distributions "
+            "above — the large reference depth dominates. The chart below bins loci "
+            "by VAF and shows the median depth in each bin per variant type. A "
+            "consistent gap between the SNV line and the insertion/deletion lines "
+            "across all VAF tiers is strong evidence of bait bias."
+        )
+        _n_vaf_bins = 20
+        with _timed("depth_vs_vaf_bin"):
+            _depth_vaf_df = con.execute(f"""
+            WITH binned AS (
+                SELECT
+                    variant_type,
+                    FLOOR(ROUND(alt_count * 1.0 / total_depth, 4) * {_n_vaf_bins})
+                        / {_n_vaf_bins}                              AS vaf_bin,
+                    total_depth,
+                    COUNT(*) OVER (PARTITION BY variant_type,
+                                   FLOOR(ROUND(alt_count * 1.0 / total_depth, 4) * {_n_vaf_bins})
+                                   / {_n_vaf_bins})                  AS bin_n
+                FROM {table_expr}
+                WHERE {where} AND total_depth > 0
+                  AND alt_count > 0 AND alt_count <= total_depth
+            )
+            SELECT
+                variant_type,
+                vaf_bin,
+                MEDIAN(total_depth)  AS median_depth,
+                MAX(bin_n)           AS n_loci
+            FROM binned
+            GROUP BY variant_type, vaf_bin
+                HAVING n_loci >= 5
+                ORDER BY variant_type, vaf_bin
+            """).df()
+
+        if _depth_vaf_df.empty:
+            st.info("Not enough data to plot depth vs. VAF bins.")
+        else:
+            _depth_vaf_chart = (
+                alt.Chart(_depth_vaf_df)
+                .mark_line(point=True, strokeWidth=2)
+                .encode(
+                    x=alt.X(
+                        "vaf_bin:Q",
+                        title=f"VAF (binned, width = {1/_n_vaf_bins:.2f})",
+                        scale=alt.Scale(domain=[0, 1]),
+                    ),
+                    y=alt.Y("median_depth:Q", title="Median total depth"),
+                    color=alt.Color("variant_type:N", title="Variant type", scale=_vtype_scale),
+                    tooltip=[
+                        "variant_type",
+                        alt.Tooltip("vaf_bin:Q", title="VAF bin", format=".2f"),
+                        alt.Tooltip("median_depth:Q", title="Median depth"),
+                        alt.Tooltip("n_loci:Q", title="Loci in bin"),
+                    ],
+                )
+                .properties(height=320, title="Median depth vs. VAF by variant type")
+                .interactive()
+            )
+            st.altair_chart(_depth_vaf_chart, use_container_width=True)
+
+        # ── Depth at hom-alt sites by sequence context ─────────────────────
+        st.divider()
+        st.subheader("Depth at hom-alt sites (VAF > 90%)")
+        st.caption(
+            "Restricting to likely homozygous alt sites (VAF > 90%) removes "
+            "low-VAF loci where depth and allele fraction are confounded. "
+            "The comparison below is within-cohort only: all three variant types "
+            "are drawn from the same samples but at **different genomic positions**. "
+            "A consistent depth gap between SNVs and indels is suggestive of bait "
+            "bias, but position-level coverage variation (due to panel design) can "
+            "produce the same pattern. "
+            "The definitive test — comparing alt-carrier depth to non-carrier depth "
+            "at the **same position** — requires `geac coverage` output, where depth "
+            "is recorded for every sample at every panel position regardless of "
+            "whether an alt allele was observed."
+        )
+        _HOZ_VAF_THRESH = 0.9
+        _HOZ_MIN_BIN = 5
+        _hoz_where = (
+            f"{where} AND total_depth > 0"
+            f" AND alt_count * 1.0 / total_depth > {_HOZ_VAF_THRESH}"
+        )
+
+        with _timed("depth_homazlt_raw"):
+            _hoz_depth_df = con.execute(f"""
+                SELECT variant_type, total_depth
+                FROM {table_expr}
+                WHERE {_hoz_where}
+                ORDER BY variant_type, total_depth
+            """).df()
+
+        if _hoz_depth_df.empty:
+            st.info("No hom-alt records under current filters.")
+        else:
+            _hoz_ecdf_df = con.execute(f"""
+                WITH ranked AS (
+                    SELECT
+                        variant_type,
+                        total_depth,
+                        ROW_NUMBER() OVER (PARTITION BY variant_type ORDER BY total_depth) AS rn,
+                        COUNT(*) OVER (PARTITION BY variant_type) AS n
+                    FROM {table_expr}
+                    WHERE {_hoz_where}
+                )
+                SELECT variant_type, total_depth, rn * 1.0 / n AS ecdf
+                FROM ranked
+            """).df()
+
+            _hoz_ecdf_chart = (
+                alt.Chart(_hoz_ecdf_df)
+                .mark_line(interpolate="step-after", strokeWidth=2)
+                .encode(
+                    x=alt.X("total_depth:Q", title="Total depth"),
+                    y=alt.Y("ecdf:Q", title="Cumulative fraction",
+                            scale=alt.Scale(domain=[0, 1])),
+                    color=alt.Color("variant_type:N", title="Variant type",
+                                    scale=_vtype_scale),
+                    tooltip=["variant_type",
+                             alt.Tooltip("total_depth:Q", title="Depth"),
+                             alt.Tooltip("ecdf:Q", title="Cumulative fraction",
+                                         format=".3f")],
+                )
+                .properties(height=300, title="Depth ECDF at hom-alt sites (VAF > 90%)")
+                .interactive()
+            )
+            _hoz_box_chart = (
+                alt.Chart(_hoz_depth_df)
+                .mark_boxplot(extent="min-max", size=40)
+                .encode(
+                    x=alt.X("variant_type:N", title="Variant type",
+                            axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("total_depth:Q", title="Total depth"),
+                    color=alt.Color("variant_type:N", title="Variant type",
+                                    scale=_vtype_scale, legend=None),
+                    tooltip=["variant_type",
+                             alt.Tooltip("total_depth:Q", title="Depth")],
+                )
+                .properties(height=300, title="Depth distribution at hom-alt sites (VAF > 90%)")
+            )
+            _hoz_col_ecdf, _hoz_col_box = st.columns(2)
+            with _hoz_col_ecdf:
+                st.altair_chart(_hoz_ecdf_chart, use_container_width=True)
+            with _hoz_col_box:
+                st.altair_chart(_hoz_box_chart, use_container_width=True)
+
+        # Depth vs indel/homopolymer length at hom-alt sites
+        with _timed("depth_homazlt_by_context"):
+            _hoz_ins_df = con.execute(f"""
+                SELECT
+                    LENGTH(alt_allele) - 1  AS indel_len,
+                    MEDIAN(total_depth)     AS median_depth,
+                    COUNT(*)               AS n_loci
+                FROM {table_expr}
+                WHERE {_hoz_where} AND variant_type = 'insertion'
+                GROUP BY indel_len
+                HAVING COUNT(*) >= {_HOZ_MIN_BIN}
+                ORDER BY indel_len
+            """).df()
+            _hoz_del_df = con.execute(f"""
+                SELECT
+                    TRY_CAST(SUBSTR(alt_allele, 2) AS INTEGER) AS indel_len,
+                    MEDIAN(total_depth)                        AS median_depth,
+                    COUNT(*)                                   AS n_loci
+                FROM {table_expr}
+                WHERE {_hoz_where} AND variant_type = 'deletion'
+                GROUP BY indel_len
+                HAVING COUNT(*) >= {_HOZ_MIN_BIN}
+                ORDER BY indel_len
+            """).df()
+            _hoz_hp_df = pd.DataFrame()
+            if _repeat_cols_present:
+                _hoz_hp_df = con.execute(f"""
+                    SELECT
+                        variant_type,
+                        homopolymer_len,
+                        MEDIAN(total_depth) AS median_depth,
+                        COUNT(*)           AS n_loci
+                    FROM {table_expr}
+                    WHERE {_hoz_where} AND homopolymer_len IS NOT NULL
+                    GROUP BY variant_type, homopolymer_len
+                    HAVING COUNT(*) >= {_HOZ_MIN_BIN}
+                    ORDER BY variant_type, homopolymer_len
+                """).df()
+
+        def _depth_line(df, x_col, x_title, color, chart_title):
+            return (
+                alt.Chart(df)
+                .mark_line(point=True, color=color, strokeWidth=2)
+                .encode(
+                    x=alt.X(f"{x_col}:Q", title=x_title),
+                    y=alt.Y("median_depth:Q", title="Median total depth"),
+                    tooltip=[
+                        alt.Tooltip(f"{x_col}:Q", title=x_title),
+                        alt.Tooltip("median_depth:Q", title="Median depth"),
+                        alt.Tooltip("n_loci:Q", title="Loci in bin"),
+                    ],
+                )
+                .properties(height=300, title=chart_title)
+                .interactive()
+            )
+
+        _ctx_col_ins, _ctx_col_del = st.columns(2)
+        with _ctx_col_ins:
+            if not _hoz_ins_df.empty:
+                st.altair_chart(
+                    _depth_line(_hoz_ins_df, "indel_len", "Insertion length (bp)",
+                                "#f58518", "Median depth vs. insertion length (VAF > 90%)"),
+                    use_container_width=True,
+                )
+        with _ctx_col_del:
+            if not _hoz_del_df.empty:
+                st.altair_chart(
+                    _depth_line(_hoz_del_df, "indel_len", "Deletion length (bp)",
+                                "#e45756", "Median depth vs. deletion length (VAF > 90%)"),
+                    use_container_width=True,
+                )
+        if _repeat_cols_present and not _hoz_hp_df.empty:
+            st.altair_chart(
+                alt.Chart(_hoz_hp_df)
+                .mark_line(point=True, strokeWidth=2)
+                .encode(
+                    x=alt.X("homopolymer_len:Q", title="Homopolymer length (bp)"),
+                    y=alt.Y("median_depth:Q", title="Median total depth"),
+                    color=alt.Color("variant_type:N", title="Variant type",
+                                    scale=_vtype_scale),
+                    tooltip=[
+                        "variant_type",
+                        alt.Tooltip("homopolymer_len:Q", title="Homopolymer length"),
+                        alt.Tooltip("median_depth:Q", title="Median depth"),
+                        alt.Tooltip("n_loci:Q", title="Loci in bin"),
+                    ],
+                )
+                .properties(height=300, title="Median depth vs. homopolymer length (VAF > 90%)")
+                .interactive(),
+                use_container_width=True,
+            )
+
+    # ── Carrier vs. non-carrier depth (bait-bias test) ─────────────────────────
+    st.divider()
+    st.subheader("Carrier vs. non-carrier depth (bait bias)")
+    if not _has_ref_bases:
+        st.info(
+            "This section requires reference-site data generated with "
+            "`geac collect --emit-ref-sites`. Run the cohort pipeline with "
+            "`emit_ref_sites = true` to produce the `ref_bases` and `ref_reads` tables, "
+            "then re-open the resulting database."
+        )
+    else:
+        st.caption(
+            "Compares sequencing depth at hom-alt positions (VAF > 90%) between "
+            "**carrier samples** (which carry the alt allele, from `alt_bases`) and "
+            "**non-carrier samples** (which have only reference reads at the same position, "
+            "from `ref_bases`). A depth deficit in carriers relative to non-carriers — "
+            "especially for indels — is direct evidence that hybrid-capture baits are less "
+            "efficient for indel-containing sequences."
+        )
+        with _timed("carrier_noncarrier_depth"):
+            _bias_depth_df = con.execute(f"""
+                WITH carriers AS (
+                    SELECT total_depth, variant_type, 'Carrier' AS carrier_group
+                    FROM {table_expr}
+                    WHERE {where} AND total_depth > 0
+                      AND alt_count * 1.0 / total_depth > 0.9
+                ),
+                noncarriers AS (
+                    SELECT rb.total_depth, pt.variant_type, 'Non-carrier' AS carrier_group
+                    FROM ref_bases rb
+                    INNER JOIN (
+                        SELECT DISTINCT chrom, pos, variant_type
+                        FROM {table_expr}
+                        WHERE {where} AND alt_count * 1.0 / total_depth > 0.9
+                    ) pt ON rb.chrom = pt.chrom AND rb.pos = pt.pos
+                    WHERE rb.total_depth > 0
+                )
+                SELECT * FROM carriers
+                UNION ALL
+                SELECT * FROM noncarriers
+            """).df()
+
+        if _bias_depth_df.empty:
+            st.info("No hom-alt records under current filters.")
+        else:
+            _bias_ecdf_df = con.execute("""
+                WITH ranked AS (
+                    SELECT
+                        variant_type, carrier_group, total_depth,
+                        ROW_NUMBER() OVER (PARTITION BY variant_type, carrier_group
+                                           ORDER BY total_depth) AS rn,
+                        COUNT(*) OVER (PARTITION BY variant_type, carrier_group) AS n
+                    FROM _bias_depth_df
+                )
+                SELECT variant_type, carrier_group, total_depth, rn * 1.0 / n AS ecdf
+                FROM ranked
+            """).df()
+
+            _bias_color_scale = alt.Scale(
+                domain=["Carrier", "Non-carrier"],
+                range=["#4c78a8", "#e45756"],
+            )
+            _bias_dash_scale = alt.Scale(
+                domain=["Carrier", "Non-carrier"],
+                range=[[1, 0], [4, 2]],
+            )
+
+            _bias_ecdf_chart = (
+                alt.Chart(_bias_ecdf_df)
+                .mark_line(interpolate="step-after", strokeWidth=2)
+                .encode(
+                    x=alt.X("total_depth:Q", title="Total depth"),
+                    y=alt.Y("ecdf:Q", title="Cumulative fraction",
+                            scale=alt.Scale(domain=[0, 1])),
+                    color=alt.Color("carrier_group:N", title="Group",
+                                    scale=_bias_color_scale),
+                    strokeDash=alt.StrokeDash("carrier_group:N", title="Group",
+                                              scale=_bias_dash_scale),
+                    row=alt.Row("variant_type:N", title="Variant type"),
+                    tooltip=[
+                        "carrier_group", "variant_type",
+                        alt.Tooltip("total_depth:Q", title="Depth"),
+                        alt.Tooltip("ecdf:Q", title="Cumulative fraction", format=".3f"),
+                    ],
+                )
+                .properties(height=220, title="Carrier vs. non-carrier depth ECDF at hom-alt sites")
+                .interactive()
+            )
+            st.altair_chart(_bias_ecdf_chart, use_container_width=True)
+
+            # Box plot summary
+            _bias_box_chart = (
+                alt.Chart(_bias_depth_df)
+                .mark_boxplot(extent="min-max", size=30)
+                .encode(
+                    x=alt.X("carrier_group:N", title="Group",
+                            axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("total_depth:Q", title="Total depth"),
+                    color=alt.Color("carrier_group:N", title="Group",
+                                    scale=_bias_color_scale, legend=None),
+                    column=alt.Column("variant_type:N", title="Variant type"),
+                    tooltip=["carrier_group", "variant_type",
+                             alt.Tooltip("total_depth:Q", title="Depth")],
+                )
+                .properties(height=260, title="Depth distribution: carrier vs. non-carrier")
+            )
+            st.altair_chart(_bias_box_chart)
+
+        # Family size comparison (only if ref_reads and alt_reads with family_size are present)
+        if _has_ref_reads and _has_alt_reads and _has_alt_reads_cols("family_size"):
+            _bias_fs_available = con.execute(
+                "SELECT COUNT(*) FROM ref_reads WHERE family_size IS NOT NULL LIMIT 1"
+            ).fetchone()[0] > 0
+            if _bias_fs_available:
+                st.caption(
+                    "**Consensus family size** at hom-alt positions — carrier reads "
+                    "(alt-supporting, from `alt_reads`) vs. non-carrier reads "
+                    "(reference-supporting, from `ref_reads`). Reduced family size in "
+                    "carriers would indicate that shorter or lower-quality consensus reads "
+                    "preferentially carry the alt allele, a pattern consistent with bait bias."
+                )
+                with _timed("carrier_noncarrier_familysize"):
+                    _bias_fs_df = con.execute(f"""
+                        WITH carrier_fs AS (
+                            SELECT ar.family_size, ab.variant_type, 'Carrier' AS carrier_group
+                            FROM alt_reads ar
+                            INNER JOIN (
+                                SELECT DISTINCT sample_id, chrom, pos, alt_allele, variant_type
+                                FROM {table_expr}
+                                WHERE {where} AND alt_count * 1.0 / total_depth > 0.9
+                            ) ab ON ar.sample_id = ab.sample_id
+                                   AND ar.chrom    = ab.chrom
+                                   AND ar.pos      = ab.pos
+                                   AND ar.alt_allele = ab.alt_allele
+                            WHERE ar.family_size IS NOT NULL
+                        ),
+                        noncarrier_fs AS (
+                            SELECT rr.family_size, pt.variant_type, 'Non-carrier' AS carrier_group
+                            FROM ref_reads rr
+                            INNER JOIN (
+                                SELECT DISTINCT chrom, pos, variant_type
+                                FROM {table_expr}
+                                WHERE {where} AND alt_count * 1.0 / total_depth > 0.9
+                            ) pt ON rr.chrom = pt.chrom AND rr.pos = pt.pos
+                            WHERE rr.family_size IS NOT NULL
+                        )
+                        SELECT * FROM carrier_fs
+                        UNION ALL
+                        SELECT * FROM noncarrier_fs
+                    """).df()
+
+                if not _bias_fs_df.empty:
+                    _bias_fs_chart = (
+                        alt.Chart(_bias_fs_df)
+                        .mark_boxplot(extent="min-max", size=30)
+                        .encode(
+                            x=alt.X("carrier_group:N", title="Group",
+                                    axis=alt.Axis(labelAngle=0)),
+                            y=alt.Y("family_size:Q", title="Family size"),
+                            color=alt.Color("carrier_group:N", title="Group",
+                                            scale=_bias_color_scale, legend=None),
+                            column=alt.Column("variant_type:N", title="Variant type"),
+                            tooltip=["carrier_group", "variant_type",
+                                     alt.Tooltip("family_size:Q", title="Family size")],
+                        )
+                        .properties(height=260,
+                                    title="Consensus family size: carrier vs. non-carrier")
+                    )
+                    st.altair_chart(_bias_fs_chart)
 
 # ── SBS96 helpers (used by Error Spectrum tab and Cohort tab) ─────────────────
 _COMP = str.maketrans('ACGT', 'TGCA')
@@ -3355,51 +3882,6 @@ with tab3:
     else:
         st.caption("Click a point to select it; shift-click to select multiple.")
 
-with tab4:
-    _ov_df = con.execute(f"""
-        SELECT
-            ROUND(
-                overlap_alt_agree * 1.0
-                / NULLIF(overlap_alt_agree + overlap_alt_disagree, 0),
-                3
-            ) AS agree_frac,
-            COUNT(*) AS n
-        FROM {table_expr}
-        WHERE {where}
-          AND overlap_depth > 0
-          AND overlap_alt_agree IS NOT NULL
-        GROUP BY agree_frac
-        ORDER BY agree_frac
-    """).df()
-
-    if _ov_df.empty:
-        st.info("No overlapping fragments in current selection.")
-    else:
-        chart = (
-            alt.Chart(_ov_df)
-            .mark_bar(opacity=0.8)
-            .encode(
-                alt.X("agree_frac:Q", bin=alt.Bin(maxbins=20), title="Overlap agreement fraction"),
-                alt.Y("n:Q", title="Alt loci"),
-                tooltip=[
-                    alt.Tooltip("agree_frac:Q", format=".3f", title="Agreement fraction"),
-                    alt.Tooltip("n:Q", title="Alt loci"),
-                ],
-            )
-            .properties(title="Overlap Agreement Fraction", height=350)
-        )
-        st.altair_chart(chart, width="stretch")
-        st.caption(
-            "For alt loci where both reads of a pair overlap the variant site, the agreement "
-            "fraction is the proportion of overlapping pairs where R1 and R2 both support the "
-            "same alt base (agree / (agree + disagree)). A value of 1.0 means every overlapping "
-            "pair agreed on the alt; lower values indicate that one read in the pair called ref "
-            "or a different base. True somatic variants typically cluster near 1.0; strand "
-            "artefacts — where only one read of a pair carries the alt — tend to show lower "
-            "agreement or are absent from this plot entirely (they contribute to overlap_alt_disagree "
-            "but not overlap_alt_agree)."
-        )
-
 with tab_cohort:
     if not path.endswith(".duckdb"):
         st.info("Cohort view is available when loading a merged DuckDB file (`geac merge` output).")
@@ -3926,153 +4408,169 @@ with tab_reads:
                 "Re-run `geac collect --reads-output` and `geac merge` to enable these plots."
             )
         else:
-            _nctx_color_mode = st.radio(
-                "Group by",
-                ["All reads", "R1/R2"],
-                horizontal=True,
-                key="nctx_group_by",
+            _nctx_enabled = st.checkbox(
+                "Enable N-context read distribution",
+                value=False,
+                key="nctx_enabled",
+                help="Scans all alt-supporting reads to build N-context distributions. "
+                     "Can be slow on large cohorts — enable when you need it.",
             )
-            # Cache on the filter strings — this query scans alt_reads and runs
-            # on every rerun because Streamlit evaluates tab bodies eagerly.
-            _nctx_cache_key = ("nctx_df", where, _r_reads_filter)
-            if st.session_state.get("_nctx_cache_key") != _nctx_cache_key:
-                st.session_state["_nctx_cache_key"] = _nctx_cache_key
-                st.session_state["_nctx_df_cache"] = con.execute(f"""
-                    SELECT
-                        ar.is_read1,
-                        ar.n_before_alt,
-                        ar.n_after_alt,
-                        ar.n_n_before_alt,
-                        ar.n_n_after_alt,
-                        ar.leading_n_run_len,
-                        ar.trailing_n_run_len
-                    FROM {_r_join}
-                """).df()
-            _nctx_df = st.session_state["_nctx_df_cache"]
-
-            if _nctx_df.empty:
-                st.info("No read-context data available under current filters.")
+            if not _nctx_enabled:
+                st.info(
+                    "N-context read distribution is disabled by default. "
+                    "Tick the checkbox above to run it."
+                )
             else:
-                _nctx_df = add_read_context_fraction_metrics(_nctx_df)
-                _nctx_df["read_group"] = np.where(_nctx_df["is_read1"], "R1", "R2")
-                _nctx_long_rows = []
-                for _side, _col in [
-                    ("Before alt", "frac_n_before_alt"),
-                    ("After alt", "frac_n_after_alt"),
-                ]:
-                    _sub = _nctx_df.dropna(subset=[_col]).copy()
-                    if not _sub.empty:
-                        _sub["side"] = _side
-                        _sub["frac_n"] = _sub[_col]
-                        _nctx_long_rows.append(_sub[["read_group", "side", "frac_n"]])
-
-                if not _nctx_long_rows:
-                    st.info("No before/after N-burden values are available under current filters.")
+                _nctx_color_mode = st.radio(
+                    "Group by",
+                    ["All reads", "R1/R2"],
+                    horizontal=True,
+                    key="nctx_group_by",
+                )
+                # Cache on the filter strings — this query scans alt_reads and runs
+                # on every rerun because Streamlit evaluates tab bodies eagerly.
+                _nctx_cache_key = ("nctx_df", where, _r_reads_filter)
+                if st.session_state.get("_nctx_cache_key") != _nctx_cache_key:
+                    st.session_state["_nctx_cache_key"] = _nctx_cache_key
+                    with _timed("nctx_df [cache miss]"):
+                        st.session_state["_nctx_df_cache"] = con.execute(f"""
+                            SELECT
+                                ar.is_read1,
+                                ar.n_before_alt,
+                                ar.n_after_alt,
+                                ar.n_n_before_alt,
+                                ar.n_n_after_alt,
+                                ar.leading_n_run_len,
+                                ar.trailing_n_run_len
+                            FROM {_r_join}
+                        """).df()
                 else:
-                    _nctx_long = pd.concat(_nctx_long_rows, ignore_index=True)
-                    _nctx_summary = (
-                        _nctx_long.groupby("side")["frac_n"]
-                        .agg(["median", "mean"])
-                        .to_dict("index")
-                    )
-                    _nctx_any_before = (_nctx_df["n_n_before_alt"] > 0).mean()
-                    _nctx_any_after = (_nctx_df["n_n_after_alt"] > 0).mean()
-                    _nctx_mean_before = _nctx_summary.get("Before alt", {}).get("mean", float("nan"))
-                    _nctx_mean_after = _nctx_summary.get("After alt", {}).get("mean", float("nan"))
-                    _nctx_mean_delta = _nctx_mean_after - _nctx_mean_before
+                    _TIMINGS.append(("nctx_df [cache hit]", 0.0))
+                _nctx_df = st.session_state["_nctx_df_cache"]
 
-                    _nctx_metrics = st.columns(4)
-                    _nctx_metrics[0].metric(
-                        "Mean frac N before",
-                        f"{_nctx_mean_before:.3f}",
-                    )
-                    _nctx_metrics[1].metric(
-                        "Mean frac N after",
-                        f"{_nctx_mean_after:.3f}",
-                        delta=f"{_nctx_mean_delta:+.3f} vs before",
-                    )
-                    _nctx_metrics[2].metric(
-                        "Reads with any N before",
-                        f"{_nctx_any_before:.1%}",
-                    )
-                    _nctx_metrics[3].metric(
-                        "Reads with any N after",
-                        f"{_nctx_any_after:.1%}",
-                    )
+                if _nctx_df.empty:
+                    st.info("No read-context data available under current filters.")
+                else:
+                    _nctx_df = add_read_context_fraction_metrics(_nctx_df)
+                    _nctx_df["read_group"] = np.where(_nctx_df["is_read1"], "R1", "R2")
+                    _nctx_long_rows = []
+                    for _side, _col in [
+                        ("Before alt", "frac_n_before_alt"),
+                        ("After alt", "frac_n_after_alt"),
+                    ]:
+                        _sub = _nctx_df.dropna(subset=[_col]).copy()
+                        if not _sub.empty:
+                            _sub["side"] = _side
+                            _sub["frac_n"] = _sub[_col]
+                            _nctx_long_rows.append(_sub[["read_group", "side", "frac_n"]])
 
-                    _nctx_any_df = pd.DataFrame(
-                        [
-                            {"side": "Before alt", "fraction": _nctx_any_before},
-                            {"side": "After alt", "fraction": _nctx_any_after},
-                        ]
-                    )
-
-                    st.altair_chart(
-                        alt.Chart(_nctx_any_df)
-                        .mark_bar(opacity=0.85)
-                        .encode(
-                            x=alt.X("side:N", title=None),
-                            y=alt.Y(
-                                "fraction:Q",
-                                title="Fraction of alt-supporting reads with any N",
-                                scale=alt.Scale(domain=[0, 1]),
-                            ),
-                            color=alt.Color("side:N", title=None),
-                            tooltip=[
-                                "side:N",
-                                alt.Tooltip("fraction:Q", title="Fraction", format=".3%"),
-                            ],
+                    if not _nctx_long_rows:
+                        st.info("No before/after N-burden values are available under current filters.")
+                    else:
+                        _nctx_long = pd.concat(_nctx_long_rows, ignore_index=True)
+                        _nctx_summary = (
+                            _nctx_long.groupby("side")["frac_n"]
+                            .agg(["median", "mean"])
+                            .to_dict("index")
                         )
-                        .properties(title="Fraction of alt-supporting reads with any N", height=220),
-                        width="stretch",
-                    )
+                        _nctx_any_before = (_nctx_df["n_n_before_alt"] > 0).mean()
+                        _nctx_any_after = (_nctx_df["n_n_after_alt"] > 0).mean()
+                        _nctx_mean_before = _nctx_summary.get("Before alt", {}).get("mean", float("nan"))
+                        _nctx_mean_after = _nctx_summary.get("After alt", {}).get("mean", float("nan"))
+                        _nctx_mean_delta = _nctx_mean_after - _nctx_mean_before
 
-                    _density_groupby = ["side"] + (
-                        ["read_group"] if _nctx_color_mode == "R1/R2" else []
-                    )
-                    _nctx_chart = (
-                        alt.Chart(_nctx_long)
-                        .transform_density(
-                            "frac_n",
-                            as_=["frac_n", "density"],
-                            groupby=_density_groupby,
-                            extent=[0, 0.05],
-                            steps=100,
+                        _nctx_metrics = st.columns(4)
+                        _nctx_metrics[0].metric(
+                            "Mean frac N before",
+                            f"{_nctx_mean_before:.3f}",
                         )
-                        .mark_line(strokeWidth=3)
-                        .encode(
-                            x=alt.X(
-                                "frac_n:Q",
-                                title="Fraction of available bases that are N",
-                                scale=alt.Scale(domain=[0, 0.05]),
-                            ),
-                            y=alt.Y("density:Q", title="Density"),
-                            color=alt.Color("side:N", title=None),
-                            tooltip=[
-                                "side:N",
-                                alt.Tooltip("frac_n:Q", title="Fraction N", format=".3f"),
-                                alt.Tooltip("density:Q", title="Density", format=".3f"),
-                                *(
-                                    [alt.Tooltip("read_group:N", title="Read group")]
-                                    if _nctx_color_mode == "R1/R2"
-                                    else []
+                        _nctx_metrics[1].metric(
+                            "Mean frac N after",
+                            f"{_nctx_mean_after:.3f}",
+                            delta=f"{_nctx_mean_delta:+.3f} vs before",
+                        )
+                        _nctx_metrics[2].metric(
+                            "Reads with any N before",
+                            f"{_nctx_any_before:.1%}",
+                        )
+                        _nctx_metrics[3].metric(
+                            "Reads with any N after",
+                            f"{_nctx_any_after:.1%}",
+                        )
+
+                        _nctx_any_df = pd.DataFrame(
+                            [
+                                {"side": "Before alt", "fraction": _nctx_any_before},
+                                {"side": "After alt", "fraction": _nctx_any_after},
+                            ]
+                        )
+
+                        st.altair_chart(
+                            alt.Chart(_nctx_any_df)
+                            .mark_bar(opacity=0.85)
+                            .encode(
+                                x=alt.X("side:N", title=None),
+                                y=alt.Y(
+                                    "fraction:Q",
+                                    title="Fraction of alt-supporting reads with any N",
+                                    scale=alt.Scale(domain=[0, 1]),
                                 ),
-                            ],
+                                color=alt.Color("side:N", title=None),
+                                tooltip=[
+                                    "side:N",
+                                    alt.Tooltip("fraction:Q", title="Fraction", format=".3%"),
+                                ],
+                            )
+                            .properties(title="Fraction of alt-supporting reads with any N", height=220),
+                            width="stretch",
                         )
-                        .properties(title="Leading vs trailing N burden", height=320)
-                    )
-                    if _nctx_color_mode == "R1/R2":
-                        _nctx_chart = _nctx_chart.facet(
-                            column=alt.Column("read_group:N", title=None)
-                        )
-                    st.altair_chart(_nctx_chart, width="stretch")
 
-                    st.caption(
-                        "Each read is normalized by the number of available bases on that side of the alt. "
-                        "For example, 1 `N` out of 1 base after the alt contributes 1.00, while 5 `N`s out of 100 "
-                        "bases after the alt contributes 0.05. The curves show the density of those per-read fractions "
-                        "before versus after the alt."
-                    )
+                        _density_groupby = ["side"] + (
+                            ["read_group"] if _nctx_color_mode == "R1/R2" else []
+                        )
+                        _nctx_chart = (
+                            alt.Chart(_nctx_long)
+                            .transform_density(
+                                "frac_n",
+                                as_=["frac_n", "density"],
+                                groupby=_density_groupby,
+                                extent=[0, 0.05],
+                                steps=100,
+                            )
+                            .mark_line(strokeWidth=3)
+                            .encode(
+                                x=alt.X(
+                                    "frac_n:Q",
+                                    title="Fraction of available bases that are N",
+                                    scale=alt.Scale(domain=[0, 0.05]),
+                                ),
+                                y=alt.Y("density:Q", title="Density"),
+                                color=alt.Color("side:N", title=None),
+                                tooltip=[
+                                    "side:N",
+                                    alt.Tooltip("frac_n:Q", title="Fraction N", format=".3f"),
+                                    alt.Tooltip("density:Q", title="Density", format=".3f"),
+                                    *(
+                                        [alt.Tooltip("read_group:N", title="Read group")]
+                                        if _nctx_color_mode == "R1/R2"
+                                        else []
+                                    ),
+                                ],
+                            )
+                            .properties(title="Leading vs trailing N burden", height=320)
+                        )
+                        if _nctx_color_mode == "R1/R2":
+                            _nctx_chart = _nctx_chart.facet(
+                                column=alt.Column("read_group:N", title=None)
+                            )
+                        st.altair_chart(_nctx_chart, width="stretch")
+
+                        st.caption(
+                            "Each read is normalized by the number of available bases on that side of the alt. "
+                            "For example, 1 `N` out of 1 base after the alt contributes 1.00, while 5 `N`s out of 100 "
+                            "bases after the alt contributes 0.05. The curves show the density of those per-read fractions "
+                            "before versus after the alt."
+                        )
 
         # ── Row 3b: N-asymmetry locus discovery ───────────────────────────────
         st.subheader("N-asymmetry locus discovery")
@@ -4084,227 +4582,249 @@ with tab_reads:
                 "Re-run `geac collect --reads-output` and `geac merge` to enable this section."
             )
         else:
-            st.caption(
-                "Each point is one locus. The x-axis shows the mean fraction of upstream bases "
-                "that are N; the y-axis shows the same for downstream bases. Loci in the upper-left "
-                "have many Ns **after** the alt base and few before — a hallmark of sequencing "
-                "error enrichment at late cycles. Use the sidebar **Min N-asymmetry score** slider "
-                "to highlight the most extreme sites."
+            _nasym_enabled = st.checkbox(
+                "Enable N-asymmetry locus discovery",
+                value=False,
+                key="nasym_enabled",
+                help="Computes per-locus N-asymmetry scores. Fast when precomputed columns are "
+                     "present (v0.4.7+ cohorts); slower on older cohorts that require a "
+                     "full alt_reads GROUP BY.",
             )
-            # Fast path: read precomputed per-locus N-asymmetry columns directly
-            # from alt_bases (added in v0.4.7) when no read-level filters are
-            # active. This avoids the multi-million-row alt_reads GROUP BY
-            # entirely. Falls back to the slow path when read filters change
-            # the per-read denominator.
-            _use_fast_nasym = (
-                not _reads_active
-                and "mean_delta_n_frac" in _schema_cols
-                and "n_alt_reads_with_n_ctx" in _schema_cols
-            )
-            # Cache keyed on the actual filter strings — stable across rerenders,
-            # unlike hash() which uses a randomised seed per process.
-            _nasym_cache_key = ("nasym_df", where, _r_reads_filter, _use_fast_nasym)
-            if st.session_state.get("_nasym_cache_key") != _nasym_cache_key:
-                st.session_state["_nasym_cache_key"] = _nasym_cache_key
-                if _use_fast_nasym:
-                    st.session_state["_nasym_df_cache"] = (
-                        compute_locus_n_asymmetry_precomputed(con, table_expr, where)
-                    )
-                else:
-                    st.session_state["_nasym_df_cache"] = compute_locus_n_asymmetry(
-                        con, _r_join
-                    )
-                st.session_state["_nasym_locus_cache_key"] = None  # invalidate dependent cache
-            _nasym_df = st.session_state["_nasym_df_cache"]
-
-            if _nasym_df.empty:
-                st.info("No loci available under current filters.")
-            else:
-                # When the fast path is in use, alt_bases gives one row per
-                # (sample, locus, alt, pipeline), so we merge per-pipeline.
-                # The slow path collapses across pipelines via the alt_reads
-                # GROUP BY, so we merge on the locus key only.
-                _nasym_merge_keys = ["sample_id", "chrom", "pos", "alt_allele"]
-                if _use_fast_nasym:
-                    _nasym_merge_keys.append("pipeline")
-                _nasym_locus_select_extra = ", pipeline" if _use_fast_nasym else ""
-
-                # Merge in VAF and variant_type — cached separately on the locus WHERE clause.
-                _nasym_locus_cache_key = ("nasym_locus", where, _use_fast_nasym)
-                if st.session_state.get("_nasym_locus_cache_key") != _nasym_locus_cache_key:
-                    st.session_state["_nasym_locus_cache_key"] = _nasym_locus_cache_key
-                    st.session_state["_nasym_locus_cache"] = con.execute(f"""
-                        SELECT sample_id, chrom, pos, alt_allele, variant_type{_nasym_locus_select_extra},
-                               ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                               alt_count, total_depth
-                        FROM {table_expr}
-                        WHERE {where}
-                    """).df()
-                _nasym_locus = st.session_state["_nasym_locus_cache"]
-                _nasym_df = _nasym_df.merge(
-                    _nasym_locus,
-                    on=_nasym_merge_keys,
-                    how="left",
+            if not _nasym_enabled:
+                st.info(
+                    "N-asymmetry locus discovery is disabled by default. "
+                    "Tick the checkbox above to run it."
                 )
-                _nasym_df = _nasym_df.dropna(subset=["mean_delta_n_frac"])
-
-                # Apply the sidebar threshold filter.
-                if min_delta_n_frac > 0.0:
-                    _nasym_df = _nasym_df[_nasym_df["mean_delta_n_frac"] >= min_delta_n_frac]
+            else:
+                st.caption(
+                    "Each point is one locus. The x-axis shows the mean fraction of upstream bases "
+                    "that are N; the y-axis shows the same for downstream bases. Loci in the upper-left "
+                    "have many Ns **after** the alt base and few before — a hallmark of sequencing "
+                    "error enrichment at late cycles. Use the sidebar **Min N-asymmetry score** slider "
+                    "to highlight the most extreme sites."
+                )
+                # Fast path: read precomputed per-locus N-asymmetry columns directly
+                # from alt_bases (added in v0.4.7) when no read-level filters are
+                # active. This avoids the multi-million-row alt_reads GROUP BY
+                # entirely. Falls back to the slow path when read filters change
+                # the per-read denominator.
+                _use_fast_nasym = (
+                    not _reads_active
+                    and "mean_delta_n_frac" in _schema_cols
+                    and "n_alt_reads_with_n_ctx" in _schema_cols
+                )
+                # Cache keyed on the actual filter strings — stable across rerenders,
+                # unlike hash() which uses a randomised seed per process.
+                _nasym_cache_key = ("nasym_df", where, _r_reads_filter, _use_fast_nasym)
+                if st.session_state.get("_nasym_cache_key") != _nasym_cache_key:
+                    st.session_state["_nasym_cache_key"] = _nasym_cache_key
+                    _nasym_label = "nasym_df fast [cache miss]" if _use_fast_nasym else "nasym_df slow GROUP BY [cache miss]"
+                    with _timed(_nasym_label):
+                        if _use_fast_nasym:
+                            st.session_state["_nasym_df_cache"] = (
+                                compute_locus_n_asymmetry_precomputed(con, table_expr, where)
+                            )
+                        else:
+                            st.session_state["_nasym_df_cache"] = compute_locus_n_asymmetry(
+                                con, _r_join
+                            )
+                    st.session_state["_nasym_locus_cache_key"] = None  # invalidate dependent caches
+                    st.session_state["_nasym_tbl_cache_key"] = None
+                else:
+                    _TIMINGS.append(("nasym_df [cache hit]", 0.0))
+                _nasym_df = st.session_state["_nasym_df_cache"]
 
                 if _nasym_df.empty:
-                    st.info(
-                        f"No loci with N-asymmetry score ≥ {min_delta_n_frac:.2f} under current filters. "
-                        "Try lowering the sidebar threshold."
-                    )
+                    st.info("No loci available under current filters.")
                 else:
-                    # ── Scatter: frac_n_before vs frac_n_after ─────────────
-                    _nasym_sel = alt.selection_point(
-                        name="nasym_select",
-                        fields=["sample_id", "chrom", "pos", "alt_allele"],
-                        on="click",
-                        toggle="event.shiftKey",
-                    )
-                    _nasym_diag_max = float(_nasym_df[["mean_frac_n_before", "mean_frac_n_after"]].max().max())
-                    _nasym_diag = (
-                        alt.Chart(
-                            pd.DataFrame({"x": [0.0, _nasym_diag_max], "y": [0.0, _nasym_diag_max]})
-                        )
-                        .mark_line(color="gray", strokeDash=[4, 4], opacity=0.5)
-                        .encode(x="x:Q", y="y:Q")
-                    )
-                    _nasym_scatter = (
-                        alt.Chart(_nasym_df)
-                        .mark_circle(size=50)
-                        .encode(
-                            x=alt.X(
-                                "mean_frac_n_before:Q",
-                                title="Mean frac N before alt",
-                                scale=alt.Scale(zero=True),
-                            ),
-                            y=alt.Y(
-                                "mean_frac_n_after:Q",
-                                title="Mean frac N after alt",
-                                scale=alt.Scale(zero=True),
-                            ),
-                            color=alt.Color("variant_type:N", title="Variant type"),
-                            opacity=alt.condition(_nasym_sel, alt.value(1.0), alt.value(0.4)),
-                            size=alt.condition(_nasym_sel, alt.value(150), alt.value(50)),
-                            tooltip=[
-                                "sample_id", "chrom", "pos", "alt_allele", "variant_type",
-                                alt.Tooltip("vaf:Q", format=".4f"),
-                                alt.Tooltip("mean_frac_n_before:Q", title="Mean frac N before", format=".4f"),
-                                alt.Tooltip("mean_frac_n_after:Q", title="Mean frac N after", format=".4f"),
-                                alt.Tooltip("mean_delta_n_frac:Q", title="Delta (after−before)", format=".4f"),
-                                alt.Tooltip("frac_reads_asymmetric:Q", title="Frac reads asymmetric", format=".3f"),
-                                alt.Tooltip("n_alt_reads:Q", title="Alt reads"),
-                            ],
-                        )
-                        .add_params(_nasym_sel)
-                        .properties(height=380, title="N-asymmetry scatter (upper-left = high downstream N)")
-                        .interactive()
-                    )
+                    # When the fast path is in use, alt_bases gives one row per
+                    # (sample, locus, alt, pipeline), so we merge per-pipeline.
+                    # The slow path collapses across pipelines via the alt_reads
+                    # GROUP BY, so we merge on the locus key only.
+                    _nasym_merge_keys = ["sample_id", "chrom", "pos", "alt_allele"]
+                    if _use_fast_nasym:
+                        _nasym_merge_keys.append("pipeline")
+                    _nasym_locus_select_extra = ", pipeline" if _use_fast_nasym else ""
 
-                    # ── Histogram of mean_delta_n_frac ─────────────────────
-                    _nasym_hist = (
-                        alt.Chart(_nasym_df)
-                        .mark_bar(opacity=0.8)
-                        .encode(
-                            x=alt.X(
-                                "mean_delta_n_frac:Q",
-                                bin=alt.Bin(maxbins=40),
-                                title="N-asymmetry score (mean frac N after − before)",
-                            ),
-                            y=alt.Y("count():Q", title="Loci"),
-                            tooltip=[
-                                alt.Tooltip("mean_delta_n_frac:Q", title="Score", format=".3f"),
-                                alt.Tooltip("count():Q", title="Loci"),
-                            ],
-                        )
-                        .properties(height=380, title="Distribution of N-asymmetry score")
-                    )
-
-                    _nasym_col_scatter, _nasym_col_hist = st.columns(2)
-                    with _nasym_col_scatter:
-                        _nasym_event = st.altair_chart(
-                            _nasym_diag + _nasym_scatter,
-                            on_select="rerun",
-                            key="nasym_scatter",
-                        )
-                    with _nasym_col_hist:
-                        st.altair_chart(_nasym_hist, use_container_width=True)
-
-                    # ── Ranked table + IGV ─────────────────────────────────
-                    st.subheader("Most N-asymmetric loci")
-                    _nasym_display = (
-                        _nasym_df
-                        .sort_values("mean_delta_n_frac", ascending=False)
-                        [["sample_id", "chrom", "pos", "alt_allele", "variant_type",
-                          "vaf", "alt_count", "total_depth", "n_alt_reads",
-                          "mean_frac_n_before", "mean_frac_n_after",
-                          "mean_delta_n_frac", "frac_reads_asymmetric"]]
-                        .reset_index(drop=True)
-                    )
-                    st.dataframe(_nasym_display, width="stretch", hide_index=True)
-
-                    # Build a WHERE fragment covering all loci in the ranked table.
-                    # Cache on the filter + threshold — this query rebuilds a huge
-                    # OR clause and re-scans table_expr on every rerun otherwise.
-                    _nasym_tbl_cache_key = (
-                        "nasym_table_df", where, _r_reads_filter, float(min_delta_n_frac)
-                    )
-                    if st.session_state.get("_nasym_tbl_cache_key") != _nasym_tbl_cache_key:
-                        _nasym_table_or = " OR ".join(
-                            f"(sample_id = '{_sql_str(r['sample_id'])}' AND chrom = '{_sql_str(r['chrom'])}' "
-                            f"AND pos = {int(r['pos'])} AND alt_allele = '{_sql_str(r['alt_allele'])}')"
-                            for _, r in _nasym_display.iterrows()
-                        )
-                        st.session_state["_nasym_tbl_cache_key"] = _nasym_tbl_cache_key
-                        st.session_state["_nasym_tbl_or_cache"] = _nasym_table_or
-                        st.session_state["_nasym_tbl_df_cache"] = con.execute(f"""
-                            SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+                    # Merge in VAF and variant_type — cached separately on the locus WHERE clause.
+                    _nasym_locus_cache_key = ("nasym_locus", where, _use_fast_nasym)
+                    if st.session_state.get("_nasym_locus_cache_key") != _nasym_locus_cache_key:
+                        st.session_state["_nasym_locus_cache_key"] = _nasym_locus_cache_key
+                        st.session_state["_nasym_locus_cache"] = con.execute(f"""
+                            SELECT sample_id, chrom, pos, alt_allele, variant_type{_nasym_locus_select_extra},
+                                   ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                                   alt_count, total_depth
                             FROM {table_expr}
-                            WHERE ({_nasym_table_or})
-                            ORDER BY chrom, pos
+                            WHERE {where}
                         """).df()
-                    _nasym_table_or = st.session_state["_nasym_tbl_or_cache"]
-                    _nasym_table_df = st.session_state["_nasym_tbl_df_cache"]
-                    igv_buttons(
-                        [f"({_nasym_table_or})"],
-                        _nasym_table_df,
-                        key="nasym_table_igv",
-                        use_global_filters=False,
+                    _nasym_locus = st.session_state["_nasym_locus_cache"]
+                    _nasym_df = _nasym_df.merge(
+                        _nasym_locus,
+                        on=_nasym_merge_keys,
+                        how="left",
                     )
+                    _nasym_df = _nasym_df.dropna(subset=["mean_delta_n_frac"])
 
-                    # ── IGV for scatter selection ──────────────────────────
-                    _nasym_pts = (_nasym_event.selection or {}).get("nasym_select", [])
-                    if _nasym_pts:
-                        _nasym_or = " OR ".join(
-                            f"(sample_id = '{_sql_str(p['sample_id'])}' AND chrom = '{_sql_str(p['chrom'])}' "
-                            f"AND pos = {int(p['pos'])} AND alt_allele = '{_sql_str(p['alt_allele'])}')"
-                            for p in _nasym_pts
-                            if all(k in p for k in ["sample_id", "chrom", "pos", "alt_allele"])
+                    # Apply the sidebar threshold filter.
+                    if min_delta_n_frac > 0.0:
+                        _nasym_df = _nasym_df[_nasym_df["mean_delta_n_frac"] >= min_delta_n_frac]
+
+                    if _nasym_df.empty:
+                        st.info(
+                            f"No loci with N-asymmetry score ≥ {min_delta_n_frac:.2f} under current filters. "
+                            "Try lowering the sidebar threshold."
                         )
-                        if _nasym_or:
-                            _nasym_sel_df = con.execute(f"""
+                    else:
+                        # ── Scatter: frac_n_before vs frac_n_after ─────────────
+                        _nasym_sel = alt.selection_point(
+                            name="nasym_select",
+                            fields=["sample_id", "chrom", "pos", "alt_allele"],
+                            on="click",
+                            toggle="event.shiftKey",
+                        )
+                        _nasym_diag_max = float(_nasym_df[["mean_frac_n_before", "mean_frac_n_after"]].max().max())
+                        _nasym_diag = (
+                            alt.Chart(
+                                pd.DataFrame({"x": [0.0, _nasym_diag_max], "y": [0.0, _nasym_diag_max]})
+                            )
+                            .mark_line(color="gray", strokeDash=[4, 4], opacity=0.5)
+                            .encode(x="x:Q", y="y:Q")
+                        )
+                        _nasym_scatter = (
+                            alt.Chart(_nasym_df)
+                            .mark_circle(size=50)
+                            .encode(
+                                x=alt.X(
+                                    "mean_frac_n_before:Q",
+                                    title="Mean frac N before alt",
+                                    scale=alt.Scale(zero=True),
+                                ),
+                                y=alt.Y(
+                                    "mean_frac_n_after:Q",
+                                    title="Mean frac N after alt",
+                                    scale=alt.Scale(zero=True),
+                                ),
+                                color=alt.Color("variant_type:N", title="Variant type"),
+                                opacity=alt.condition(_nasym_sel, alt.value(1.0), alt.value(0.4)),
+                                size=alt.condition(_nasym_sel, alt.value(150), alt.value(50)),
+                                tooltip=[
+                                    "sample_id", "chrom", "pos", "alt_allele", "variant_type",
+                                    alt.Tooltip("vaf:Q", format=".4f"),
+                                    alt.Tooltip("mean_frac_n_before:Q", title="Mean frac N before", format=".4f"),
+                                    alt.Tooltip("mean_frac_n_after:Q", title="Mean frac N after", format=".4f"),
+                                    alt.Tooltip("mean_delta_n_frac:Q", title="Delta (after−before)", format=".4f"),
+                                    alt.Tooltip("frac_reads_asymmetric:Q", title="Frac reads asymmetric", format=".3f"),
+                                    alt.Tooltip("n_alt_reads:Q", title="Alt reads"),
+                                ],
+                            )
+                            .add_params(_nasym_sel)
+                            .properties(height=380, title="N-asymmetry scatter (upper-left = high downstream N)")
+                            .interactive()
+                        )
+
+                        # ── Histogram of mean_delta_n_frac ─────────────────────
+                        _nasym_hist = (
+                            alt.Chart(_nasym_df)
+                            .mark_bar(opacity=0.8)
+                            .encode(
+                                x=alt.X(
+                                    "mean_delta_n_frac:Q",
+                                    bin=alt.Bin(maxbins=40),
+                                    title="N-asymmetry score (mean frac N after − before)",
+                                ),
+                                y=alt.Y("count():Q", title="Loci"),
+                                tooltip=[
+                                    alt.Tooltip("mean_delta_n_frac:Q", title="Score", format=".3f"),
+                                    alt.Tooltip("count():Q", title="Loci"),
+                                ],
+                            )
+                            .properties(height=380, title="Distribution of N-asymmetry score")
+                        )
+
+                        _nasym_col_scatter, _nasym_col_hist = st.columns(2)
+                        with _nasym_col_scatter:
+                            _nasym_event = st.altair_chart(
+                                _nasym_diag + _nasym_scatter,
+                                on_select="rerun",
+                                key="nasym_scatter",
+                            )
+                        with _nasym_col_hist:
+                            st.altair_chart(_nasym_hist, use_container_width=True)
+
+                        # ── Ranked table + IGV ─────────────────────────────────
+                        st.subheader("Most N-asymmetric loci")
+                        _nasym_display = (
+                            _nasym_df
+                            .sort_values("mean_delta_n_frac", ascending=False)
+                            [["sample_id", "chrom", "pos", "alt_allele", "variant_type",
+                              "vaf", "alt_count", "total_depth", "n_alt_reads",
+                              "mean_frac_n_before", "mean_frac_n_after",
+                              "mean_delta_n_frac", "frac_reads_asymmetric"]]
+                            .reset_index(drop=True)
+                        )
+                        st.dataframe(_nasym_display, width="stretch", hide_index=True)
+
+                        # Build a WHERE fragment covering all loci in the ranked table.
+                        # Cache on the filter + threshold — this query rebuilds a huge
+                        # OR clause and re-scans table_expr on every rerun otherwise.
+                        _nasym_tbl_cache_key = (
+                            "nasym_table_df", where, _r_reads_filter, float(min_delta_n_frac)
+                        )
+                        if (
+                            st.session_state.get("_nasym_tbl_cache_key") != _nasym_tbl_cache_key
+                            or "_nasym_tbl_df_cache" not in st.session_state
+                        ):
+                            _nasym_table_or = " OR ".join(
+                                f"(sample_id = '{_sql_str(r['sample_id'])}' AND chrom = '{_sql_str(r['chrom'])}' "
+                                f"AND pos = {int(r['pos'])} AND alt_allele = '{_sql_str(r['alt_allele'])}')"
+                                for _, r in _nasym_display.iterrows()
+                            )
+                            st.session_state["_nasym_tbl_cache_key"] = _nasym_tbl_cache_key
+                            st.session_state["_nasym_tbl_or_cache"] = _nasym_table_or
+                            st.session_state["_nasym_tbl_df_cache"] = con.execute(f"""
                                 SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
                                 FROM {table_expr}
-                                WHERE ({_nasym_or})
+                                WHERE ({_nasym_table_or})
+                                ORDER BY chrom, pos
                             """).df()
-                            st.caption(
-                                f"{len(_nasym_pts)} loci selected in scatter — shift-click to add more."
-                            )
-                            igv_buttons(
-                                [f"({_nasym_or})"],
-                                _nasym_sel_df,
-                                key=f"nasym_scatter_{'_'.join(str(int(p['pos'])) for p in _nasym_pts[:5] if 'pos' in p)}",
-                                use_global_filters=False,
-                            )
-                    else:
-                        st.caption(
-                            "Click a point in the scatter to load just those loci in IGV. "
-                            "Shift-click to select multiple."
+                        _nasym_table_or = st.session_state["_nasym_tbl_or_cache"]
+                        _nasym_table_df = st.session_state["_nasym_tbl_df_cache"]
+                        igv_buttons(
+                            [f"({_nasym_table_or})"],
+                            _nasym_table_df,
+                            key="nasym_table_igv",
+                            use_global_filters=False,
                         )
+
+                        # ── IGV for scatter selection ──────────────────────────
+                        _nasym_pts = (_nasym_event.selection or {}).get("nasym_select", [])
+                        if _nasym_pts:
+                            _nasym_or = " OR ".join(
+                                f"(sample_id = '{_sql_str(p['sample_id'])}' AND chrom = '{_sql_str(p['chrom'])}' "
+                                f"AND pos = {int(p['pos'])} AND alt_allele = '{_sql_str(p['alt_allele'])}')"
+                                for p in _nasym_pts
+                                if all(k in p for k in ["sample_id", "chrom", "pos", "alt_allele"])
+                            )
+                            if _nasym_or:
+                                _nasym_sel_df = con.execute(f"""
+                                    SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+                                    FROM {table_expr}
+                                    WHERE ({_nasym_or})
+                                """).df()
+                                st.caption(
+                                    f"{len(_nasym_pts)} loci selected in scatter — shift-click to add more."
+                                )
+                                igv_buttons(
+                                    [f"({_nasym_or})"],
+                                    _nasym_sel_df,
+                                    key=f"nasym_scatter_{'_'.join(str(int(p['pos'])) for p in _nasym_pts[:5] if 'pos' in p)}",
+                                    use_global_filters=False,
+                                )
+                        else:
+                            st.caption(
+                                "Click a point in the scatter to load just those loci in IGV. "
+                                "Shift-click to select multiple."
+                            )
 
         # ── Row 4: Insert size distribution ───────────────────────────────────
         if "_cached_has_insert_size" not in st.session_state:
@@ -5568,49 +6088,53 @@ with tab_pipeline:
             _pc_cache_key = ("pc_df", _pc_wa, _pc_wb)
             if st.session_state.get("_pc_cache_key") != _pc_cache_key:
                 st.session_state["_pc_cache_key"] = _pc_cache_key
-                st.session_state["_pc_df_cache"] = con.execute(f"""
-                    WITH a AS (
-                        SELECT sample_id, chrom, pos, alt_allele, variant_type,
-                               ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                               total_depth, alt_count,
-                               trinuc_context, ref_allele
-                        FROM {table_expr}
-                        WHERE {_pc_wa}
-                    ),
-                    b AS (
-                        SELECT sample_id, chrom, pos, alt_allele, variant_type,
-                               ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                               total_depth, alt_count,
-                               trinuc_context, ref_allele
-                        FROM {table_expr}
-                        WHERE {_pc_wb}
-                    )
-                    SELECT
-                        COALESCE(a.sample_id,    b.sample_id)    AS sample_id,
-                        COALESCE(a.chrom,        b.chrom)        AS chrom,
-                        COALESCE(a.pos,          b.pos)          AS pos,
-                        COALESCE(a.alt_allele,   b.alt_allele)   AS alt_allele,
-                        COALESCE(a.variant_type, b.variant_type) AS variant_type,
-                        a.vaf         AS vaf_a,
-                        b.vaf         AS vaf_b,
-                        a.total_depth AS depth_a,
-                        b.total_depth AS depth_b,
-                        a.alt_count   AS alt_count_a,
-                        b.alt_count   AS alt_count_b,
-                        COALESCE(a.trinuc_context, b.trinuc_context) AS trinuc_context,
-                        COALESCE(a.ref_allele, b.ref_allele) AS ref_allele,
-                        CASE
-                            WHEN a.chrom IS NOT NULL AND b.chrom IS NOT NULL THEN 'shared'
-                            WHEN a.chrom IS NOT NULL                         THEN 'only_a'
-                            ELSE                                                  'only_b'
-                        END AS concordance
-                    FROM a
-                    FULL OUTER JOIN b
-                        ON  a.sample_id  = b.sample_id
-                        AND a.chrom      = b.chrom
-                        AND a.pos        = b.pos
-                        AND a.alt_allele = b.alt_allele
-                """).df()
+                with _timed("pc_df FULL OUTER JOIN [cache miss]"):
+                    _pc_result = con.execute(f"""
+                        WITH a AS (
+                            SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                                   ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                                   total_depth, alt_count,
+                                   trinuc_context, ref_allele
+                            FROM {table_expr}
+                            WHERE {_pc_wa}
+                        ),
+                        b AS (
+                            SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                                   ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                                   total_depth, alt_count,
+                                   trinuc_context, ref_allele
+                            FROM {table_expr}
+                            WHERE {_pc_wb}
+                        )
+                        SELECT
+                            COALESCE(a.sample_id,    b.sample_id)    AS sample_id,
+                            COALESCE(a.chrom,        b.chrom)        AS chrom,
+                            COALESCE(a.pos,          b.pos)          AS pos,
+                            COALESCE(a.alt_allele,   b.alt_allele)   AS alt_allele,
+                            COALESCE(a.variant_type, b.variant_type) AS variant_type,
+                            a.vaf         AS vaf_a,
+                            b.vaf         AS vaf_b,
+                            a.total_depth AS depth_a,
+                            b.total_depth AS depth_b,
+                            a.alt_count   AS alt_count_a,
+                            b.alt_count   AS alt_count_b,
+                            COALESCE(a.trinuc_context, b.trinuc_context) AS trinuc_context,
+                            COALESCE(a.ref_allele, b.ref_allele) AS ref_allele,
+                            CASE
+                                WHEN a.chrom IS NOT NULL AND b.chrom IS NOT NULL THEN 'shared'
+                                WHEN a.chrom IS NOT NULL                         THEN 'only_a'
+                                ELSE                                                  'only_b'
+                            END AS concordance
+                        FROM a
+                        FULL OUTER JOIN b
+                            ON  a.sample_id  = b.sample_id
+                            AND a.chrom      = b.chrom
+                            AND a.pos        = b.pos
+                            AND a.alt_allele = b.alt_allele
+                    """).df()
+                st.session_state["_pc_df_cache"] = _pc_result
+            else:
+                _TIMINGS.append(("pc_df [cache hit]", 0.0))
             _pc_df = st.session_state["_pc_df_cache"]
 
             if _pc_df.empty:
@@ -6157,52 +6681,56 @@ with tab_read_type:
             _rt_cache_key = ("rt_df", _rt_wa, _rt_wb)
             if st.session_state.get("_rt_cache_key") != _rt_cache_key:
                 st.session_state["_rt_cache_key"] = _rt_cache_key
-                st.session_state["_rt_df_cache"] = con.execute(f"""
-                    WITH a AS (
-                        SELECT sample_id, chrom, pos, alt_allele, variant_type,
-                               ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                               total_depth,
-                               fwd_alt_count, rev_alt_count,
-                               trinuc_context, ref_allele
-                        FROM {table_expr}
-                        WHERE {_rt_wa}
-                    ),
-                    b AS (
-                        SELECT sample_id, chrom, pos, alt_allele, variant_type,
-                               ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                               total_depth,
-                               fwd_alt_count, rev_alt_count
-                        FROM {table_expr}
-                        WHERE {_rt_wb}
-                    )
-                    SELECT
-                        COALESCE(a.sample_id,    b.sample_id)    AS sample_id,
-                        COALESCE(a.chrom,        b.chrom)        AS chrom,
-                        COALESCE(a.pos,          b.pos)          AS pos,
-                        COALESCE(a.alt_allele,   b.alt_allele)   AS alt_allele,
-                        COALESCE(a.variant_type, b.variant_type) AS variant_type,
-                        a.vaf            AS vaf_a,
-                        b.vaf            AS vaf_b,
-                        a.total_depth    AS depth_a,
-                        b.total_depth    AS depth_b,
-                        a.fwd_alt_count  AS fwd_alt_a,
-                        a.rev_alt_count  AS rev_alt_a,
-                        b.fwd_alt_count  AS fwd_alt_b,
-                        b.rev_alt_count  AS rev_alt_b,
-                        a.trinuc_context,
-                        a.ref_allele,
-                        CASE
-                            WHEN a.chrom IS NOT NULL AND b.chrom IS NOT NULL THEN 'shared'
-                            WHEN a.chrom IS NOT NULL                         THEN 'only_a'
-                            ELSE                                                  'only_b'
-                        END AS concordance
-                    FROM a
-                    FULL OUTER JOIN b
-                        ON  a.sample_id  = b.sample_id
-                        AND a.chrom      = b.chrom
-                        AND a.pos        = b.pos
-                        AND a.alt_allele = b.alt_allele
-                """).df()
+                with _timed("rt_df FULL OUTER JOIN [cache miss]"):
+                    _rt_result = con.execute(f"""
+                        WITH a AS (
+                            SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                                   ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                                   total_depth,
+                                   fwd_alt_count, rev_alt_count,
+                                   trinuc_context, ref_allele
+                            FROM {table_expr}
+                            WHERE {_rt_wa}
+                        ),
+                        b AS (
+                            SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                                   ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                                   total_depth,
+                                   fwd_alt_count, rev_alt_count
+                            FROM {table_expr}
+                            WHERE {_rt_wb}
+                        )
+                        SELECT
+                            COALESCE(a.sample_id,    b.sample_id)    AS sample_id,
+                            COALESCE(a.chrom,        b.chrom)        AS chrom,
+                            COALESCE(a.pos,          b.pos)          AS pos,
+                            COALESCE(a.alt_allele,   b.alt_allele)   AS alt_allele,
+                            COALESCE(a.variant_type, b.variant_type) AS variant_type,
+                            a.vaf            AS vaf_a,
+                            b.vaf            AS vaf_b,
+                            a.total_depth    AS depth_a,
+                            b.total_depth    AS depth_b,
+                            a.fwd_alt_count  AS fwd_alt_a,
+                            a.rev_alt_count  AS rev_alt_a,
+                            b.fwd_alt_count  AS fwd_alt_b,
+                            b.rev_alt_count  AS rev_alt_b,
+                            a.trinuc_context,
+                            a.ref_allele,
+                            CASE
+                                WHEN a.chrom IS NOT NULL AND b.chrom IS NOT NULL THEN 'shared'
+                                WHEN a.chrom IS NOT NULL                         THEN 'only_a'
+                                ELSE                                                  'only_b'
+                            END AS concordance
+                        FROM a
+                        FULL OUTER JOIN b
+                            ON  a.sample_id  = b.sample_id
+                            AND a.chrom      = b.chrom
+                            AND a.pos        = b.pos
+                            AND a.alt_allele = b.alt_allele
+                    """).df()
+                st.session_state["_rt_df_cache"] = _rt_result
+            else:
+                _TIMINGS.append(("rt_df [cache hit]", 0.0))
             _rt_df = st.session_state["_rt_df_cache"]
 
             if _rt_df.empty:
@@ -6638,3 +7166,20 @@ with tab_ai:
                     st.error("The generated code raised an error:")
                     st.code(traceback.format_exc(), language="text")
                     st.caption("Try rephrasing your request or click Generate again.")
+
+# ── Query timing debug panel ───────────────────────────────────────────────────
+# Write into the placeholder reserved directly below the checkbox so the table
+# is always visible without scrolling the sidebar.
+if _debug_mode and _TIMINGS:
+    _timing_df = pd.DataFrame(_TIMINGS, columns=["query", "ms"])
+    _timing_df = _timing_df.sort_values("ms", ascending=False).reset_index(drop=True)
+    _total_ms = _timing_df["ms"].sum()
+    with _timing_placeholder.container():
+        st.caption(f"**Query timings — {_total_ms:,.0f} ms instrumented**")
+        st.dataframe(
+            _timing_df.style.format({"ms": "{:.1f}"}).bar(subset=["ms"], color="#f58518"),
+            hide_index=True,
+            use_container_width=True,
+        )
+else:
+    _timing_placeholder.empty()

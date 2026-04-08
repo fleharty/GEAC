@@ -1,10 +1,13 @@
 #![deny(unsafe_code)]
+#![deny(unsafe_code)]
 mod bam;
 mod cli;
 mod cohort;
 mod coverage;
+mod export_loci;
 mod gene_annotations;
 mod gnomad;
+mod locus_depth;
 mod merge;
 mod normal;
 mod pon;
@@ -132,6 +135,57 @@ fn main() -> Result<()> {
                 writer::parquet_reads::write_parquet(&read_records, reads_path)?;
             }
 
+            if args.emit_ref_sites {
+                let ti = target_intervals.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("--emit-ref-sites requires --targets")
+                })?;
+
+                let stem = locus_output
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("output");
+                let parent = locus_output
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."));
+                // Strip a trailing ".locus" so both output modes yield the same stem.
+                let base_stem = stem.strip_suffix(".locus").unwrap_or(stem);
+                let ref_bases_path = parent.join(format!("{base_stem}.ref_bases.parquet"));
+                let ref_reads_path = parent.join(format!("{base_stem}.ref_reads.parquet"));
+
+                let alt_positions: std::collections::HashSet<(String, i64)> = records
+                    .iter()
+                    .map(|r| (r.chrom.clone(), r.pos))
+                    .collect();
+
+                info!(
+                    n_alt_positions = alt_positions.len(),
+                    ref_bases_output = %ref_bases_path.display(),
+                    "collecting ref-site records"
+                );
+
+                let (ref_base_records, ref_read_records) = bam::collect_ref_bases(
+                    &args,
+                    &alt_positions,
+                    ti,
+                    gene_annots.as_ref(),
+                    gnomad_index.as_mut(),
+                )?;
+
+                info!(
+                    n_records = ref_base_records.len(),
+                    output = %ref_bases_path.display(),
+                    "writing ref bases Parquet"
+                );
+                writer::parquet_ref::write_parquet(&ref_base_records, &ref_bases_path)?;
+
+                info!(
+                    n_records = ref_read_records.len(),
+                    output = %ref_reads_path.display(),
+                    "writing ref reads Parquet"
+                );
+                writer::parquet_ref_reads::write_parquet(&ref_read_records, &ref_reads_path)?;
+            }
+
             info!("done");
         }
 
@@ -176,6 +230,31 @@ fn main() -> Result<()> {
             info!(n_records = records.len(), output = %args.output.display(), "writing normal evidence Parquet");
             writer::parquet_normal::write_parquet(&records, &args.output)?;
 
+            info!("done");
+        }
+
+        Command::ExportLoci(args) => {
+            info!(
+                input  = %args.input.display(),
+                output = %args.output.display(),
+                min_vaf = args.min_vaf,
+                "exporting loci"
+            );
+            export_loci::export_loci(&args)?;
+            info!("done");
+        }
+
+        Command::LocusDepth(args) => {
+            info!(
+                input  = %args.input.display(),
+                loci   = %args.loci.display(),
+                output = %args.output.display(),
+                sample_id = %args.sample_id.as_deref().unwrap_or("<from SM tag>"),
+                "collecting locus depth"
+            );
+            let records = locus_depth::collect_locus_depth(&args)?;
+            info!(n_records = records.len(), output = %args.output.display(), "writing locus depth Parquet");
+            writer::parquet_locus_depth::write_parquet(&records, &args.output)?;
             info!("done");
         }
 

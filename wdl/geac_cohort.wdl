@@ -9,41 +9,60 @@ version 1.0
 ## bam / bai columns, plus optional per-sample variant TSV files.
 ##
 ## Inputs (per-sample, parallel arrays — lengths must match):
-##   input_bams            - BAM or CRAM files
-##   input_bam_indices     - Corresponding .bai / .crai indices
-##   sample_ids            - (optional) override sample IDs; defaults to SM tag per BAM
-##   variants_tsvs         - (optional) per-sample variant TSV files
-##   vcfs                  - (optional) per-sample VCF/BCF files for variant annotation
-##   vcf_indices           - (optional) per-sample .tbi / .csi indices; required when vcfs provided
+##   input_bams              - BAM or CRAM files (localized by Cromwell for geac collect)
+##   input_bam_indices       - Corresponding .bai / .crai indices
+##   input_bam_gs_paths      - (optional) GCS paths for the same BAMs as plain strings.
+##                             Required when emit_ref_sites = true or collect_locus_depth = true.
+##                             Declared as String so Cromwell does NOT localize the full BAM —
+##                             htslib fetches only the target positions via HTTP range requests.
+##                             Must be the same length and order as input_bams.
+##   sample_ids              - (optional) override sample IDs; defaults to SM tag per BAM
+##   variants_tsvs           - (optional) per-sample variant TSV files
+##   vcfs                    - (optional) per-sample VCF/BCF files for variant annotation
+##   vcf_indices             - (optional) per-sample .tbi / .csi indices; required when vcfs provided
 ##
 ## Inputs (shared across all samples):
-##   reference_fasta       - Reference FASTA
-##   reference_fasta_index - Corresponding .fai index
-##   read_types            - (optional) per-sample array of duplex|simplex|raw; defaults to "duplex" for all
-##   pipelines             - (optional) per-sample array of fgbio|dragen|raw; defaults to "fgbio" for all
-##   batches               - (optional) per-sample batch/group label stored as a column in each Parquet
-##   labels1               - (optional) per-sample free-text label 1 (e.g. tissue type)
-##   labels2               - (optional) per-sample free-text label 2 (e.g. library prep method)
-##   labels3               - (optional) per-sample free-text label 3 (e.g. sequencer type)
-##   gnomad                - (optional) bgzip+tabix-indexed gnomAD VCF/BCF for AF annotation
-##   gnomad_index          - (optional) Corresponding .tbi / .csi index
-##   gnomad_af_field       - INFO field to use as allele frequency (default "AF")
-##   targets               - (optional) BED or Picard interval list
-##   gene_annotations      - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
-##   region                - (optional) restrict all samples to a genomic region
-##   repeat_window         - bases each side of locus for homopolymer/STR scan (default 10)
-##   include_duplicates    - include PCR/optical duplicate reads (FLAG 0x400); default false
-##   include_secondary     - include secondary alignments (FLAG 0x100); default false
-##   include_supplementary - include supplementary alignments (FLAG 0x800); default false
-##   reads_output          - also write per-read detail Parquets and merge into alt_reads table (default false)
-##   input_checksum_sha256 - compute SHA-256 for each input BAM/CRAM during collect and store it in output Parquet provenance columns (default false)
-##   cohort_name           - Base name for the output DuckDB file (default: cohort)
-##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
+##   reference_fasta         - Reference FASTA
+##   reference_fasta_index   - Corresponding .fai index
+##   read_types              - (optional) per-sample array of duplex|simplex|raw; defaults to "duplex" for all
+##   pipelines               - (optional) per-sample array of fgbio|dragen|raw; defaults to "fgbio" for all
+##   batches                 - (optional) per-sample batch/group label stored as a column in each Parquet
+##   labels1                 - (optional) per-sample free-text label 1 (e.g. tissue type)
+##   labels2                 - (optional) per-sample free-text label 2 (e.g. library prep method)
+##   labels3                 - (optional) per-sample free-text label 3 (e.g. sequencer type)
+##   gnomad                  - (optional) bgzip+tabix-indexed gnomAD VCF/BCF for AF annotation
+##   gnomad_index            - (optional) Corresponding .tbi / .csi index
+##   gnomad_af_field         - INFO field to use as allele frequency (default "AF")
+##   targets                 - (optional) BED or Picard interval list
+##   gene_annotations        - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
+##   region                  - (optional) restrict all samples to a genomic region
+##   repeat_window           - bases each side of locus for homopolymer/STR scan (default 10)
+##   include_duplicates      - include PCR/optical duplicate reads (FLAG 0x400); default false
+##   include_secondary       - include secondary alignments (FLAG 0x100); default false
+##   include_supplementary   - include supplementary alignments (FLAG 0x800); default false
+##   reads_output            - also write per-read detail Parquets and merge into alt_reads table (default false)
+##   input_checksum_sha256   - compute SHA-256 for each input BAM/CRAM during collect (default false)
+##   cohort_name             - Base name for the output DuckDB file (default: cohort)
+##   docker_image            - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
+##
+## Second-pass inputs (optional; require input_bam_gs_paths):
+##   emit_ref_sites          - Re-run geac collect with --emit-ref-sites at hom-alt loci to
+##                             produce ref_bases + ref_reads tables for bait-bias analysis (default false)
+##   collect_locus_depth     - Lightweight depth-only second pass via geac locus-depth (default false)
+##   second_pass_min_vaf     - Min VAF for loci exported in the second pass (default 0.9 = hom-alt)
+##   second_pass_max_vaf     - (optional) Max VAF for loci to export
+##   second_pass_variant_types - (optional) Comma-separated variant types, e.g. "insertion,deletion"
+##   second_pass_min_samples - Locus must appear in ≥N samples to be exported (default 1)
 ##
 ## Outputs:
-##   locus_parquets        - Per-sample locus Parquet files from geac collect
-##   reads_parquets        - Per-sample reads Parquet files (empty when reads_output=false)
-##   cohort_db             - Merged cohort DuckDB from geac merge
+##   locus_parquets          - Per-sample locus Parquet files from geac collect
+##   reads_parquets          - Per-sample reads Parquet files (empty when reads_output=false)
+##   cohort_db               - Merged cohort DuckDB from geac merge
+##   exported_loci_tsv       - TSV of exported loci (present when a second pass is enabled)
+##   ref_sites_parquets      - Per-sample ref_bases+ref_reads Parquets (present when emit_ref_sites=true)
+##   cohort_db_with_ref_sites - Final DuckDB with ref_bases/ref_reads tables (present when emit_ref_sites=true)
+##   locus_depth_parquets    - Per-sample locus-depth Parquets (present when collect_locus_depth=true)
+##   cohort_db_with_locus_depth - DuckDB with locus_depth table (present when collect_locus_depth=true)
 
 workflow GeacCohort {
 
@@ -51,10 +70,11 @@ workflow GeacCohort {
         # Per-sample parallel arrays
         Array[File]    input_bams
         Array[File]    input_bam_indices
-        Array[String]? sample_ids       # optional; if provided must be same length as input_bams
-        Array[File]?   variants_tsvs    # optional; if provided must be same length as input_bams
-        Array[File]?   vcfs             # optional; if provided must be same length as input_bams
-        Array[File]?   vcf_indices      # optional; required when vcfs is provided
+        Array[String]? input_bam_gs_paths  # GCS paths as strings (no localization); required for collect_locus_depth
+        Array[String]? sample_ids          # optional; if provided must be same length as input_bams
+        Array[File]?   variants_tsvs       # optional; if provided must be same length as input_bams
+        Array[File]?   vcfs                # optional; if provided must be same length as input_bams
+        Array[File]?   vcf_indices         # optional; required when vcfs is provided
 
         # Shared inputs
         File   reference_fasta
@@ -86,13 +106,25 @@ workflow GeacCohort {
 
         String cohort_name = "cohort"
 
+        # Second-pass options (both require input_bam_gs_paths)
+        Boolean emit_ref_sites               = false   # full-metric re-collect (ref_bases + ref_reads)
+        Boolean collect_locus_depth          = false   # lightweight depth-only pass
+        Float   second_pass_min_vaf          = 0.9
+        Float?  second_pass_max_vaf
+        String? second_pass_variant_types    # comma-separated, e.g. "insertion,deletion"
+        Int     second_pass_min_samples      = 1
+
         # Resource settings
         String docker_image
-        Int    collect_memory_gb = 8
-        Int    collect_disk_gb   = 100
-        Int    merge_memory_gb   = 16
-        Int    merge_disk_gb     = 50
-        Int    preemptible       = 2
+        Int    collect_memory_gb       = 8
+        Int    collect_disk_gb         = 100
+        Int    merge_memory_gb         = 16
+        Int    merge_disk_gb           = 50
+        Int    ref_sites_memory_gb     = 8
+        Int    ref_sites_disk_gb       = 100
+        Int    locus_depth_memory_gb   = 4
+        Int    locus_depth_disk_gb     = 20
+        Int    preemptible             = 2
     }
 
     scatter (i in range(length(input_bams))) {
@@ -179,10 +211,163 @@ workflow GeacCohort {
             preemptible  = preemptible,
     }
 
+    # ── Optional second passes ──────────────────────────────────────────────────
+    # Both modes require input_bam_gs_paths so BAMs are accessed via HTTP range
+    # requests rather than being fully localized by Cromwell.
+    # A single ExportLoci call feeds both downstream paths when both are enabled.
+    if ((emit_ref_sites || collect_locus_depth) && defined(input_bam_gs_paths)) {
+
+        # Export high-VAF loci from the cohort database (shared by both second-pass modes).
+        call ExportLoci {
+            input:
+                cohort_db     = Merge.cohort_db,
+                cohort_name   = cohort_name,
+                min_vaf       = second_pass_min_vaf,
+                max_vaf       = second_pass_max_vaf,
+                variant_types = second_pass_variant_types,
+                min_samples   = second_pass_min_samples,
+                docker_image  = docker_image,
+                memory_gb     = merge_memory_gb,
+                disk_gb       = merge_disk_gb,
+                preemptible   = preemptible,
+        }
+
+        Array[String] bam_gs_paths_arr = select_first([input_bam_gs_paths])
+
+        # ── emit_ref_sites: full-metric re-collect (ref_bases + ref_reads) ────────
+        if (emit_ref_sites) {
+
+            # Convert the loci TSV (chrom/pos 0-based) to a BED file for --targets.
+            call LociToBed {
+                input:
+                    loci_tsv     = ExportLoci.loci_tsv,
+                    cohort_name  = cohort_name,
+                    docker_image = docker_image,
+                    memory_gb    = 2,
+                    disk_gb      = 10,
+                    preemptible  = preemptible,
+            }
+
+            scatter (i in range(length(input_bams))) {
+                if (defined(sample_ids)) {
+                    String this_rs_sample_id = select_first([sample_ids])[i]
+                }
+                String this_rs_read_type = if defined(read_types) then select_first([read_types])[i] else "duplex"
+                String this_rs_pipeline  = if defined(pipelines)  then select_first([pipelines])[i]  else "fgbio"
+                if (defined(batches)) {
+                    String this_rs_batch  = select_first([batches])[i]
+                }
+                if (defined(labels1)) {
+                    String this_rs_label1 = select_first([labels1])[i]
+                }
+                if (defined(labels2)) {
+                    String this_rs_label2 = select_first([labels2])[i]
+                }
+                if (defined(labels3)) {
+                    String this_rs_label3 = select_first([labels3])[i]
+                }
+
+                call CollectRefSites {
+                    input:
+                        input_bam             = bam_gs_paths_arr[i],
+                        input_bam_index       = input_bam_indices[i],
+                        reference_fasta       = reference_fasta,
+                        reference_fasta_index = reference_fasta_index,
+                        targets               = LociToBed.loci_bed,
+                        read_type             = this_rs_read_type,
+                        pipeline              = this_rs_pipeline,
+                        batch                 = this_rs_batch,
+                        label1                = this_rs_label1,
+                        label2                = this_rs_label2,
+                        label3                = this_rs_label3,
+                        sample_id             = this_rs_sample_id,
+                        gnomad                = gnomad,
+                        gnomad_index          = gnomad_index,
+                        gnomad_af_field       = gnomad_af_field,
+                        gene_annotations      = gene_annotations,
+                        repeat_window         = repeat_window,
+                        min_base_qual         = min_base_qual,
+                        min_map_qual          = min_map_qual,
+                        include_duplicates    = include_duplicates,
+                        include_secondary     = include_secondary,
+                        include_supplementary = include_supplementary,
+                        input_checksum_sha256 = input_checksum_sha256,
+                        docker_image          = docker_image,
+                        memory_gb             = ref_sites_memory_gb,
+                        disk_gb               = ref_sites_disk_gb,
+                        preemptible           = preemptible,
+                }
+            }
+
+            # Merge ref_bases and ref_reads Parquets into the cohort DuckDB.
+            call MergeRefSites {
+                input:
+                    cohort_db              = Merge.cohort_db,
+                    ref_bases_parquets     = flatten(CollectRefSites.ref_bases_parquets),
+                    ref_reads_parquets     = flatten(CollectRefSites.ref_reads_parquets),
+                    cohort_name            = cohort_name,
+                    docker_image           = docker_image,
+                    memory_gb              = merge_memory_gb,
+                    disk_gb                = merge_disk_gb,
+                    preemptible            = preemptible,
+            }
+        }
+
+        # ── collect_locus_depth: lightweight depth-only pass ──────────────────────
+        if (collect_locus_depth) {
+
+            scatter (i in range(length(input_bams))) {
+                if (defined(sample_ids)) {
+                    String this_ld_sample_id = select_first([sample_ids])[i]
+                }
+
+                call LocusDepth {
+                    input:
+                        input_bam             = bam_gs_paths_arr[i],
+                        input_bam_index       = input_bam_indices[i],
+                        reference_fasta       = reference_fasta,
+                        reference_fasta_index = reference_fasta_index,
+                        loci_tsv              = ExportLoci.loci_tsv,
+                        sample_id             = this_ld_sample_id,
+                        min_map_qual          = min_map_qual,
+                        min_base_qual         = min_base_qual,
+                        include_duplicates    = include_duplicates,
+                        include_secondary     = include_secondary,
+                        include_supplementary = include_supplementary,
+                        docker_image          = docker_image,
+                        memory_gb             = locus_depth_memory_gb,
+                        disk_gb               = locus_depth_disk_gb,
+                        preemptible           = preemptible,
+                }
+            }
+
+            call MergeLocusDepth {
+                input:
+                    cohort_db            = Merge.cohort_db,
+                    locus_depth_parquets = LocusDepth.locus_depth_parquet,
+                    cohort_name          = cohort_name,
+                    docker_image         = docker_image,
+                    memory_gb            = merge_memory_gb,
+                    disk_gb              = merge_disk_gb,
+                    preemptible          = preemptible,
+            }
+        }
+    }
+
     output {
         Array[File] locus_parquets = Collect.locus_parquet
         Array[File] reads_parquets = all_reads_parquets
         File        cohort_db      = Merge.cohort_db
+
+        # Shared second-pass output (present when either second-pass mode is enabled)
+        File?        exported_loci_tsv             = ExportLoci.loci_tsv
+
+        # Ref-sites outputs (present only when emit_ref_sites = true)
+        File?        cohort_db_with_ref_sites      = MergeRefSites.cohort_db
+
+        # Locus-depth outputs (present only when collect_locus_depth = true)
+        Array[File]? locus_depth_parquets          = LocusDepth.locus_depth_parquet
+        File?        cohort_db_with_locus_depth    = MergeLocusDepth.cohort_db
     }
 }
 
@@ -298,6 +483,302 @@ task Merge {
         geac merge \
             --output ~{output_db} \
             ~{sep=" " parquets}
+    >>>
+
+    output {
+        File cohort_db = output_db
+    }
+
+    runtime {
+        docker:      docker_image
+        memory:      memory_gb + " GB"
+        cpu:         2
+        disks:       "local-disk " + disk_gb + " HDD"
+        preemptible: preemptible
+    }
+}
+
+task ExportLoci {
+
+    input {
+        File    cohort_db
+        String  cohort_name
+        Float   min_vaf
+        Float?  max_vaf
+        String? variant_types
+        Int     min_samples
+
+        String docker_image
+        Int    memory_gb
+        Int    disk_gb
+        Int    preemptible
+    }
+
+    String output_tsv = cohort_name + ".loci.tsv"
+
+    command <<<
+        set -euo pipefail
+
+        geac export-loci \
+            --input       ~{cohort_db} \
+            --output      ~{output_tsv} \
+            --min-vaf     ~{min_vaf} \
+            --min-samples ~{min_samples} \
+            ~{"--max-vaf "         + max_vaf} \
+            ~{"--variant-types "   + variant_types}
+    >>>
+
+    output {
+        File loci_tsv = output_tsv
+    }
+
+    runtime {
+        docker:      docker_image
+        memory:      memory_gb + " GB"
+        cpu:         1
+        disks:       "local-disk " + disk_gb + " HDD"
+        preemptible: preemptible
+    }
+}
+
+task LociToBed {
+
+    input {
+        File   loci_tsv
+        String cohort_name
+
+        String docker_image
+        Int    memory_gb
+        Int    disk_gb
+        Int    preemptible
+    }
+
+    String output_bed = cohort_name + ".loci.bed"
+
+    command <<<
+        set -euo pipefail
+        # loci TSV has a header line (chrom\tpos, 0-based).
+        # BED format: chrom, start (0-based), end (exclusive) = pos + 1.
+        awk 'NR > 1 { print $1 "\t" $2 "\t" ($2 + 1) }' ~{loci_tsv} > ~{output_bed}
+    >>>
+
+    output {
+        File loci_bed = output_bed
+    }
+
+    runtime {
+        docker:      docker_image
+        memory:      memory_gb + " GB"
+        cpu:         1
+        disks:       "local-disk " + disk_gb + " HDD"
+        preemptible: preemptible
+    }
+}
+
+task CollectRefSites {
+
+    input {
+        # BAM declared as String (not File) so Cromwell does NOT localize the full BAM.
+        # htslib fetches only the target positions via HTTP range requests.
+        String input_bam
+        File   input_bam_index
+        File   reference_fasta
+        File   reference_fasta_index
+        File   targets              # BED of hom-alt loci from LociToBed
+        String read_type
+        String pipeline
+
+        String? sample_id
+        String? batch
+        String? label1
+        String? label2
+        String? label3
+        File?   gnomad
+        File?   gnomad_index
+        String  gnomad_af_field
+        File?   gene_annotations
+        Int     repeat_window
+
+        Int     min_base_qual
+        Int     min_map_qual
+        Boolean include_duplicates
+        Boolean include_secondary
+        Boolean include_supplementary
+        Boolean input_checksum_sha256
+
+        String docker_image
+        Int    memory_gb
+        Int    disk_gb
+        Int    preemptible
+    }
+
+    # Derive a stable stem from the BAM path basename.
+    String bam_stem   = sub(basename(input_bam), "\\.(bam|cram)$", "")
+    String output_arg = bam_stem + ".parquet"
+
+    command <<<
+        set -euo pipefail
+
+        geac collect \
+            --input            ~{input_bam} \
+            --reference        ~{reference_fasta} \
+            --output           ~{output_arg} \
+            --targets          ~{targets} \
+            --emit-ref-sites \
+            --read-type        ~{read_type} \
+            --pipeline         ~{pipeline} \
+            --min-base-qual    ~{min_base_qual} \
+            --min-map-qual     ~{min_map_qual} \
+            ~{"--sample-id "        + sample_id} \
+            ~{"--batch "            + batch} \
+            ~{"--label1 "           + label1} \
+            ~{"--label2 "           + label2} \
+            ~{"--label3 "           + label3} \
+            ~{"--gnomad "           + gnomad} \
+            ~{if defined(gnomad) then "--gnomad-af-field " + gnomad_af_field else ""} \
+            ~{"--gene-annotations " + gene_annotations} \
+            --repeat-window ~{repeat_window} \
+            ~{if include_duplicates    then "--include-duplicates"    else ""} \
+            ~{if include_secondary     then "--include-secondary"     else ""} \
+            ~{if include_supplementary then "--include-supplementary" else ""} \
+            ~{if input_checksum_sha256 then "--input-checksum-sha256" else ""}
+    >>>
+
+    output {
+        # geac collect --emit-ref-sites always writes both files alongside the locus parquet.
+        Array[File] ref_bases_parquets = glob("*.ref_bases.parquet")
+        Array[File] ref_reads_parquets = glob("*.ref_reads.parquet")
+    }
+
+    runtime {
+        docker:      docker_image
+        memory:      memory_gb + " GB"
+        cpu:         1
+        disks:       "local-disk " + disk_gb + " HDD"
+        preemptible: preemptible
+    }
+}
+
+task MergeRefSites {
+
+    input {
+        File        cohort_db
+        Array[File] ref_bases_parquets
+        Array[File] ref_reads_parquets
+        String      cohort_name
+
+        String docker_image
+        Int    memory_gb
+        Int    disk_gb
+        Int    preemptible
+    }
+
+    String output_db = cohort_name + ".with_ref_sites.duckdb"
+
+    command <<<
+        set -euo pipefail
+
+        geac merge \
+            --output ~{output_db} \
+            ~{cohort_db} \
+            ~{sep=" " ref_bases_parquets} \
+            ~{sep=" " ref_reads_parquets}
+    >>>
+
+    output {
+        File cohort_db = output_db
+    }
+
+    runtime {
+        docker:      docker_image
+        memory:      memory_gb + " GB"
+        cpu:         2
+        disks:       "local-disk " + disk_gb + " HDD"
+        preemptible: preemptible
+    }
+}
+
+task LocusDepth {
+
+    input {
+        # BAM declared as String (not File) so Cromwell does NOT localize the full BAM.
+        # htslib fetches only the loci it needs via HTTP range requests using the index.
+        String input_bam
+        File   input_bam_index
+        File   reference_fasta
+        File   reference_fasta_index
+        File   loci_tsv
+
+        String? sample_id
+
+        Int     min_map_qual
+        Int     min_base_qual
+        Boolean include_duplicates
+        Boolean include_secondary
+        Boolean include_supplementary
+
+        String docker_image
+        Int    memory_gb
+        Int    disk_gb
+        Int    preemptible
+    }
+
+    # Derive output name from the BAM path basename.
+    String bam_basename  = sub(basename(input_bam), "\\.(bam|cram)$", "")
+    String output_parquet = bam_basename + ".locus_depth.parquet"
+
+    command <<<
+        set -euo pipefail
+
+        geac locus-depth \
+            --input     ~{input_bam} \
+            --reference ~{reference_fasta} \
+            --loci      ~{loci_tsv} \
+            --output    ~{output_parquet} \
+            --min-map-qual  ~{min_map_qual} \
+            --min-base-qual ~{min_base_qual} \
+            ~{"--sample-id " + sample_id} \
+            ~{if include_duplicates    then "--include-duplicates"    else ""} \
+            ~{if include_secondary     then "--include-secondary"     else ""} \
+            ~{if include_supplementary then "--include-supplementary" else ""}
+    >>>
+
+    output {
+        File locus_depth_parquet = output_parquet
+    }
+
+    runtime {
+        docker:      docker_image
+        memory:      memory_gb + " GB"
+        cpu:         1
+        disks:       "local-disk " + disk_gb + " HDD"
+        preemptible: preemptible
+    }
+}
+
+task MergeLocusDepth {
+
+    input {
+        File        cohort_db
+        Array[File] locus_depth_parquets
+        String      cohort_name
+
+        String docker_image
+        Int    memory_gb
+        Int    disk_gb
+        Int    preemptible
+    }
+
+    # Output a new DuckDB that contains all existing tables plus locus_depth.
+    String output_db = cohort_name + ".with_locus_depth.duckdb"
+
+    command <<<
+        set -euo pipefail
+
+        geac merge \
+            --output ~{output_db} \
+            ~{cohort_db} \
+            ~{sep=" " locus_depth_parquets}
     >>>
 
     output {

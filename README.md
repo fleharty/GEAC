@@ -93,6 +93,7 @@ Optional flags:
 | `--region` | whole genome | Restrict to a genomic region (e.g. `chr1:1-1000000`) |
 | `--progress-interval` | 30 | Seconds between progress reports to stderr |
 | `--reads-output` | off | Also write per-read detail Parquet (see below) |
+| `--emit-ref-sites` | off | Also collect reference-site records for target positions with no alt reads. Requires `--targets`. Produces `{stem}.ref_bases.parquet` and `{stem}.ref_reads.parquet` (see below) |
 
 #### Per-read detail output (`--reads-output`)
 
@@ -114,6 +115,52 @@ reads (for example, alt calls followed by runs of `N`), or read-level phasing
 
 When `geac merge` is given a mix of `.locus.parquet` and `.reads.parquet` files, it routes
 them automatically: locus files → `alt_bases` table; reads files → `alt_reads` table.
+
+#### Reference-site output (`--emit-ref-sites`)
+
+When `--emit-ref-sites` is set (requires `--targets`), `geac collect` performs a second
+targeted pass over the `--targets` BED after the main pileup.  For every target position
+where this sample had **no alt reads**, it pileups the BAM and writes:
+
+- `{stem}.ref_bases.parquet` — one locus-level record per ref-only target position,
+  with the same depth / strand / overlap metrics as an `alt_bases` record
+- `{stem}.ref_reads.parquet` — one record per read covering the position, with family
+  size, cycle number, and base quality — the same granularity as the `alt_reads` table
+
+**Why this matters for bait-bias analysis:** the `alt_bases` table only records samples that
+carry an alt allele at a position.  Non-carrier samples are absent, so you cannot directly
+compare depth or family-size distributions between carriers and non-carriers from `alt_bases`
+alone.  With `--emit-ref-sites`, every sample reports its coverage at every hom-alt target
+position: carriers via `alt_bases`, non-carriers via `ref_bases`.  Joining the two tables on
+`(chrom, pos)` gives a complete picture across the cohort.
+
+**Typical workflow:**
+
+```bash
+# 1. Build the cohort DuckDB and identify hom-alt loci
+geac merge --output cohort.duckdb samples/*.parquet
+geac export-loci --input cohort.duckdb --output hom_alt_sites.tsv --min-vaf 0.9
+
+# 2. Run collect on every sample with the hom-alt site list as --targets
+for bam in samples/*.bam; do
+  stem=$(basename "$bam" .bam)
+  geac collect \
+    --input     "$bam" \
+    --reference hg38.fa \
+    --output    "${stem}.parquet" \
+    --targets   hom_alt_sites.bed \       # BED produced from hom_alt_sites.tsv
+    --emit-ref-sites \
+    --reads-output
+done
+
+# 3. Merge everything into the cohort DuckDB
+geac merge --output cohort_with_ref.duckdb cohort.duckdb \
+    *.ref_bases.parquet *.ref_reads.parquet
+```
+
+When `geac merge` is given a mix of `.ref_bases.parquet` and `.ref_reads.parquet` files
+alongside regular locus Parquets, it routes them automatically to the `ref_bases` and
+`ref_reads` DuckDB tables.
 
 #### Read types and pipelines
 
@@ -232,13 +279,17 @@ Creates a DuckDB database with:
 | `.normal_evidence.parquet` | `normal_evidence` — per-locus normal pileup evidence (from `geac annotate-normal`) |
 | `.pon_evidence.parquet` | `pon_evidence` — per-locus PoN hit counts and VAFs (from `geac annotate-pon`) |
 | `.coverage.parquet` | `coverage` — per-position coverage records (from `geac coverage`) |
+| `.coverage.intervals.parquet` | `coverage_intervals` — per-interval summary records (from `geac coverage --intervals-output`) |
+| `.locus_depth.parquet` | `locus_depth` — per-locus total depth from targeted re-pileup (from `geac locus-depth`) |
+| `.ref_bases.parquet` | `ref_bases` — reference-site locus records (from `geac collect --emit-ref-sites`) |
+| `.ref_reads.parquet` | `ref_reads` — reference-site per-read records (from `geac collect --emit-ref-sites`) |
 | anything else | `alt_bases` — standard locus records |
 
 Indices are created on each optional table for efficient joins back to `alt_bases`.
 
 **DuckDB files** (`.duckdb`) can be passed directly alongside or instead of Parquet files.
 Each known data table (`alt_bases`, `alt_reads`, `normal_evidence`, `pon_evidence`,
-`coverage`) is copied from the source database into the output.  Inputs can be freely mixed:
+`coverage`, `coverage_intervals`, `locus_depth`, `ref_bases`, `ref_reads`) is copied from the source database into the output.  Inputs can be freely mixed:
 
 ```bash
 # Combine two existing cohort databases
@@ -367,6 +418,90 @@ Key options:
 The output Parquet is routed to the `coverage` table by `geac merge` when its filename
 ends in `.coverage.parquet`.
 
+### Export Loci — extract a site list from a cohort DuckDB
+
+`geac export-loci` queries a cohort DuckDB (or single-sample Parquet) for distinct
+`(chrom, pos)` positions passing a VAF filter and writes them to a two-column TSV.
+The primary use case is generating the input for `geac locus-depth` (targeted re-pileup
+for bait-bias analysis), but the same site list is useful for any workflow that needs
+a compact representation of recurrent alt positions.
+
+```bash
+geac export-loci \
+  --input  cohort.duckdb \
+  --output hom_alt_sites.tsv \
+  --min-vaf 0.9
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--min-vaf` | `0.9` | Minimum VAF for a locus to be exported. The default captures homozygous-alt sites useful for bait-bias and contamination analysis. Other useful ranges: `0.01–0.1` for PoN normalization / error models; `0.4–0.6` for heterozygous / CNV / allelic-imbalance sites; `0.0` for all sites (position-specific error models) |
+| `--max-vaf` | — | Upper VAF bound (inclusive). Omit for no upper bound |
+| `--variant-types` | all | Comma-separated filter: `snv`, `insertion`, `deletion`. Example: `--variant-types insertion,deletion` |
+| `--min-samples` | `1` | Locus must appear in at least this many samples (useful for recurrent artefact sites) |
+
+Output format: two-column TSV (`chrom`, `pos`; 0-based positions), with a header row.
+
+### Locus Depth — targeted depth re-pileup at a fixed site list
+
+`geac locus-depth` takes the TSV from `geac export-loci` and pileups a BAM/CRAM at
+exactly those positions, recording total depth and strand breakdown per sample.
+This enables proper carrier vs. non-carrier depth comparison at the same loci —
+something that cannot be done from the `alt_bases` table alone (which only records
+samples that have alt reads at a given position).
+
+```bash
+geac locus-depth \
+  --input     SAMPLE.bam \
+  --reference hg38.fa \
+  --loci      hom_alt_sites.tsv \
+  --output    SAMPLE.locus_depth.parquet
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--loci` | required | TSV of loci to query, produced by `geac export-loci` |
+| `--sample-id` | SM tag | Override the sample identifier |
+| `--min-map-qual` | `0` | Minimum mapping quality to count a read |
+| `--min-base-qual` | `1` | Minimum base quality to count a base |
+| `--include-duplicates` | off | Count PCR/optical duplicate reads (FLAG 0x400) |
+| `--include-secondary` | off | Count secondary alignments (FLAG 0x100) |
+| `--include-supplementary` | off | Count supplementary alignments (FLAG 0x800) |
+| `--progress-interval` | `30` | Seconds between progress reports to stderr |
+
+Output naming convention: use `.locus_depth.parquet` so `geac merge` routes the file
+to the `locus_depth` table automatically.
+
+**Typical workflow:**
+
+```bash
+# 1. Build the cohort DuckDB as usual
+geac merge --output cohort.duckdb samples/*.parquet
+
+# 2. Export homozygous-alt loci (≥2 samples, VAF ≥ 0.9)
+geac export-loci \
+  --input cohort.duckdb \
+  --output hom_alt_sites.tsv \
+  --min-vaf 0.9 \
+  --min-samples 2
+
+# 3. Re-pileup every sample at those loci (scatter over samples)
+for bam in samples/*.bam; do
+  stem=$(basename "$bam" .bam)
+  geac locus-depth \
+    --input     "$bam" \
+    --reference hg38.fa \
+    --loci      hom_alt_sites.tsv \
+    --output    "${stem}.locus_depth.parquet"
+done
+
+# 4. Merge locus-depth Parquets into the existing DuckDB
+geac merge --output cohort.duckdb cohort.duckdb *.locus_depth.parquet
+```
+
+The resulting `locus_depth` table can then be joined to `alt_bases` in the Explorer to
+compare depth at carrier vs. non-carrier samples for bait-bias analysis.
+
 ### Query the cohort (DuckDB)
 
 You can query either a merged DuckDB or raw Parquet files directly.
@@ -415,16 +550,19 @@ streamlit run /path/to/GEAC/app/geac_explorer.py
 Then open `http://localhost:8501` in your browser.
 
 Features:
-- **Summary statistics** — alt records, samples, total alt bases, mean VAF, mean depth,
-  % variant called
 - **Sidebar filters** — chromosome, samples, variant type, VAF range, min alt count,
   variant called status, variant filter value (PASS / filter reason), min/max depth,
   on-target, gene name (partial match), homopolymer length, STR length;
   **Clear all filters** button resets all filters at once
-- **Data table** — sortable, all schema columns, IGV session download button
-- **Tabbed plots**
+- **Tabbed views** — tabs run across the top of the page; the first tab is always *Summary*
+  - *Summary* — summary stat cards (records, samples, total alt bases, mean VAF, mean depth,
+    % variant called); sortable data table with all schema columns; IGV session download;
+    click a row to open a per-locus position drill-down
   - *VAF distribution* — separate histograms for SNV, insertion, deletion; click a bar
-    to see matching records and download an IGV session
+    to see matching records and download an IGV session; depth ECDF by variant type,
+    depth box plots, and median depth vs VAF bin; **carrier vs. non-carrier depth and
+    family-size plots** (requires `ref_bases` / `ref_reads` tables from `--emit-ref-sites`;
+    shows info message with instructions when absent)
   - *Error spectrum* — SNV trinucleotide spectrum (SBS96) as a 3×2 grid of per-mutation-type
     panels with shared y-axis and fraction/count toggle; shift-click to select multiple
     contexts; drill-down table and IGV session. Optional COSMIC decomposition: provide a
@@ -441,14 +579,14 @@ Features:
   - *Strand bias* — forward vs. reverse alt reads scatter with 95% CI boundary lines;
     log1p or linear axis toggle; color by variant type, sample, on-target, or called status;
     click/shift-click to select points and view a drill-down table + IGV session
-  - *Overlap agreement* — histogram of overlap concordance fractions
   - *Cohort* (DuckDB only) — per-sample summary table; VAF distribution overlay; strand
     balance scatter; alt loci count vs mean base quality scatter (outlier detection); SNV
     count bar chart stacked by SBS6 substitution type; click a sample row to focus all
     other views
   - *Reads* (DuckDB only, requires `--reads-output`) — family size histogram; read position
     bias (cycle number); mean base quality by cycle; read-context N burden around
-    alt-supporting reads (trailing N runs, fraction N after alt, before-vs-after asymmetry);
+    alt-supporting reads (trailing N runs, fraction N after alt, before-vs-after asymmetry,
+    enabled via opt-in checkbox); N-asymmetry locus discovery table (opt-in checkbox);
     insert size distribution with gap-correction toggle; insert size by allele frequency
     class; family size vs VAF scatter; mapping quality distribution; cohort artefact
     family size comparison (boxplot of family size by cohort frequency); all plots support
@@ -596,6 +734,15 @@ Each file contains one row per alt allele observed at a locus.
 | `str_period` | int32? | Period of shortest tandem repeat unit at locus (null if no STR detected) |
 | `str_len` | int32? | Total length of STR tract at locus (null if no STR detected) |
 | `trinuc_context` | string? | Trinucleotide context for SNVs, e.g. `A[C>T]G` (null for indels/MNVs) |
+| `gnomad_af` | float32? | gnomAD allele frequency (null if not in gnomAD or `--gnomad` not provided) |
+| `label1` | string? | Free-text sample label 1 (null if `--label1` not provided) |
+| `label2` | string? | Free-text sample label 2 (null if `--label2` not provided) |
+| `label3` | string? | Free-text sample label 3 (null if `--label3` not provided) |
+| `n_alt_reads_with_n_ctx` | int32? | Number of alt-supporting reads with N-context data (null if `--reads-output` not used) |
+| `mean_frac_n_before` | float32? | Mean fraction of N bases before the alt position across alt-supporting reads |
+| `mean_frac_n_after` | float32? | Mean fraction of N bases after the alt position across alt-supporting reads |
+| `mean_delta_n_frac` | float32? | Mean difference (after − before N fraction) across alt-supporting reads |
+| `frac_reads_asymmetric` | float32? | Fraction of alt-supporting reads with strongly asymmetric N context (after > 0.5 and before < 0.1) |
 
 ### Reads table (`*.reads.parquet`)
 
@@ -647,6 +794,85 @@ Always includes a NULL-allele anchor row to record normal depth even when no alt
 For SNV positions, one NULL anchor row is always written (capturing `normal_depth`), plus
 one additional row for each non-reference base observed in the normal pileup.  For indel
 positions, only the NULL anchor row is written.
+
+### Reference-site locus table (`*.ref_bases.parquet`)
+
+Produced by `geac collect --emit-ref-sites`. One row per target position per sample where
+the sample had no alt reads at that position.
+
+| Column | Type | Description |
+|---|---|---|
+| `sample_id` | string | Sample identifier |
+| `chrom` | string | Chromosome |
+| `pos` | int64 | 0-based position |
+| `ref_allele` | string | Reference allele |
+| `total_depth` | int32 | Fragment depth at position |
+| `fwd_depth` | int32 | Forward strand fragment depth |
+| `rev_depth` | int32 | Reverse strand fragment depth |
+| `ref_count` | int32 | Fragments supporting the reference allele |
+| `fwd_ref_count` | int32 | Forward strand ref fragments |
+| `rev_ref_count` | int32 | Reverse strand ref fragments |
+| `overlap_depth` | int32 | Number of overlapping fragment pairs |
+| `overlap_ref_agree` | int32 | Overlapping pairs where both mates support the reference |
+| `read_type` | string | `raw` / `simplex` / `duplex` |
+| `pipeline` | string | `fgbio` / `dragen` / `raw` |
+| `batch` | string? | Batch label (null if `--batch` not provided) |
+| `label1` | string? | Free-text label 1 |
+| `label2` | string? | Free-text label 2 |
+| `label3` | string? | Free-text label 3 |
+| `on_target` | bool? | Whether locus overlaps a target region (always `true` for `--emit-ref-sites`) |
+| `gene` | string? | Gene name (null if no `--gene-annotations` provided) |
+| `homopolymer_len` | int32? | Longest homopolymer length within `--repeat-window` |
+| `str_period` | int32? | STR period (null if no STR detected) |
+| `str_len` | int32? | STR tract length (null if no STR detected) |
+| `gnomad_af` | float32? | gnomAD allele frequency (null if `--gnomad` not provided) |
+| `input_checksum_sha256` | string? | SHA-256 of the input BAM/CRAM (null if not requested) |
+
+### Reference-site reads table (`*.ref_reads.parquet`)
+
+Produced alongside `ref_bases.parquet` when `--emit-ref-sites` is set.
+One row per read (fragment) covering each ref-only target position, regardless of which
+allele the read supports.  Linked to `ref_bases` by `(sample_id, chrom, pos)`.
+
+Columns are identical to the `alt_reads` table except there is no `alt_allele` column
+(since these are reference-site reads, the "queried position" takes its role):
+
+| Column | Type | Description |
+|---|---|---|
+| `sample_id` | string | Sample identifier |
+| `chrom` | string | Chromosome |
+| `pos` | int64 | 0-based position |
+| `cycle` | int32 | 1-based sequencing cycle at the queried position |
+| `read_length` | int32 | Stored read length in bases |
+| `is_read1` | bool | `true` if R1 (BAM flag `0x40`) |
+| `ab_count` | int32? | fgbio `aD` tag (null if absent) |
+| `ba_count` | int32? | fgbio `bD` tag (null if absent) |
+| `family_size` | int32? | fgbio `cD` tag (null if absent) |
+| `base_qual` | int32 | Base quality at the queried position |
+| `map_qual` | int32 | Mapping quality of the read |
+| `insert_size` | int32? | SAM TLEN (null when 0) |
+| `n_before_alt` | int32 | Bases before the queried position in read sequence order |
+| `n_after_alt` | int32 | Bases after the queried position |
+| `n_n_before_alt` | int32 | N bases before the queried position |
+| `n_n_after_alt` | int32 | N bases after the queried position |
+| `leading_n_run_len` | int32 | Contiguous N run immediately before the queried position |
+| `trailing_n_run_len` | int32 | Contiguous N run immediately after the queried position |
+
+### Locus depth table (`*.locus_depth.parquet`)
+
+Produced by `geac locus-depth`. One row per sample per queried locus.
+
+| Column | Type | Description |
+|---|---|---|
+| `sample_id` | string | Sample identifier |
+| `chrom` | string | Chromosome |
+| `pos` | int64 | 0-based position |
+| `total_depth` | int32 | Total fragment depth passing quality filters |
+| `fwd_depth` | int32 | Fragments on the forward strand |
+| `rev_depth` | int32 | Fragments on the reverse strand |
+
+Loci with zero coverage (e.g. chromosome absent from the BAM index) are still emitted with
+`total_depth = 0` so the output set is exhaustive over the input loci TSV.
 
 ### PoN evidence table (`*.pon_evidence.parquet`)
 
@@ -701,7 +927,7 @@ docker run --rm \
 ### Cutting a release
 
 ```bash
-# 1. Bump version in Cargo.toml and VERSION
+# 1. Bump version in Cargo.toml
 # 2. Update GEAC_VERSION in app/explorer/schema.py
 # 3. Commit, push, then tag:
 git tag v0.X.Y && git push origin v0.X.Y
@@ -714,15 +940,17 @@ The GitHub Actions workflow will:
 
 ## WDL / Terra
 
-Three WDL 1.0 workflows are provided in `wdl/`:
+WDL 1.0 workflows are provided in `wdl/`:
 
-| Workflow | Purpose |
-|---|---|
-| `geac_collect.wdl` | Single-sample wrapper around `geac collect`; use this to scatter across a sample table |
-| `geac_cohort.wdl` | Full cohort workflow: scatters `geac collect` then gathers with `geac merge` |
-| `geac_merge.wdl` | Standalone merge — takes existing Parquets and builds a DuckDB |
-| `geac_annotate_normal.wdl` | Single-sample wrapper around `geac annotate-normal`; cross-checks tumor loci against a paired normal BAM |
-| `geac_annotate_pon.wdl` | Single-sample wrapper around `geac annotate-pon`; cross-checks tumor loci against a pre-built PoN DuckDB |
+| Workflow | Status | Purpose |
+|---|---|---|
+| `geac_cohort.wdl` | **Tested** | Full cohort workflow: scatters `geac collect` then gathers with `geac merge`; optional second pass — `emit_ref_sites = true` for bait-bias analysis (`ref_bases` + `ref_reads` tables via `--emit-ref-sites`), or `collect_locus_depth = true` for lightweight depth-only re-pileup |
+| `geac_coverage.wdl` | **Tested** | Full coverage workflow: scatters `geac coverage` then gathers with `geac merge` |
+| `geac_cohort_loci.wdl` | Untested | Runs `geac cohort` on a set of per-sample Parquets to identify recurrent alt-base loci |
+| `geac_collect.wdl` | Untested | Single-sample wrapper around `geac collect`; use this to scatter across a sample table |
+| `geac_merge.wdl` | Untested | Standalone merge — takes existing Parquets and builds a DuckDB |
+| `geac_annotate_normal.wdl` | Untested | Single-sample wrapper around `geac annotate-normal`; cross-checks tumor loci against a paired normal BAM |
+| `geac_annotate_pon.wdl` | Untested | Single-sample wrapper around `geac annotate-pon`; cross-checks tumor loci against a pre-built PoN DuckDB |
 
 ### `geac_collect.wdl` inputs
 
@@ -749,6 +977,12 @@ Three WDL 1.0 workflows are provided in `wdl/`:
 | `include_secondary` | Boolean | Count secondary alignments (default: false) |
 | `include_supplementary` | Boolean | Count supplementary alignments (default: false) |
 | `batch` | String? | Optional batch label stored in the output Parquet |
+| `label1` | String? | Free-text sample label 1 (e.g. tissue type) |
+| `label2` | String? | Free-text sample label 2 (e.g. library prep method) |
+| `label3` | String? | Free-text sample label 3 (e.g. sequencer type) |
+| `gnomad` | File? | bgzip+tabix gnomAD VCF/BCF for AF annotation |
+| `gnomad_index` | File? | `.tbi` or `.csi` index for the gnomAD file |
+| `gnomad_af_field` | String | INFO field to use as allele frequency (default: `AF`) |
 | `reads_output` | Boolean | Also write per-read detail Parquet (default: false) |
 | `threads` | Int | Default: 1 |
 | `memory_gb` | Int | Default: 8 |
@@ -760,13 +994,30 @@ Outputs: `locus_parquet` (File) — per-sample locus Parquet; `reads_parquets` (
 ### `geac_cohort.wdl` inputs
 
 Per-sample parallel arrays: `input_bams`, `input_bam_indices`, optional `sample_ids`,
-optional `variants_tsvs`, optional `vcfs` + `vcf_indices` (per-sample VCF annotation).
+optional `variants_tsvs`, optional `vcfs` + `vcf_indices` (per-sample VCF annotation),
+optional `read_types`, `pipelines`, `batches`, `labels1`, `labels2`, `labels3`.
 Shared inputs applied to all samples: `reference_fasta`, `targets`, `gene_annotations`,
-`region`, `repeat_window`, `read_type`, `pipeline`, `min_base_qual`, `min_map_qual`,
-`include_duplicates`, `include_secondary`, `include_supplementary`, `batches`
-(optional parallel array of per-sample batch labels), `threads`.
+`region`, `repeat_window`, `min_base_qual`, `min_map_qual`,
+`include_duplicates`, `include_secondary`, `include_supplementary`,
+`gnomad`, `gnomad_index`, `gnomad_af_field` (optional gnomAD AF annotation), `threads`.
 
-Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty when `reads_output=false`), and `cohort_db` (File, the merged DuckDB).
+**Optional second passes** — both require `input_bam_gs_paths` and an initial `geac merge` database:
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `emit_ref_sites` | Boolean | `false` | **Preferred.** Re-run `geac collect --emit-ref-sites` at exported loci to produce `ref_bases` + `ref_reads` tables for bait-bias analysis |
+| `collect_locus_depth` | Boolean | `false` | Lightweight depth-only pass via `geac locus-depth` |
+| `input_bam_gs_paths` | Array[String]? | — | GCS paths for the same BAMs as plain strings. Declared as `String` so Cromwell does **not** localize the full BAM — htslib fetches only the target positions via HTTP range requests. Required when either second-pass mode is enabled. |
+| `second_pass_min_vaf` | Float | `0.9` | Minimum VAF for `export-loci` (shared by both modes) |
+| `second_pass_max_vaf` | Float? | — | Maximum VAF for `export-loci` |
+| `second_pass_variant_types` | String? | — | Comma-separated variant types, e.g. `insertion,deletion` |
+| `second_pass_min_samples` | Int | `1` | Minimum samples a locus must appear in |
+| `ref_sites_memory_gb` | Int | `8` | Memory per `CollectRefSites` task |
+| `ref_sites_disk_gb` | Int | `100` | Disk per `CollectRefSites` task |
+| `locus_depth_memory_gb` | Int | `4` | Memory per `LocusDepth` task |
+| `locus_depth_disk_gb` | Int | `20` | Disk per `LocusDepth` task |
+
+Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty when `reads_output=false`), `cohort_db` (File, the merged DuckDB). When a second pass is enabled: `exported_loci_tsv` (File?). When `emit_ref_sites = true`: `cohort_db_with_ref_sites` (File?) — the final DuckDB with `ref_bases` and `ref_reads` tables for bait-bias analysis. When `collect_locus_depth = true`: `locus_depth_parquets` (Array[File]?), `cohort_db_with_locus_depth` (File?).
 
 ### `geac_merge.wdl` inputs
 
@@ -837,14 +1088,19 @@ geac collect  →  per-sample .locus.parquet  [+ .reads.parquet with --reads-out
                                  →  .pon_evidence.parquet
 
 geac merge  →  cohort .duckdb
-    alt_bases         (locus Parquets or existing .duckdb files)
-    samples           (one-row-per-sample summary, always rebuilt)
-    alt_reads         (.reads.parquet files, optional)
-    normal_evidence   (.normal_evidence.parquet files, optional)
-    pon_evidence      (.pon_evidence.parquet files, optional)
-    coverage          (.coverage.parquet files, optional)
+    alt_bases           (locus Parquets or existing .duckdb files)
+    samples             (one-row-per-sample summary, always rebuilt)
+    alt_reads           (.reads.parquet files, optional)
+    normal_evidence     (.normal_evidence.parquet files, optional)
+    pon_evidence        (.pon_evidence.parquet files, optional)
+    coverage            (.coverage.parquet files, optional)
+    coverage_intervals  (.coverage.intervals.parquet files, optional)
+    locus_depth         (.locus_depth.parquet files, optional)
 
     # inputs can be mixed: Parquet files, .duckdb files, or both
+
+geac export-loci  →  site list TSV  (from cohort .duckdb or single-sample Parquet)
+geac locus-depth  →  .locus_depth.parquet  (targeted re-pileup at exported loci)
 
 geac-cohort  →  interactive alt base / cohort browser
 geac-coverage-explorer  →  interactive coverage browser

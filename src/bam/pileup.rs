@@ -155,6 +155,10 @@ pub(super) fn read_context_metrics(bases: &[u8], qpos: usize) -> ReadContextMetr
 ///
 /// When `collect_reads` is true, `PileupResult.read_details` is populated with per-read
 /// detail for every non-ref, non-N base. When false, `read_details` is always empty.
+///
+/// When `collect_all_reads` is true (implies `collect_reads`), read details are collected
+/// for **every** non-N base including the reference base.  Used for ref-site pileup so
+/// that all reads covering a position are captured regardless of which allele they support.
 pub(super) fn tally_pileup(
     pileup: &rust_htslib::bam::pileup::Pileup,
     min_base_qual: u8,
@@ -164,7 +168,10 @@ pub(super) fn tally_pileup(
     include_supplementary: bool,
     ref_base: char,
     collect_reads: bool,
+    collect_all_reads: bool,
 ) -> PileupResult {
+    let do_collect = collect_reads || collect_all_reads;
+
     // First pass: collect LocusRead per query name.
     let mut by_qname: HashMap<Vec<u8>, Vec<LocusRead>> = HashMap::new();
 
@@ -201,7 +208,7 @@ pub(super) fn tally_pileup(
         let is_first_in_pair = record.flags() & 0x40 != 0;
         let map_qual = record.mapq();
         let read_len = record.seq_len();
-        let context = if collect_reads {
+        let context = if do_collect {
             let seq_bases = (0..read_len)
                 .map(|i| record.seq()[i].to_ascii_uppercase())
                 .collect::<Vec<_>>();
@@ -219,7 +226,7 @@ pub(super) fn tally_pileup(
         let (hc_leading, hc_trailing) = hard_clip_counts(&record);
         let hard_clip_before = if is_reverse { hc_trailing } else { hc_leading };
 
-        let (ab_count, ba_count, family_size, insert_size) = if collect_reads {
+        let (ab_count, ba_count, family_size, insert_size) = if do_collect {
             let ab = aux_i32(&record, b"aD");
             let ba = aux_i32(&record, b"bD");
             let fs = aux_i32(&record, b"cD");
@@ -269,7 +276,7 @@ pub(super) fn tally_pileup(
 
     macro_rules! push_detail {
         ($b:expr, $r:expr) => {
-            if collect_reads && $b != ref_base && $b != 'N' {
+            if do_collect && $b != 'N' && (collect_all_reads || $b != ref_base) {
                 read_details.entry($b).or_default().push(ReadDetail {
                     qpos: $r.qpos,
                     read_len: $r.read_len,

@@ -1,6 +1,7 @@
 mod builders;
 mod indel;
 mod pileup;
+mod ref_collect;
 mod ref_utils;
 
 use std::sync::atomic::Ordering;
@@ -26,6 +27,7 @@ use pileup::{locus_n_context_summary, tally_pileup, PileupResult};
 
 pub(crate) use ref_utils::RefCache;
 pub use ref_utils::{open_bam, read_group_sample_id};
+pub use ref_collect::collect_ref_bases;
 
 /// Process a BAM/CRAM file and return all alt base records (and optionally per-read detail records).
 ///
@@ -108,6 +110,7 @@ pub fn collect_alt_bases(
             args.include_supplementary,
             ref_base,
             collect_reads,
+            false,
         );
 
         progress.positions_processed.fetch_add(1, Ordering::Relaxed);
@@ -258,7 +261,7 @@ pub fn collect_alt_bases(
     Ok((records, read_records))
 }
 
-fn compute_input_sha256(path: &Path) -> Result<String> {
+pub(super) fn compute_input_sha256(path: &Path) -> Result<String> {
     let mut file = File::open(path)
         .with_context(|| format!("failed to open input for SHA-256: {}", path.display()))?;
     let mut hasher = Sha256::new();

@@ -37,6 +37,12 @@ pub enum Command {
 
     /// Compute per-position coverage metrics from a BAM/CRAM file
     Coverage(CoverageArgs),
+
+    /// Export a list of loci from a cohort DuckDB or Parquet for use with locus-depth
+    ExportLoci(ExportLociArgs),
+
+    /// Collect total depth at a fixed set of loci from a BAM/CRAM (for bait-bias and PoN analysis)
+    LocusDepth(LociDepthArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -139,6 +145,15 @@ pub struct CollectArgs {
     /// interval lists (1-based, end-inclusive); all others as BED (0-based, half-open).
     #[arg(long)]
     pub targets: Option<PathBuf>,
+
+    /// Emit reference-site records for target positions where this sample has no alt reads.
+    /// Requires --targets.  Produces two additional Parquet files alongside the locus output:
+    ///   {stem}.ref_bases.parquet  — one locus-level record per ref-only target position
+    ///   {stem}.ref_reads.parquet  — one record per read covering each ref-only position
+    /// These tables enable carrier vs non-carrier depth/family-size comparisons at the same
+    /// loci.  Use `geac merge` to load them into the `ref_bases` and `ref_reads` DuckDB tables.
+    #[arg(long)]
+    pub emit_ref_sites: bool,
 
     /// Minimum base quality to consider a base
     #[arg(long, default_value_t = 1)]
@@ -290,6 +305,91 @@ pub struct AnnotatePonArgs {
     /// so that `geac merge` routes it to the `pon_evidence` table.
     #[arg(short, long)]
     pub output: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+pub struct ExportLociArgs {
+    /// Input cohort DuckDB database or single-sample Parquet file
+    #[arg(short, long)]
+    pub input: PathBuf,
+
+    /// Output TSV file (chrom, pos columns; suitable for --loci in `geac locus-depth`)
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Minimum VAF (alt_count / total_depth) for a locus to be exported.
+    /// Defaults to 0.9, which captures homozygous-alt sites useful for bait-bias
+    /// and contamination analysis. Other useful ranges:
+    ///   0.01–0.1  — low-VAF sites for PoN normalization or error models
+    ///   0.4–0.6   — heterozygous sites for CNV / allelic-imbalance analysis
+    ///   0.0       — all sites (position-specific error models)
+    #[arg(long, default_value_t = 0.9)]
+    pub min_vaf: f64,
+
+    /// Maximum VAF (inclusive). When omitted, no upper bound is applied.
+    #[arg(long)]
+    pub max_vaf: Option<f64>,
+
+    /// Restrict to specific variant types: snv, insertion, deletion (comma-separated).
+    /// When omitted, all variant types are exported.
+    /// Example: --variant-types insertion,deletion
+    #[arg(long, value_delimiter = ',')]
+    pub variant_types: Vec<String>,
+
+    /// Minimum number of samples in which a locus must appear (at or above --min-vaf)
+    /// before it is exported. Useful for focusing on recurrent artefact sites.
+    /// When omitted (or 1), any locus appearing in at least one sample is exported.
+    #[arg(long, default_value_t = 1)]
+    pub min_samples: u32,
+}
+
+#[derive(Parser, Debug)]
+pub struct LociDepthArgs {
+    /// Input BAM or CRAM file
+    #[arg(short, long)]
+    pub input: PathBuf,
+
+    /// Reference FASTA (required for CRAM and for ref allele lookup)
+    #[arg(short = 'r', long)]
+    pub reference: PathBuf,
+
+    /// TSV file of loci to query (from `geac export-loci`).
+    /// Expected columns: chrom  pos  (0-based position, BED convention)
+    #[arg(long)]
+    pub loci: PathBuf,
+
+    /// Output Parquet file (should end in .locus_depth.parquet)
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Sample identifier.
+    /// If omitted, the SM tag from the BAM/CRAM read group header is used.
+    #[arg(short, long)]
+    pub sample_id: Option<String>,
+
+    /// Minimum mapping quality to consider a read
+    #[arg(long, default_value_t = 0)]
+    pub min_map_qual: u8,
+
+    /// Minimum base quality to consider a base
+    #[arg(long, default_value_t = 1)]
+    pub min_base_qual: u8,
+
+    /// Include PCR/optical duplicate reads (FLAG 0x400); excluded by default
+    #[arg(long)]
+    pub include_duplicates: bool,
+
+    /// Include secondary alignments (FLAG 0x100); excluded by default
+    #[arg(long)]
+    pub include_secondary: bool,
+
+    /// Include supplementary alignments (FLAG 0x800); excluded by default
+    #[arg(long)]
+    pub include_supplementary: bool,
+
+    /// Progress reporting interval in seconds (0 to disable)
+    #[arg(long, default_value_t = 30)]
+    pub progress_interval: u64,
 }
 
 #[derive(Parser, Debug)]
