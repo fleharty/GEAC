@@ -363,11 +363,11 @@ workflow GeacCohort {
         File?        exported_loci_tsv             = ExportLoci.loci_tsv
 
         # Ref-sites outputs (present only when emit_ref_sites = true)
-        File?        cohort_db_with_ref_sites      = MergeRefSites.cohort_db
+        File?        cohort_db_with_ref_sites      = MergeRefSites.merged_db
 
         # Locus-depth outputs (present only when collect_locus_depth = true)
         Array[File]? locus_depth_parquets          = LocusDepth.locus_depth_parquet
-        File?        cohort_db_with_locus_depth    = MergeLocusDepth.cohort_db
+        File?        cohort_db_with_locus_depth    = MergeLocusDepth.merged_db
     }
 }
 
@@ -686,7 +686,7 @@ task MergeRefSites {
     >>>
 
     output {
-        File cohort_db = output_db
+        File merged_db = output_db
     }
 
     runtime {
@@ -782,7 +782,7 @@ task MergeLocusDepth {
     >>>
 
     output {
-        File cohort_db = output_db
+        File merged_db = output_db
     }
 
     runtime {
