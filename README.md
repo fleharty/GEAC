@@ -1001,13 +1001,12 @@ Shared inputs applied to all samples: `reference_fasta`, `targets`, `gene_annota
 `include_duplicates`, `include_secondary`, `include_supplementary`,
 `gnomad`, `gnomad_index`, `gnomad_af_field` (optional gnomAD AF annotation), `threads`.
 
-**Optional second passes** — both require `input_bam_gs_paths` and an initial `geac merge` database:
+**Optional second passes** (BAMs are localized by Cromwell the same way as the first pass):
 
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `emit_ref_sites` | Boolean | `false` | **Preferred.** Re-run `geac collect --emit-ref-sites` at exported loci to produce `ref_bases` + `ref_reads` tables for bait-bias analysis |
 | `collect_locus_depth` | Boolean | `false` | Lightweight depth-only pass via `geac locus-depth` |
-| `input_bam_gs_paths` | Array[String]? | — | GCS paths for the same BAMs as plain strings. Declared as `String` so Cromwell does **not** localize the full BAM — htslib fetches only the target positions via HTTP range requests. Required when either second-pass mode is enabled. |
 | `second_pass_min_vaf` | Float | `0.9` | Minimum VAF for `export-loci` (shared by both modes) |
 | `second_pass_max_vaf` | Float? | — | Maximum VAF for `export-loci` |
 | `second_pass_variant_types` | String? | — | Comma-separated variant types, e.g. `insertion,deletion` |

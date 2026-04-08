@@ -11,11 +11,6 @@ version 1.0
 ## Inputs (per-sample, parallel arrays — lengths must match):
 ##   input_bams              - BAM or CRAM files (localized by Cromwell for geac collect)
 ##   input_bam_indices       - Corresponding .bai / .crai indices
-##   input_bam_gs_paths      - (optional) GCS paths for the same BAMs as plain strings.
-##                             Required when emit_ref_sites = true or collect_locus_depth = true.
-##                             Declared as String so Cromwell does NOT localize the full BAM —
-##                             htslib fetches only the target positions via HTTP range requests.
-##                             Must be the same length and order as input_bams.
 ##   sample_ids              - (optional) override sample IDs; defaults to SM tag per BAM
 ##   variants_tsvs           - (optional) per-sample variant TSV files
 ##   vcfs                    - (optional) per-sample VCF/BCF files for variant annotation
@@ -45,7 +40,7 @@ version 1.0
 ##   cohort_name             - Base name for the output DuckDB file (default: cohort)
 ##   docker_image            - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##
-## Second-pass inputs (optional; require input_bam_gs_paths):
+## Second-pass inputs (optional):
 ##   emit_ref_sites          - Re-run geac collect with --emit-ref-sites at hom-alt loci to
 ##                             produce ref_bases + ref_reads tables for bait-bias analysis (default false)
 ##   collect_locus_depth     - Lightweight depth-only second pass via geac locus-depth (default false)
@@ -70,7 +65,6 @@ workflow GeacCohort {
         # Per-sample parallel arrays
         Array[File]    input_bams
         Array[File]    input_bam_indices
-        Array[String]? input_bam_gs_paths  # GCS paths as strings (no localization); required for collect_locus_depth
         Array[String]? sample_ids          # optional; if provided must be same length as input_bams
         Array[File]?   variants_tsvs       # optional; if provided must be same length as input_bams
         Array[File]?   vcfs                # optional; if provided must be same length as input_bams
@@ -212,10 +206,8 @@ workflow GeacCohort {
     }
 
     # ── Optional second passes ──────────────────────────────────────────────────
-    # Both modes require input_bam_gs_paths so BAMs are accessed via HTTP range
-    # requests rather than being fully localized by Cromwell.
     # A single ExportLoci call feeds both downstream paths when both are enabled.
-    if ((emit_ref_sites || collect_locus_depth) && defined(input_bam_gs_paths)) {
+    if (emit_ref_sites || collect_locus_depth) {
 
         # Export high-VAF loci from the cohort database (shared by both second-pass modes).
         call ExportLoci {
@@ -231,8 +223,6 @@ workflow GeacCohort {
                 disk_gb       = merge_disk_gb,
                 preemptible   = preemptible,
         }
-
-        Array[String] bam_gs_paths_arr = select_first([input_bam_gs_paths])
 
         # ── emit_ref_sites: full-metric re-collect (ref_bases + ref_reads) ────────
         if (emit_ref_sites) {
@@ -269,7 +259,7 @@ workflow GeacCohort {
 
                 call CollectRefSites {
                     input:
-                        input_bam             = bam_gs_paths_arr[i],
+                        input_bam             = input_bams[i],
                         input_bam_index       = input_bam_indices[i],
                         reference_fasta       = reference_fasta,
                         reference_fasta_index = reference_fasta_index,
@@ -322,7 +312,7 @@ workflow GeacCohort {
 
                 call LocusDepth {
                     input:
-                        input_bam             = bam_gs_paths_arr[i],
+                        input_bam             = input_bams[i],
                         input_bam_index       = input_bam_indices[i],
                         reference_fasta       = reference_fasta,
                         reference_fasta_index = reference_fasta_index,
@@ -577,9 +567,7 @@ task LociToBed {
 task CollectRefSites {
 
     input {
-        # BAM declared as String (not File) so Cromwell does NOT localize the full BAM.
-        # htslib fetches only the target positions via HTTP range requests.
-        String input_bam
+        File   input_bam
         File   input_bam_index
         File   reference_fasta
         File   reference_fasta_index
@@ -701,9 +689,7 @@ task MergeRefSites {
 task LocusDepth {
 
     input {
-        # BAM declared as String (not File) so Cromwell does NOT localize the full BAM.
-        # htslib fetches only the loci it needs via HTTP range requests using the index.
-        String input_bam
+        File   input_bam
         File   input_bam_index
         File   reference_fasta
         File   reference_fasta_index
