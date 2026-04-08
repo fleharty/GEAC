@@ -291,7 +291,6 @@ workflow GeacCohort {
                         include_duplicates    = include_duplicates,
                         include_secondary     = include_secondary,
                         include_supplementary = include_supplementary,
-                        input_checksum_sha256 = input_checksum_sha256,
                         docker_image          = docker_image,
                         memory_gb             = ref_sites_memory_gb,
                         disk_gb               = ref_sites_disk_gb,
@@ -604,7 +603,9 @@ task CollectRefSites {
         Boolean include_duplicates
         Boolean include_secondary
         Boolean include_supplementary
-        Boolean input_checksum_sha256
+        # Note: input_checksum_sha256 is intentionally omitted — the BAM is accessed
+        # as a GCS URI via htslib HTTP range requests and cannot be read by Rust's
+        # File::open for SHA-256 computation.
 
         String docker_image
         Int    memory_gb
@@ -640,8 +641,7 @@ task CollectRefSites {
             --repeat-window ~{repeat_window} \
             ~{if include_duplicates    then "--include-duplicates"    else ""} \
             ~{if include_secondary     then "--include-secondary"     else ""} \
-            ~{if include_supplementary then "--include-supplementary" else ""} \
-            ~{if input_checksum_sha256 then "--input-checksum-sha256" else ""}
+            ~{if include_supplementary then "--include-supplementary" else ""}
     >>>
 
     output {
