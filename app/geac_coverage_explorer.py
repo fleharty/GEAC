@@ -13,6 +13,7 @@ from coverage_profile import (
 )
 from igv_helpers import load_manifest, resolve_index_uri
 from explorer import COVERAGE_FILTER_STATE, GEAC_VERSION, DataSource
+from explorer.data_source import sort_chroms
 
 st.set_page_config(page_title="GEAC Coverage Explorer", layout="wide")
 st.title("GEAC Coverage Explorer")
@@ -93,7 +94,7 @@ sample_sel = st.sidebar.multiselect(
     "Samples", all_samples, default=all_samples, key="sample_sel"
 )
 
-all_chroms = data_source.distinct_values("chrom")
+all_chroms = sort_chroms(data_source.distinct_values("chrom"))
 chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + all_chroms, key="chrom_sel")
 
 if _has_gene:

@@ -54,6 +54,7 @@ from igv_helpers import (
 )
 import geac_config
 from explorer import GEAC_VERSION, MAIN_FILTER_KEYS, MAIN_FILTER_STATE, DataSource
+from explorer.data_source import sort_chroms
 from explorer.main_table import (
     render_position_drilldown,
     render_records_table,
@@ -236,7 +237,7 @@ if _sidebar_logo.exists():
     st.sidebar.image(str(_sidebar_logo), width="stretch")
 
 if "_cached_chroms" not in st.session_state:
-    st.session_state["_cached_chroms"] = data_source.distinct_values("chrom")
+    st.session_state["_cached_chroms"] = sort_chroms(data_source.distinct_values("chrom"))
 chroms = st.session_state["_cached_chroms"]
 
 if "_cached_samples" not in st.session_state:

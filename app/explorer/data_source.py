@@ -13,6 +13,27 @@ def _sql_str(value: str) -> str:
     return value.replace("'", "''")
 
 
+def sort_chroms(chroms: list[str]) -> list[str]:
+    """Sort chromosome names in natural genomic order.
+
+    Handles both bare names (1, 2, X) and prefixed names (chr1, chr2, chrX).
+    Order: numeric contigs by number, then X, Y, M/MT, then anything else
+    lexicographically.
+    """
+    _SPECIAL = {"x": 100, "y": 101, "m": 102, "mt": 102}
+
+    def _key(name: str) -> tuple:
+        bare = name.lower().removeprefix("chr")
+        if bare.isdigit():
+            return (0, int(bare), name)
+        special = _SPECIAL.get(bare)
+        if special is not None:
+            return (1, special, name)
+        return (2, 0, name)
+
+    return sorted(chroms, key=_key)
+
+
 @dataclass
 class DataSource:
     path: str

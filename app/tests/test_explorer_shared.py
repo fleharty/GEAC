@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from explorer import COVERAGE_FILTER_STATE, MAIN_FILTER_STATE, load_schema_manifest
 from explorer import schema as schema_module
-from explorer.data_source import DataSource
+from explorer.data_source import DataSource, sort_chroms
 from explorer.tabs import TAB_MODULES
 
 
@@ -255,6 +255,29 @@ class TestTabModules:
     def test_tab_module_labels_are_unique(self):
         labels = [module.LABEL for module in TAB_MODULES]
         assert len(labels) == len(set(labels)), "Duplicate LABEL values in TAB_MODULES"
+
+
+class TestSortChroms:
+    def test_numeric_order(self):
+        assert sort_chroms(["2", "10", "1", "22"]) == ["1", "2", "10", "22"]
+
+    def test_chr_prefix(self):
+        assert sort_chroms(["chr2", "chr10", "chr1"]) == ["chr1", "chr2", "chr10"]
+
+    def test_special_chroms(self):
+        result = sort_chroms(["chrY", "chrM", "chr2", "chrX", "chr1"])
+        assert result == ["chr1", "chr2", "chrX", "chrY", "chrM"]
+
+    def test_mixed_numeric_and_special(self):
+        result = sort_chroms(["X", "MT", "2", "1", "10", "Y"])
+        assert result == ["1", "2", "10", "X", "Y", "MT"]
+
+    def test_unknown_contigs_at_end(self):
+        result = sort_chroms(["GL000195.1", "1", "X"])
+        assert result == ["1", "X", "GL000195.1"]
+
+    def test_empty(self):
+        assert sort_chroms([]) == []
 
 
 def _write_alt_parquet(path: str) -> None:
