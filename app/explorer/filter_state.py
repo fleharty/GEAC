@@ -91,7 +91,6 @@ MAIN_FILTER_KEYS = (
     "label1_sel",
     "label2_sel",
     "label3_sel",
-    "gene_text",
     "variant_sel",
     "vaf_range",
     "min_alt",
@@ -153,14 +152,13 @@ MAIN_FILTER_STATE = FilterState(
         "insert_size_range",
     }),
     defaults={
-        "chrom_sel": "All",
+        "chrom_sel": "",
         "sample_sel": [],
         "batch_sel": [],
         "pipeline_sel": [],
         "label1_sel": [],
         "label2_sel": [],
         "label3_sel": [],
-        "gene_text": "",
         "variant_sel": ["SNV", "insertion", "deletion"],
         "vaf_range": (0.0, 1.0),
         "min_alt": 1,
@@ -184,13 +182,13 @@ MAIN_FILTER_STATE = FilterState(
         "min_delta_n_frac": 0.0,
         "nctx_enabled": False,
         "nasym_enabled": False,
+        "nrich_enabled": False,
     },
 )
 
 COVERAGE_FILTER_KEYS = (
     "sample_sel",
     "chrom_sel",
-    "gene_text",
     "on_target_sel",
     "cov_batch_sel",
     "cov_label1_sel",

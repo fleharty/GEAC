@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Iterable, Optional
 
 import duckdb
 import pandas as pd
@@ -11,6 +12,76 @@ from .schema import SchemaManifest, load_schema_manifest
 
 def _sql_str(value: str) -> str:
     return value.replace("'", "''")
+
+
+@dataclass
+class GenomicRegion:
+    """Parsed result of a combined region-or-gene string.
+
+    Exactly one of (chrom, gene) will be non-None, or both are None for 'All'.
+    """
+    chrom: Optional[str]  # None means no chrom filter
+    start: Optional[int]  # 0-based; None means no position filter
+    end: Optional[int]    # 0-based inclusive; None means no end bound
+    gene: Optional[str]   # None means no gene filter; set for exact gene match
+
+
+def parse_region(text: str, known_chroms: list[str]) -> GenomicRegion:
+    """Parse a region-or-gene string into a GenomicRegion.
+
+    Accepted formats:
+      - "" or "All"              → no filter
+      - "1" or "chr1"            → chromosome only
+      - "1:1000" or "chr1:1,000" → single position (1-based, converted to 0-based)
+      - "1:1000-2000"            → range (1-based inclusive, converted to 0-based)
+      - "TP53", "BRCA1", …       → exact gene match (anything not resolving as a chrom)
+
+    Normalises the chromosome name against known_chroms, trying with/without
+    the "chr" prefix so "1" matches "chr1" and vice versa.
+    """
+    text = text.strip()
+    if not text or text.lower() == "all":
+        return GenomicRegion(None, None, None, None)
+
+    if ":" in text:
+        chrom_part, pos_part = text.split(":", 1)
+        pos_part = pos_part.strip().replace(",", "")
+        m = re.match(r"^(\d+)(?:[:\-](\d+))?$", pos_part)
+        # User input is 1-based (IGV/VCF convention); DB stores 0-based positions.
+        start = int(m.group(1)) - 1 if m else None
+        end   = int(m.group(2)) - 1 if m and m.group(2) else None
+        chrom = _resolve_chrom(chrom_part.strip(), known_chroms)
+        return GenomicRegion(chrom, start, end, None)
+
+    # No colon — try to resolve as a chromosome name first.
+    resolved = _try_resolve_chrom(text, known_chroms)
+    if resolved is not None:
+        return GenomicRegion(resolved, None, None, None)
+
+    # Not a known chromosome — treat as an exact gene name.
+    return GenomicRegion(None, None, None, text)
+
+
+def _try_resolve_chrom(name: str, known_chroms: list[str]) -> Optional[str]:
+    """Return the matching chrom from known_chroms, or None if not found."""
+    if name in known_chroms:
+        return name
+    with_chr = "chr" + name
+    if with_chr in known_chroms:
+        return with_chr
+    without_chr = name.removeprefix("chr")
+    if without_chr in known_chroms:
+        return without_chr
+    return None
+
+
+def _resolve_chrom(name: str, known_chroms: list[str]) -> str:
+    """Match name against known_chroms, trying with/without 'chr' prefix.
+
+    Falls back to returning the name as-is (for region strings with a colon
+    where the chrom part should pass through even if unknown).
+    """
+    return _try_resolve_chrom(name, known_chroms) or name
 
 
 def sort_chroms(chroms: list[str]) -> list[str]:

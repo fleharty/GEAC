@@ -881,3 +881,47 @@ expensive query inside a tab body must be cached on its filter inputs, or it wil
 bleed performance into every other tab in the app. When investigating "the
 explorer got slow after feature X," look for uncached queries in tab bodies
 **anywhere** in the app, not just in the tabs that feature X touched.
+
+### Strand bias drill-down crashed with `KeyError: ['pos_display'] not in index`
+**Symptom:** Clicking a point on the strand bias scatter triggered a Streamlit rerun that
+ended with:
+```
+KeyError: "['pos_display'] not in index"
+```
+at the `st.dataframe(_sb_sel_df[_table_cols], ...)` call in the strand bias selection
+drill-down block.
+**Root cause:** The strand bias selection query was written inline rather than routed
+through `query_records()`. When `pos_display` (`pos + 1 AS pos_display`) was introduced
+as a 1-based display column and added to `_table_cols`, `query_records()` was updated to
+include it, but the handful of inline queries scattered around the file — including the
+strand bias one — were not. The mismatch went unnoticed because clicking a strand bias
+point is an optional interaction; the rest of the app worked fine.
+**Fix:** Add `pos + 1 AS pos_display` to the strand bias inline `SELECT` (line ~3774 in
+`geac_explorer.py`), matching what `query_records()` emits.
+**Lesson:** Every handwritten `SELECT * FROM {table_expr}` that feeds a `_table_cols`
+display is a latent regression point. When adding a column to `_table_cols`, grep for
+inline queries that bypass `query_records()` and update them at the same time. Consider
+extracting a shared SQL fragment or helper for the computed display columns (`vaf`,
+`pos_display`) so there is only one place to update.
+
+### N-context density chart exceeded Streamlit 200 MB message size limit
+**Symptom:** Enabling "N-context read distribution" in the Reads tab on a real cohort raised:
+```
+MessageSizeError: Data of size 2813.1 MB exceeds the message size limit of 200.0 MB.
+```
+**Root cause:** The original query fetched every row from `alt_reads` — one row per
+alt-supporting read — into a Python dataframe, then `_nctx_long` doubled it (one row per
+read per side: before/after). The entire dataframe was embedded in the Altair chart spec
+as JSON and sent to the browser for client-side `transform_density` computation. At cohort
+scale this was millions of rows × multiple columns × JSON overhead.
+**Fix:** Replace the full `alt_reads` fetch with two pre-aggregated DuckDB queries:
+1. A single-row scalar aggregate for the four metric values (mean frac N before/after,
+   fraction with any N before/after).
+2. A histogram-bin query (bin width 0.001, range 0–0.05, grouped by `side` and
+   `read_group`) that produces at most ~200 rows. The density curve is then drawn from
+   these bins in Python instead of using Altair's `transform_density`.
+**Lesson:** Never pass a raw `alt_reads` query result to an Altair chart. `alt_reads` is
+read-level and grows with cohort size. Any chart driven by it must pre-aggregate in
+DuckDB first. `transform_density` and `transform_bin` in Vega-Lite are convenient but
+they require the full row-level data to be sent to the browser — always pre-compute these
+transformations server-side for tables that scale with cohort size.

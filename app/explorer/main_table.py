@@ -112,7 +112,7 @@ def render_position_drilldown(
         """
     ).df()
 
-    st.subheader(f"🔍 Position drill-down: {chrom}:{pos}")
+    st.subheader(f"🔍 Position drill-down: {chrom}:{pos + 1}")
 
     match_alt = st.checkbox(
         f"Same alt allele only ({selected_alt})",

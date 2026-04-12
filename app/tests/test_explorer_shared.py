@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from explorer import COVERAGE_FILTER_STATE, MAIN_FILTER_STATE, load_schema_manifest
 from explorer import schema as schema_module
-from explorer.data_source import DataSource, sort_chroms
+from explorer.data_source import DataSource, sort_chroms, parse_region
 from explorer.tabs import TAB_MODULES
 
 
@@ -229,7 +229,7 @@ class TestFilterState:
             overrides={"sample_recurrence": (1, 5), "family_size_range": (0, 7)},
         )
 
-        assert state["chrom_sel"] == "All"
+        assert state["chrom_sel"] == ""
         assert state["variant_sel"] == ["SNV", "insertion", "deletion"]
         assert state["sample_recurrence"] == (1, 5)
         assert state["family_size_range"] == (0, 7)
@@ -334,3 +334,64 @@ class TestDataSourceParquet:
 
         assert result["variant_called"] is True
         assert result["nonexistent_col"] is False
+
+
+class TestParseRegion:
+    CHROMS = ["chr1", "chr2", "chrX", "chrY", "chrM"]
+
+    def test_empty_returns_all(self):
+        r = parse_region("", self.CHROMS)
+        assert r.chrom is None and r.start is None and r.end is None
+
+    def test_all_keyword(self):
+        r = parse_region("All", self.CHROMS)
+        assert r.chrom is None
+
+    def test_chrom_exact(self):
+        r = parse_region("chr1", self.CHROMS)
+        assert r.chrom == "chr1" and r.start is None
+
+    def test_chrom_without_prefix_resolved(self):
+        r = parse_region("1", self.CHROMS)
+        assert r.chrom == "chr1" and r.start is None
+
+    def test_chrom_with_prefix_from_bare_data(self):
+        r = parse_region("chr1", ["1", "2", "X"])
+        assert r.chrom == "1"
+
+    def test_single_position(self):
+        # User types 1-based; parser converts to 0-based for DB
+        r = parse_region("chr1:100000", self.CHROMS)
+        assert r.chrom == "chr1" and r.start == 99999 and r.end is None
+
+    def test_position_without_chr_prefix(self):
+        r = parse_region("1:100000", self.CHROMS)
+        assert r.chrom == "chr1" and r.start == 99999
+
+    def test_range(self):
+        r = parse_region("chr1:100000-200000", self.CHROMS)
+        assert r.chrom == "chr1" and r.start == 99999 and r.end == 199999
+
+    def test_range_without_prefix(self):
+        r = parse_region("1:100000-200000", self.CHROMS)
+        assert r.chrom == "chr1" and r.start == 99999 and r.end == 199999
+
+    def test_commas_in_position_ignored(self):
+        r = parse_region("chr1:1,000,000-2,000,000", self.CHROMS)
+        assert r.start == 999_999 and r.end == 1_999_999
+
+    def test_unknown_chrom_passthrough(self):
+        r = parse_region("chrZ:500", self.CHROMS)
+        assert r.chrom == "chrZ" and r.start == 499
+
+    def test_gene_name_exact(self):
+        r = parse_region("TP53", self.CHROMS)
+        assert r.chrom is None and r.start is None and r.gene == "TP53"
+
+    def test_gene_name_not_confused_with_chrom(self):
+        r = parse_region("BRCA1", self.CHROMS)
+        assert r.gene == "BRCA1" and r.chrom is None
+
+    def test_numeric_string_resolves_as_chrom_not_gene(self):
+        r = parse_region("1", self.CHROMS)
+        assert r.chrom == "chr1" and r.gene is None

@@ -26,7 +26,10 @@ Current version: v0.4.0. All work on `main`.
 - [x] Audit `alt_count` double-counting — resolved: `total_depth`, `alt_count`, and `ref_count` are now fragment-level counts. Each overlapping pair contributes 1 to `total_depth` regardless of how many reads cover the position. See `tally_pileup` doc comment for full classification rules.
 - [x] Fix N-base handling in overlap tally — in `tally_pileup` (`src/bam/mod.rs`), if one read of an overlapping pair has an `N` at the position, `overlap_alt_disagree` is incorrectly incremented for the other read's alt base. An `N` is uninformative and should not count as a disagreement. Fix: skip the overlap agreement/disagreement logic when either base is `N`, and exclude `N` bases from `total_depth` and alt tallies entirely.
 - [x] **Re-examine N-base handling before v0.3.0** — resolved as part of the fragment-level depth overhaul. See `tally_pileup` doc comment for the full classification table including N cases.
-- [ ] MNV detection — adjacent substitutions on the same haplotype (e.g. `AG→TC`) are currently split into individual SNV records, one per position. Distinguishing true MNVs from independent SNVs at neighbouring positions requires read-level phasing: checking whether both substitutions co-occur on the same read. This is not possible from the locus table alone and would require the per-read detail table (see below). Prerequisite: implement `geac collect --reads-output`.
+- [ ] MNV detection *(low priority — no user demand yet)* — see **MNV Detection** section
+  below. Requires adding `fragment_id` (hashed qname) to `AltRead`, followed by a cross-locus
+  join in the Explorer. Prerequisite (`--reads-output`) is complete as of v0.3.2.
+
 ## Per-read detail table (two-table design)
 
 **Motivation:** Read-end proximity and family size are inherently per-read properties.
@@ -91,6 +94,88 @@ Two output files per sample from `geac collect`:
     paths), and Explorer (`app/geac_explorer.py`) filter + visualization.
   - **Requires re-running `geac collect --reads-output` — warrants a new release (v0.3.9).**
 
+## MNV Detection
+
+**Background:** Adjacent substitutions on the same haplotype (e.g. `AG→TC`) are currently
+emitted as two independent SNV records — one per position. Distinguishing true MNVs (both
+substitutions on the same physical read) from coincidental independent SNVs at neighbouring
+positions requires read-level phasing. The `alt_reads` table contains one row per
+alt-supporting read per locus, but the prerequisite for cross-locus phasing — a stable
+fragment identifier — is not yet stored. The qname is used internally during pileup
+(for overlap detection) but is discarded before writing to Parquet.
+
+### Strategy
+
+Add a `fragment_id` column: a lightweight 64-bit hash of the BAM query name (`qname`),
+computed during pileup and stored in `AltRead`. The raw qname is never written
+(privacy-preserving); the hash is sufficient to identify that two rows in `alt_reads` at
+positions X and X+1 originated from the same physical read.
+
+With `fragment_id` in place, MNV detection becomes a SQL join across adjacent positions:
+
+```sql
+SELECT
+    a1.chrom,
+    a1.pos          AS pos1,
+    a1.alt_allele   AS alt1,
+    a2.pos          AS pos2,
+    a2.alt_allele   AS alt2,
+    COUNT(*)        AS co_count,
+    COUNT(*) * 1.0
+      / NULLIF(ab1.alt_count, 0) AS frac_cooccurring
+FROM alt_reads a1
+JOIN alt_reads a2
+  ON  a1.fragment_id = a2.fragment_id
+  AND a1.sample_id   = a2.sample_id
+  AND a1.chrom       = a2.chrom
+  AND a2.pos         = a1.pos + 1
+JOIN alt_bases ab1
+  ON  ab1.sample_id  = a1.sample_id
+  AND ab1.chrom      = a1.chrom
+  AND ab1.pos        = a1.pos
+  AND ab1.alt_allele = a1.alt_allele
+GROUP BY 1, 2, 3, 4, 5, ab1.alt_count
+HAVING co_count >= 2
+ORDER BY co_count DESC
+```
+
+A locus pair is a strong MNV candidate when `frac_cooccurring` approaches 1.0 — nearly all
+reads supporting the alt at position X also carry the alt at X+1.
+
+**Alternative considered — probabilistic matching:** joining on
+`(is_read1, cycle, read_length, insert_size, map_qual)` as a surrogate key requires no
+Rust changes but becomes unreliable at hotspot loci where many reads share identical
+properties — exactly the case of greatest interest. Not recommended.
+
+**Alternative considered — multi-locus Rust collection:** buffering reads across adjacent
+positions in the pileup loop and emitting MNV records directly would be architecturally
+cleaner long-term, but requires significant lookahead logic and changes the output schema
+more invasively. Deferred until the Explorer-query approach proves out the use case.
+
+### Implementation steps
+
+- [ ] **Step 1: Add `fragment_id` to `ReadDetail` and `AltRead`** — in `src/bam/pileup.rs`,
+  hash each record's `qname()` bytes using a fast non-cryptographic hash (FNV-1a 64-bit or
+  xxHash64) and store the result in `ReadDetail` as `fragment_id: i64`. Propagate through
+  the SNV and indel collection paths in `src/bam/mod.rs`, and add `fragment_id: i64` to
+  `AltRead` in `src/record.rs`.
+- [ ] **Step 2: Write `fragment_id` to Parquet** — add the column to
+  `src/writer/parquet_reads.rs` and to `schema/geac_schema.json`. Type: `Int64`, not
+  nullable. Bump `GEAC_VERSION` in `app/explorer/schema.py`. Requires re-running
+  `geac collect --reads-output` — warrants a minor version bump.
+- [ ] **Step 3: Explorer — MNV candidate query** — implement the cross-locus join above as
+  a cached DuckDB query in the Explorer. Gate on `fragment_id` being present in `alt_reads`
+  (graceful fallback message when absent).
+- [ ] **Step 4: Explorer — MNV candidates table/tab** — surface results in a table with
+  columns: chrom, pos1, ref1→alt1, pos2, ref2→alt2, co_count, frac_cooccurring, combined
+  dinucleotide context (for eventual SBS classification). Click to drill down and view in
+  IGV. Consider whether MNVs belong in a dedicated tab or as an additional panel in an
+  existing tab.
+- [ ] **Step 5: Integration test** — construct a synthetic BAM where a set of reads carry
+  substitutions at two adjacent positions, alongside reads carrying only one substitution.
+  Verify that `fragment_id` matches across positions for the co-occurring reads, and that
+  the MNV candidate query returns the correct `co_count` and `frac_cooccurring`.
+
 ## Intra-sample comparison (read-type)
 
 - [x] Read-type comparison view in Explorer — locus concordance, VAF density overlay, VAF correlation scatter, strand balance density, SBS96 side-by-side, unique-loci table. DuckDB only; gated on ≥2 distinct `read_type` values.
@@ -141,11 +226,12 @@ only the records visible in the main table.
   before/after N burden distributions. Compare by pipeline/read_type where possible and assess
   whether these loci are enriched for
   low-confidence or pipeline-unique calls.
-- [ ] **Identify N-rich supporting loci** — add a locus-level view/filter for sites where the
-  alt-supporting reads are systematically enriched for `N` bases. Candidate summaries include mean
-  per-read N burden, fraction of alt-supporting reads with any `N`, fraction with trailing-N runs,
-  and fraction with elevated post-alt N burden. Use this to surface loci where the apparent signal
-  may be dominated by N-rich / low-confidence read context rather than clean support.
+- [x] **Identify N-rich supporting loci** — added "N-rich supporting loci" section to the
+  Reads tab (row 3c, after N-asymmetry). Enabled by checkbox; computes per-locus metrics
+  via GROUP BY on `alt_reads`: `frac_reads_with_any_n`, `frac_reads_with_trailing_n`,
+  `mean_trailing_n_run_len`, `mean_total_n_frac`. Threshold slider filters to loci above
+  a minimum N-read fraction. Table sorted descending by `frac_reads_with_any_n`; IGV
+  buttons for the full set. Cached on filter + threshold strings.
 - [ ] **Family size vs VAF click-through** — add click/shift-click selection with drill-down
   table and IGV buttons, same as strand bias plot. Currently blocked: `selection_point` with
   `on_select="rerun"` returns `{"fsvaf_select": {}}` regardless of what is clicked; strand bias
@@ -199,7 +285,7 @@ Audit document: `docs/per-read-filter-audit.md`.
 - [x] Repeat filter — sidebar range sliders for `homopolymer_len` and `str_len`
 - [x] Strand bias plot — dashed y=x diagonal + 95% binomial CI band; gene name in hover tooltip
 - [x] Strand bias click drill-down — click/shift-click to select points; shows table of selected loci and IGV session with correct BAMs and BED
-- [ ] Strand bias selection: verify `toggle="event.shiftKey"` is valid in the current Altair/Vega-Lite version; may need an alternative approach for shift-click multi-select
+- [x] Strand bias selection: verify `toggle="event.shiftKey"` is valid in the current Altair/Vega-Lite version — confirmed working; the only blocker was a `pos_display` KeyError in the drill-down query (fixed)
 - [x] Strand bias selection: `pos` may be returned as float from Altair selection, causing SQL clause to silently fail; cast to int before building the WHERE clause
 - [x] SNV trinucleotide spectrum (SBS96) — 3×2 grid of per-mutation-type panels with shared y-axis; click drill-down
 - [ ] Cohort comparison view — side-by-side stats across samples loaded from a DuckDB

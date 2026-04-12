@@ -54,7 +54,7 @@ from igv_helpers import (
 )
 import geac_config
 from explorer import GEAC_VERSION, MAIN_FILTER_KEYS, MAIN_FILTER_STATE, DataSource
-from explorer.data_source import sort_chroms
+from explorer.data_source import sort_chroms, parse_region
 from explorer.main_table import (
     render_position_drilldown,
     render_records_table,
@@ -165,6 +165,23 @@ _has_normal_evidence = data_source.has_optional_table("normal_evidence")
 _has_pon_evidence = data_source.has_optional_table("pon_evidence")
 _has_ref_bases = data_source.has_optional_table("ref_bases")
 _has_ref_reads = data_source.has_optional_table("ref_reads")
+# Detect on_target columns per table — each table is checked independently
+# because ref_reads may not carry on_target even when ref_bases does.
+if _has_ref_bases:
+    _ref_bases_cols = set(con.execute("SELECT * FROM ref_bases LIMIT 0").df().columns)
+    _ref_bases_has_on_target = "on_target" in _ref_bases_cols
+else:
+    _ref_bases_has_on_target = False
+if _has_ref_reads:
+    _ref_reads_cols = set(con.execute("SELECT * FROM ref_reads LIMIT 0").df().columns)
+    _ref_reads_has_on_target = "on_target" in _ref_reads_cols
+else:
+    _ref_reads_has_on_target = False
+# SQL fragments injected into bait-bias CTEs when on_target data is available.
+_rb_on_tgt = "AND rb.on_target = TRUE" if _ref_bases_has_on_target else ""
+_rr_on_tgt = "AND rr.on_target = TRUE" if _ref_reads_has_on_target else ""
+# Unqualified — works in both bare-table and subquery contexts for alt_bases
+_ab_on_tgt = "AND on_target = TRUE" if (_ref_bases_has_on_target and data_source.has_column("on_target")) else ""
 if "_alt_reads_cols_cached" not in st.session_state:
     st.session_state["_alt_reads_cols_cached"] = (
         set(con.execute("SELECT * FROM alt_reads LIMIT 0").df().columns)
@@ -271,7 +288,11 @@ for _fk, _fv in MAIN_FILTER_STATE.defaults.items():
     if _fk not in st.session_state:
         st.session_state[_fk] = _fv
 
-chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + chroms, key="chrom_sel")
+chrom_sel = st.sidebar.text_input(
+    "Region or gene",
+    placeholder="chr1 · 1 · chr1:100000 · 1:100000-200000 · TP53",
+    key="chrom_sel",
+)
 if "sample_sel" not in st.session_state:
     st.session_state["sample_sel"] = []
 sample_sel = st.sidebar.multiselect("Samples (blank = all)", samples, key="sample_sel")
@@ -365,11 +386,6 @@ else:
     label3_sel = []
 
 _genes_available = _has_data("gene")
-if _genes_available:
-    gene_text = st.sidebar.text_input("Gene (exact match, blank = all)", "", key="gene_text")
-else:
-    gene_text = ""
-    st.sidebar.caption("Gene filter unavailable — run geac collect with --gene-annotations to enable.")
 if "variant_sel" not in st.session_state:
     st.session_state["variant_sel"] = ["SNV", "insertion", "deletion"]
 variant_sel = st.sidebar.multiselect(
@@ -1189,8 +1205,16 @@ if vaf_range != (0.0, 1.0):
     conditions.append(f"alt_count * 1.0 / total_depth BETWEEN {vaf_range[0]} AND {vaf_range[1]}")
 if max_alt > 0:
     conditions.append(f"alt_count <= {max_alt}")
-if chrom_sel != "All":
-    conditions.append(f"chrom = '{chrom_sel}'")
+_region = parse_region(chrom_sel, chroms)
+if _region.chrom is not None:
+    conditions.append(f"chrom = '{_sql_str(_region.chrom)}'")
+if _region.start is not None:
+    if _region.end is not None:
+        conditions.append(f"pos BETWEEN {_region.start} AND {_region.end}")
+    else:
+        conditions.append(f"pos = {_region.start}")
+if _region.gene is not None and _genes_available:
+    conditions.append(f"gene = '{_sql_str(_region.gene)}'")
 if sample_sel:
     s_list = ", ".join(f"'{_sql_str(s)}'" for s in sample_sel)
     conditions.append(f"sample_id IN ({s_list})")
@@ -1283,9 +1307,6 @@ if "gnomad_af" in _schema_cols:
         conditions.append(f"gnomad_af BETWEEN {_af_lo} AND {_af_hi}")
     elif not gnomad_include_null:
         conditions.append("gnomad_af IS NOT NULL")
-if gene_text.strip() and "gene" in _schema_cols:
-    _gene_escaped = _sql_str(gene_text.strip())
-    conditions.append(f"gene = '{_gene_escaped}'")
 
 if _repeat_cols_present:
     if homopolymer_range != (0, 20):
@@ -1345,7 +1366,8 @@ with tab_summary:
         w = " AND ".join(conditions + extra)
         limit_clause = f"LIMIT {limit}" if limit is not None else ""
         return con.execute(f"""
-            SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+            SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                   pos + 1 AS pos_display
             FROM {table_expr}
             WHERE {w}
             ORDER BY chrom, pos, alt_allele, sample_id
@@ -1409,7 +1431,8 @@ with tab_summary:
         rows: list[dict[str, str]] = []
         _append_provenance_row(rows, "data", "data_file", path)
         _append_provenance_row(rows, "query", "where_sql", where)
-        _append_provenance_row(rows, "filters", "chromosome", chrom_sel, active=chrom_sel != "All")
+        _region_active = bool(chrom_sel and chrom_sel.strip() and chrom_sel.strip().lower() != "all")
+        _append_provenance_row(rows, "filters", "region_or_gene", chrom_sel.strip() or "All", active=_region_active)
         _append_provenance_row(rows, "filters", "samples", sample_sel, active=bool(sample_sel))
         _append_provenance_row(
             rows,
@@ -1422,13 +1445,6 @@ with tab_summary:
         _append_provenance_row(rows, "filters", "label1", label1_sel, active=bool(label1_sel))
         _append_provenance_row(rows, "filters", "label2", label2_sel, active=bool(label2_sel))
         _append_provenance_row(rows, "filters", "label3", label3_sel, active=bool(label3_sel))
-        _append_provenance_row(
-            rows,
-            "filters",
-            "gene",
-            gene_text.strip(),
-            active=bool(gene_text.strip()) and "gene" in _schema_cols,
-        )
         _append_provenance_row(
             rows,
             "filters",
@@ -1554,7 +1570,7 @@ with tab_summary:
 
     _table_cols = [
         c for c in [
-            "sample_id", "chrom", "pos", "ref_allele", "alt_allele",
+            "sample_id", "chrom", "pos_display", "ref_allele", "alt_allele",
             "variant_type", "vaf", *( ["original_vaf"] if _reads_active else []), "alt_count", "ref_count", "total_depth",
             "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
             "overlap_alt_disagree", "variant_called", "variant_filter", "on_target", "gene", "gnomad_af",
@@ -1678,21 +1694,30 @@ with tab1:
             "then re-open the resulting database."
         )
     else:
+        _on_tgt_note = (
+            " **Restricted to on-target positions** (bait bias is a hybrid-capture "
+            "phenomenon and is not meaningful at off-target loci — this restriction is "
+            "applied automatically regardless of the sidebar on-target filter.)"
+            if _ref_bases_has_on_target else
+            " *(No `on_target` column detected in `ref_bases` — all positions included.)*"
+        )
         st.caption(
             "Compares sequencing depth at hom-alt positions (VAF > 90%) between "
             "**carrier samples** (which carry the alt allele, from `alt_bases`) and "
             "**non-carrier samples** (which have only reference reads at the same position, "
             "from `ref_bases`). A depth deficit in carriers relative to non-carriers — "
             "especially for indels — is direct evidence that hybrid-capture baits are less "
-            "efficient for indel-containing sequences."
+            "efficient for indel-containing sequences." + _on_tgt_note
         )
         with _timed("carrier_noncarrier_depth"):
-            _bias_depth_df = con.execute(f"""
+            # ── Pre-aggregate: ECDF from per-group sample ─────────────────────
+            _bias_ecdf_df = con.execute(f"""
                 WITH carriers AS (
                     SELECT total_depth, variant_type, 'Carrier' AS carrier_group
                     FROM {table_expr}
                     WHERE {where} AND total_depth > 0
                       AND alt_count * 1.0 / total_depth > 0.9
+                      {_ab_on_tgt}
                 ),
                 noncarriers AS (
                     SELECT rb.total_depth, pt.variant_type, 'Non-carrier' AS carrier_group
@@ -1703,28 +1728,80 @@ with tab1:
                         WHERE {where} AND alt_count * 1.0 / total_depth > 0.9
                     ) pt ON rb.chrom = pt.chrom AND rb.pos = pt.pos
                     WHERE rb.total_depth > 0
+                      {_rb_on_tgt}
+                ),
+                combined AS (
+                    SELECT * FROM carriers
+                    UNION ALL
+                    SELECT * FROM noncarriers
+                ),
+                sampled AS (
+                    SELECT total_depth, variant_type, carrier_group,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY variant_type, carrier_group
+                               ORDER BY random()
+                           ) AS rn
+                    FROM combined
+                ),
+                ranked AS (
+                    SELECT total_depth, variant_type, carrier_group,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY variant_type, carrier_group
+                               ORDER BY total_depth
+                           ) AS rnk,
+                           COUNT(*) OVER (
+                               PARTITION BY variant_type, carrier_group
+                           ) AS grp_n
+                    FROM sampled
+                    WHERE rn <= 5000
                 )
-                SELECT * FROM carriers
-                UNION ALL
-                SELECT * FROM noncarriers
+                SELECT variant_type, carrier_group, total_depth,
+                       rnk * 1.0 / grp_n AS ecdf
+                FROM ranked
+                ORDER BY variant_type, carrier_group, total_depth
             """).df()
 
-        if _bias_depth_df.empty:
+            # ── Pre-aggregate: box stats ───────────────────────────────────────
+            _bias_box_df = con.execute(f"""
+                WITH carriers AS (
+                    SELECT total_depth, variant_type, 'Carrier' AS carrier_group
+                    FROM {table_expr}
+                    WHERE {where} AND total_depth > 0
+                      AND alt_count * 1.0 / total_depth > 0.9
+                      {_ab_on_tgt}
+                ),
+                noncarriers AS (
+                    SELECT rb.total_depth, pt.variant_type, 'Non-carrier' AS carrier_group
+                    FROM ref_bases rb
+                    INNER JOIN (
+                        SELECT DISTINCT chrom, pos, variant_type
+                        FROM {table_expr}
+                        WHERE {where} AND alt_count * 1.0 / total_depth > 0.9
+                    ) pt ON rb.chrom = pt.chrom AND rb.pos = pt.pos
+                    WHERE rb.total_depth > 0
+                      {_rb_on_tgt}
+                ),
+                combined AS (
+                    SELECT * FROM carriers
+                    UNION ALL
+                    SELECT * FROM noncarriers
+                )
+                SELECT
+                    variant_type,
+                    carrier_group,
+                    MIN(total_depth)                                            AS min_d,
+                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_depth)  AS q1,
+                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY total_depth)  AS median_d,
+                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_depth)  AS q3,
+                    MAX(total_depth)                                            AS max_d,
+                    COUNT(*)                                                    AS n
+                FROM combined
+                GROUP BY variant_type, carrier_group
+            """).df()
+
+        if _bias_ecdf_df.empty:
             st.info("No hom-alt records under current filters.")
         else:
-            _bias_ecdf_df = con.execute("""
-                WITH ranked AS (
-                    SELECT
-                        variant_type, carrier_group, total_depth,
-                        ROW_NUMBER() OVER (PARTITION BY variant_type, carrier_group
-                                           ORDER BY total_depth) AS rn,
-                        COUNT(*) OVER (PARTITION BY variant_type, carrier_group) AS n
-                    FROM _bias_depth_df
-                )
-                SELECT variant_type, carrier_group, total_depth, rn * 1.0 / n AS ecdf
-                FROM ranked
-            """).df()
-
             _bias_color_scale = alt.Scale(
                 domain=["Carrier", "Non-carrier"],
                 range=["#4c78a8", "#e45756"],
@@ -1736,7 +1813,7 @@ with tab1:
 
             _bias_ecdf_chart = (
                 alt.Chart(_bias_ecdf_df)
-                .mark_line(interpolate="step-after", strokeWidth=2)
+                .mark_line(strokeWidth=2)
                 .encode(
                     x=alt.X("total_depth:Q", title="Total depth"),
                     y=alt.Y("ecdf:Q", title="Cumulative fraction",
@@ -1757,23 +1834,142 @@ with tab1:
             )
             st.altair_chart(_bias_ecdf_chart, use_container_width=True)
 
-            # Box plot summary
-            _bias_box_chart = (
-                alt.Chart(_bias_depth_df)
-                .mark_boxplot(extent="min-max", size=30)
-                .encode(
-                    x=alt.X("carrier_group:N", title="Group",
-                            axis=alt.Axis(labelAngle=0)),
-                    y=alt.Y("total_depth:Q", title="Total depth"),
-                    color=alt.Color("carrier_group:N", title="Group",
-                                    scale=_bias_color_scale, legend=None),
-                    column=alt.Column("variant_type:N", title="Variant type"),
-                    tooltip=["carrier_group", "variant_type",
-                             alt.Tooltip("total_depth:Q", title="Depth")],
-                )
-                .properties(height=260, title="Depth distribution: carrier vs. non-carrier")
+            # Box plot from pre-aggregated stats
+            _bias_box_df["iqr"]   = _bias_box_df["q3"] - _bias_box_df["q1"]
+            _bias_box_df["lower"] = (_bias_box_df["q1"] - 1.5 * _bias_box_df["iqr"]).clip(lower=_bias_box_df["min_d"])
+            _bias_box_df["upper"] = (_bias_box_df["q3"] + 1.5 * _bias_box_df["iqr"]).clip(upper=_bias_box_df["max_d"])
+
+            _bb_base    = alt.Chart(_bias_box_df)
+            _bb_whisker = _bb_base.mark_rule().encode(
+                x=alt.X("carrier_group:N", title="Group", axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("lower:Q", title="Total depth", scale=alt.Scale(zero=False)),
+                y2=alt.Y2("upper:Q"),
+                color=alt.Color("carrier_group:N", scale=_bias_color_scale, legend=None),
             )
-            st.altair_chart(_bias_box_chart)
+            _bb_box = _bb_base.mark_bar(size=30).encode(
+                x=alt.X("carrier_group:N"),
+                y=alt.Y("q1:Q"),
+                y2=alt.Y2("q3:Q"),
+                color=alt.Color("carrier_group:N", scale=_bias_color_scale, legend=None),
+                tooltip=[
+                    "variant_type", "carrier_group",
+                    alt.Tooltip("n:Q",        title="N",      format=","),
+                    alt.Tooltip("median_d:Q", title="Median", format=".1f"),
+                    alt.Tooltip("q1:Q",       title="Q1",     format=".1f"),
+                    alt.Tooltip("q3:Q",       title="Q3",     format=".1f"),
+                ],
+            )
+            _bb_median = _bb_base.mark_tick(color="white", size=30, thickness=2).encode(
+                x=alt.X("carrier_group:N"),
+                y=alt.Y("median_d:Q"),
+            )
+            st.altair_chart(
+                alt.layer(_bb_whisker, _bb_box, _bb_median)
+                .facet(column=alt.Column("variant_type:N", title="Variant type"))
+                .properties(title="Depth distribution: carrier vs. non-carrier"),
+            )
+
+            # Normalized depth: carrier depth / median non-carrier depth at same position
+            st.caption(
+                "**Normalized depth** — carrier total depth divided by the median "
+                "non-carrier depth at the same position. A value of 1.0 means the "
+                "carrier's depth matches non-carriers; values below 1.0 suggest "
+                "reduced coverage at that position in carriers, consistent with bait bias."
+            )
+            with _timed("normalized_depth_by_variant"):
+                _norm_depth_df = con.execute(f"""
+                    WITH noncarrier_median AS (
+                        SELECT rb.chrom, rb.pos,
+                               MEDIAN(rb.total_depth) AS median_nc_depth
+                        FROM ref_bases rb
+                        INNER JOIN (
+                            SELECT DISTINCT chrom, pos
+                            FROM {table_expr}
+                            WHERE {where}
+                              AND alt_count * 1.0 / total_depth > 0.9
+                        ) hom ON rb.chrom = hom.chrom AND rb.pos = hom.pos
+                        WHERE rb.total_depth > 0
+                          {_rb_on_tgt}
+                        GROUP BY rb.chrom, rb.pos
+                        HAVING MEDIAN(rb.total_depth) > 0
+                    ),
+                    carrier_norm AS (
+                        SELECT
+                            ab.variant_type,
+                            ab.total_depth * 1.0 / nc.median_nc_depth AS normalized_depth
+                        FROM (
+                            SELECT chrom, pos, variant_type, total_depth, alt_count
+                            FROM {table_expr}
+                            WHERE {where}
+                              AND alt_count * 1.0 / total_depth > 0.9
+                              AND total_depth > 0
+                              {_ab_on_tgt}
+                        ) ab
+                        INNER JOIN noncarrier_median nc
+                               ON ab.chrom = nc.chrom AND ab.pos = nc.pos
+                    )
+                    SELECT
+                        variant_type,
+                        MIN(normalized_depth)                                            AS min_nd,
+                        PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY normalized_depth)  AS q1,
+                        PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY normalized_depth)  AS median_nd,
+                        PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY normalized_depth)  AS q3,
+                        MAX(normalized_depth)                                            AS max_nd,
+                        COUNT(*)                                                         AS n
+                    FROM carrier_norm
+                    GROUP BY variant_type
+                """).df()
+
+            if not _norm_depth_df.empty:
+                # IQR-fenced whiskers (same convention as mark_boxplot "tukey")
+                _norm_depth_df["iqr"]   = _norm_depth_df["q3"] - _norm_depth_df["q1"]
+                _norm_depth_df["lower"] = (_norm_depth_df["q1"] - 1.5 * _norm_depth_df["iqr"]).clip(lower=_norm_depth_df["min_nd"])
+                _norm_depth_df["upper"] = (_norm_depth_df["q3"] + 1.5 * _norm_depth_df["iqr"]).clip(upper=_norm_depth_df["max_nd"])
+                _norm_depth_df["label"] = _norm_depth_df.apply(
+                    lambda r: f"n={int(r['n']):,}  med={r['median_nd']:.3f}  IQR=[{r['q1']:.3f}, {r['q3']:.3f}]",
+                    axis=1,
+                )
+
+                _nd_base   = alt.Chart(_norm_depth_df)
+                _nd_whisker = _nd_base.mark_rule().encode(
+                    x=alt.X("variant_type:N", title="Variant type", axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("lower:Q", title="Normalized depth", scale=alt.Scale(zero=False)),
+                    y2=alt.Y2("upper:Q"),
+                    color=alt.Color("variant_type:N", legend=None),
+                )
+                _nd_box = _nd_base.mark_bar(size=40).encode(
+                    x=alt.X("variant_type:N"),
+                    y=alt.Y("q1:Q"),
+                    y2=alt.Y2("q3:Q"),
+                    color=alt.Color("variant_type:N", legend=None),
+                    tooltip=[
+                        "variant_type",
+                        alt.Tooltip("n:Q",         title="N",      format=","),
+                        alt.Tooltip("median_nd:Q", title="Median", format=".3f"),
+                        alt.Tooltip("q1:Q",        title="Q1",     format=".3f"),
+                        alt.Tooltip("q3:Q",        title="Q3",     format=".3f"),
+                        alt.Tooltip("lower:Q",     title="Whisker low",  format=".3f"),
+                        alt.Tooltip("upper:Q",     title="Whisker high", format=".3f"),
+                    ],
+                )
+                _nd_median = _nd_base.mark_tick(color="white", size=40, thickness=2).encode(
+                    x=alt.X("variant_type:N"),
+                    y=alt.Y("median_nd:Q"),
+                )
+                _norm_ref_line = (
+                    alt.Chart(pd.DataFrame({"y": [1.0]}))
+                    .mark_rule(color="gray", strokeDash=[4, 4])
+                    .encode(y="y:Q")
+                )
+                st.altair_chart(
+                    (_nd_whisker + _nd_box + _nd_median + _norm_ref_line)
+                    .properties(
+                        height=300,
+                        title="Normalized depth by variant type (carrier / median non-carrier)",
+                    )
+                    .interactive(),
+                    use_container_width=True,
+                )
 
         # Family size comparison (only if ref_reads and alt_reads with family_size are present)
         if _has_ref_reads and _has_alt_reads and _has_alt_reads_cols("family_size"):
@@ -1797,6 +1993,7 @@ with tab1:
                                 SELECT DISTINCT sample_id, chrom, pos, alt_allele, variant_type
                                 FROM {table_expr}
                                 WHERE {where} AND alt_count * 1.0 / total_depth > 0.9
+                                  {_ab_on_tgt}
                             ) ab ON ar.sample_id = ab.sample_id
                                    AND ar.chrom    = ab.chrom
                                    AND ar.pos      = ab.pos
@@ -1812,30 +2009,60 @@ with tab1:
                                 WHERE {where} AND alt_count * 1.0 / total_depth > 0.9
                             ) pt ON rr.chrom = pt.chrom AND rr.pos = pt.pos
                             WHERE rr.family_size IS NOT NULL
+                              {_rr_on_tgt}
+                        ),
+                        combined AS (
+                            SELECT * FROM carrier_fs
+                            UNION ALL
+                            SELECT * FROM noncarrier_fs
                         )
-                        SELECT * FROM carrier_fs
-                        UNION ALL
-                        SELECT * FROM noncarrier_fs
+                        SELECT
+                            variant_type,
+                            carrier_group,
+                            MIN(family_size)                                            AS min_fs,
+                            PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY family_size)  AS q1,
+                            PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY family_size)  AS median_fs,
+                            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY family_size)  AS q3,
+                            MAX(family_size)                                            AS max_fs,
+                            COUNT(*)                                                    AS n
+                        FROM combined
+                        GROUP BY variant_type, carrier_group
                     """).df()
 
                 if not _bias_fs_df.empty:
-                    _bias_fs_chart = (
-                        alt.Chart(_bias_fs_df)
-                        .mark_boxplot(extent="min-max", size=30)
-                        .encode(
-                            x=alt.X("carrier_group:N", title="Group",
-                                    axis=alt.Axis(labelAngle=0)),
-                            y=alt.Y("family_size:Q", title="Family size"),
-                            color=alt.Color("carrier_group:N", title="Group",
-                                            scale=_bias_color_scale, legend=None),
-                            column=alt.Column("variant_type:N", title="Variant type"),
-                            tooltip=["carrier_group", "variant_type",
-                                     alt.Tooltip("family_size:Q", title="Family size")],
-                        )
-                        .properties(height=260,
-                                    title="Consensus family size: carrier vs. non-carrier")
+                    _bias_fs_df["iqr"]   = _bias_fs_df["q3"] - _bias_fs_df["q1"]
+                    _bias_fs_df["lower"] = (_bias_fs_df["q1"] - 1.5 * _bias_fs_df["iqr"]).clip(lower=_bias_fs_df["min_fs"])
+                    _bias_fs_df["upper"] = (_bias_fs_df["q3"] + 1.5 * _bias_fs_df["iqr"]).clip(upper=_bias_fs_df["max_fs"])
+
+                    _fs_base    = alt.Chart(_bias_fs_df)
+                    _fs_whisker = _fs_base.mark_rule().encode(
+                        x=alt.X("carrier_group:N", title="Group", axis=alt.Axis(labelAngle=0)),
+                        y=alt.Y("lower:Q", title="Family size", scale=alt.Scale(zero=False)),
+                        y2=alt.Y2("upper:Q"),
+                        color=alt.Color("carrier_group:N", scale=_bias_color_scale, legend=None),
                     )
-                    st.altair_chart(_bias_fs_chart)
+                    _fs_box = _fs_base.mark_bar(size=30).encode(
+                        x=alt.X("carrier_group:N"),
+                        y=alt.Y("q1:Q"),
+                        y2=alt.Y2("q3:Q"),
+                        color=alt.Color("carrier_group:N", scale=_bias_color_scale, legend=None),
+                        tooltip=[
+                            "variant_type", "carrier_group",
+                            alt.Tooltip("n:Q",         title="N",      format=","),
+                            alt.Tooltip("median_fs:Q", title="Median", format=".1f"),
+                            alt.Tooltip("q1:Q",        title="Q1",     format=".1f"),
+                            alt.Tooltip("q3:Q",        title="Q3",     format=".1f"),
+                        ],
+                    )
+                    _fs_median = _fs_base.mark_tick(color="white", size=30, thickness=2).encode(
+                        x=alt.X("carrier_group:N"),
+                        y=alt.Y("median_fs:Q"),
+                    )
+                    st.altair_chart(
+                        alt.layer(_fs_whisker, _fs_box, _fs_median)
+                        .facet(column=alt.Column("variant_type:N", title="Variant type"))
+                        .properties(title="Consensus family size: carrier vs. non-carrier"),
+                    )
 
 # ── SBS96 helpers (used by Error Spectrum tab and Cohort tab) ─────────────────
 _COMP = str.maketrans('ACGT', 'TGCA')
@@ -3544,7 +3771,8 @@ with tab3:
         )
         if _sb_or_clauses:
             _sb_sel_df = con.execute(f"""
-                SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf
+                SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                       pos + 1 AS pos_display
                 FROM {table_expr}
                 WHERE {_sb_or_clauses}
                 ORDER BY sample_id, chrom, pos
@@ -4073,7 +4301,8 @@ with tab_reads:
             st.altair_chart(_bq_chart, width="stretch")
             st.caption(
                 "A drop in mean base quality at high cycle numbers (late in the read) "
-                "indicates that alt-supporting reads at those positions may be artefacts."
+                "indicates that alt-supporting reads at those positions may be artefacts. "
+                "Quality is averaged arithmetically over Phred scores (not over error probabilities)."
             )
 
         # ── Row 3: N context around alt-supporting reads ──────────────────────
@@ -4112,114 +4341,131 @@ with tab_reads:
                 )
                 # Cache on the filter strings — this query scans alt_reads and runs
                 # on every rerun because Streamlit evaluates tab bodies eagerly.
-                _nctx_cache_key = ("nctx_df", where, _r_reads_filter)
+                # Pre-aggregate in DuckDB to avoid sending millions of read-level
+                # rows to the browser. Two small queries replace the former full
+                # alt_reads fetch: one for scalar metrics, one for histogram bins
+                # used to draw the density curve (~200 rows max).
+                _nctx_cache_key = ("nctx", where, _r_reads_filter)
                 if st.session_state.get("_nctx_cache_key") != _nctx_cache_key:
                     st.session_state["_nctx_cache_key"] = _nctx_cache_key
-                    with _timed("nctx_df [cache miss]"):
-                        st.session_state["_nctx_df_cache"] = con.execute(f"""
+                    with _timed("nctx scalars [cache miss]"):
+                        st.session_state["_nctx_scalars_cache"] = con.execute(f"""
                             SELECT
-                                ar.is_read1,
-                                ar.n_before_alt,
-                                ar.n_after_alt,
-                                ar.n_n_before_alt,
-                                ar.n_n_after_alt,
-                                ar.leading_n_run_len,
-                                ar.trailing_n_run_len
+                                AVG(CASE WHEN ar.n_before_alt > 0
+                                         THEN ar.n_n_before_alt * 1.0 / ar.n_before_alt
+                                         ELSE NULL END)                              AS mean_frac_n_before,
+                                AVG(CASE WHEN ar.n_after_alt  > 0
+                                         THEN ar.n_n_after_alt  * 1.0 / ar.n_after_alt
+                                         ELSE NULL END)                              AS mean_frac_n_after,
+                                AVG(CASE WHEN ar.n_n_before_alt > 0 THEN 1.0 ELSE 0.0 END) AS frac_any_n_before,
+                                AVG(CASE WHEN ar.n_n_after_alt  > 0 THEN 1.0 ELSE 0.0 END) AS frac_any_n_after
                             FROM {_r_join}
+                        """).fetchone()
+                    with _timed("nctx density bins [cache miss]"):
+                        st.session_state["_nctx_density_cache"] = con.execute(f"""
+                            WITH sides AS (
+                                SELECT
+                                    CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END AS read_group,
+                                    'Before alt'                                   AS side,
+                                    CASE WHEN ar.n_before_alt > 0
+                                         THEN ar.n_n_before_alt * 1.0 / ar.n_before_alt
+                                         ELSE NULL END                             AS frac_n
+                                FROM {_r_join}
+                                UNION ALL
+                                SELECT
+                                    CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END AS read_group,
+                                    'After alt'                                    AS side,
+                                    CASE WHEN ar.n_after_alt > 0
+                                         THEN ar.n_n_after_alt * 1.0 / ar.n_after_alt
+                                         ELSE NULL END                             AS frac_n
+                                FROM {_r_join}
+                            ),
+                            binned AS (
+                                SELECT
+                                    side, read_group,
+                                    ROUND(FLOOR(frac_n / 0.001) * 0.001, 4) AS frac_n_bin,
+                                    COUNT(*)                                  AS n
+                                FROM sides
+                                WHERE frac_n IS NOT NULL AND frac_n BETWEEN 0 AND 0.05
+                                GROUP BY side, read_group, frac_n_bin
+                            )
+                            SELECT side, read_group, frac_n_bin AS frac_n, n
+                            FROM binned
+                            ORDER BY side, read_group, frac_n
                         """).df()
                 else:
-                    _TIMINGS.append(("nctx_df [cache hit]", 0.0))
-                _nctx_df = st.session_state["_nctx_df_cache"]
+                    _TIMINGS.append(("nctx [cache hit]", 0.0))
 
-                if _nctx_df.empty:
+                _nctx_scalars    = st.session_state["_nctx_scalars_cache"]
+                _nctx_density_df = st.session_state["_nctx_density_cache"]
+
+                if _nctx_density_df.empty and (
+                    _nctx_scalars is None or all(v is None for v in _nctx_scalars)
+                ):
                     st.info("No read-context data available under current filters.")
                 else:
-                    _nctx_df = add_read_context_fraction_metrics(_nctx_df)
-                    _nctx_df["read_group"] = np.where(_nctx_df["is_read1"], "R1", "R2")
-                    _nctx_long_rows = []
-                    for _side, _col in [
-                        ("Before alt", "frac_n_before_alt"),
-                        ("After alt", "frac_n_after_alt"),
-                    ]:
-                        _sub = _nctx_df.dropna(subset=[_col]).copy()
-                        if not _sub.empty:
-                            _sub["side"] = _side
-                            _sub["frac_n"] = _sub[_col]
-                            _nctx_long_rows.append(_sub[["read_group", "side", "frac_n"]])
+                    _nctx_mean_before, _nctx_mean_after, _nctx_any_before, _nctx_any_after = (
+                        float(v) if v is not None else float("nan")
+                        for v in _nctx_scalars
+                    )
+                    _nctx_mean_delta = _nctx_mean_after - _nctx_mean_before
 
-                    if not _nctx_long_rows:
-                        st.info("No before/after N-burden values are available under current filters.")
-                    else:
-                        _nctx_long = pd.concat(_nctx_long_rows, ignore_index=True)
-                        _nctx_summary = (
-                            _nctx_long.groupby("side")["frac_n"]
-                            .agg(["median", "mean"])
-                            .to_dict("index")
-                        )
-                        _nctx_any_before = (_nctx_df["n_n_before_alt"] > 0).mean()
-                        _nctx_any_after = (_nctx_df["n_n_after_alt"] > 0).mean()
-                        _nctx_mean_before = _nctx_summary.get("Before alt", {}).get("mean", float("nan"))
-                        _nctx_mean_after = _nctx_summary.get("After alt", {}).get("mean", float("nan"))
-                        _nctx_mean_delta = _nctx_mean_after - _nctx_mean_before
+                    _nctx_metrics = st.columns(4)
+                    _nctx_metrics[0].metric("Mean frac N before", f"{_nctx_mean_before:.3f}")
+                    _nctx_metrics[1].metric(
+                        "Mean frac N after", f"{_nctx_mean_after:.3f}",
+                        delta=f"{_nctx_mean_delta:+.3f} vs before",
+                    )
+                    _nctx_metrics[2].metric("Reads with any N before", f"{_nctx_any_before:.1%}")
+                    _nctx_metrics[3].metric("Reads with any N after",  f"{_nctx_any_after:.1%}")
 
-                        _nctx_metrics = st.columns(4)
-                        _nctx_metrics[0].metric(
-                            "Mean frac N before",
-                            f"{_nctx_mean_before:.3f}",
+                    _nctx_any_df = pd.DataFrame([
+                        {"side": "Before alt", "fraction": _nctx_any_before},
+                        {"side": "After alt",  "fraction": _nctx_any_after},
+                    ])
+                    st.altair_chart(
+                        alt.Chart(_nctx_any_df)
+                        .mark_bar(opacity=0.85)
+                        .encode(
+                            x=alt.X("side:N", title=None),
+                            y=alt.Y(
+                                "fraction:Q",
+                                title="Fraction of alt-supporting reads with any N",
+                                scale=alt.Scale(domain=[0, 1]),
+                            ),
+                            color=alt.Color("side:N", title=None),
+                            tooltip=[
+                                "side:N",
+                                alt.Tooltip("fraction:Q", title="Fraction", format=".3%"),
+                            ],
                         )
-                        _nctx_metrics[1].metric(
-                            "Mean frac N after",
-                            f"{_nctx_mean_after:.3f}",
-                            delta=f"{_nctx_mean_delta:+.3f} vs before",
-                        )
-                        _nctx_metrics[2].metric(
-                            "Reads with any N before",
-                            f"{_nctx_any_before:.1%}",
-                        )
-                        _nctx_metrics[3].metric(
-                            "Reads with any N after",
-                            f"{_nctx_any_after:.1%}",
-                        )
+                        .properties(title="Fraction of alt-supporting reads with any N", height=220),
+                        width="stretch",
+                    )
 
-                        _nctx_any_df = pd.DataFrame(
-                            [
-                                {"side": "Before alt", "fraction": _nctx_any_before},
-                                {"side": "After alt", "fraction": _nctx_any_after},
-                            ]
-                        )
+                    if not _nctx_density_df.empty:
+                        # Build density curves from pre-binned counts (bin width = 0.001).
+                        if _nctx_color_mode == "R1/R2":
+                            _density_plot_df = _nctx_density_df.copy()
+                            _totals = _density_plot_df.groupby(["side", "read_group"])["n"].transform("sum")
+                            _density_plot_df["density"] = _density_plot_df["n"] / (_totals * 0.001)
+                            _density_plot_df["group"] = (
+                                _density_plot_df["side"] + " / " + _density_plot_df["read_group"]
+                            )
+                            _density_color = alt.Color("group:N", title=None)
+                        else:
+                            _density_plot_df = (
+                                _nctx_density_df
+                                .groupby(["side", "frac_n"])["n"]
+                                .sum()
+                                .reset_index()
+                            )
+                            _totals = _density_plot_df.groupby("side")["n"].transform("sum")
+                            _density_plot_df["density"] = _density_plot_df["n"] / (_totals * 0.001)
+                            _density_color = alt.Color("side:N", title=None)
 
                         st.altair_chart(
-                            alt.Chart(_nctx_any_df)
-                            .mark_bar(opacity=0.85)
-                            .encode(
-                                x=alt.X("side:N", title=None),
-                                y=alt.Y(
-                                    "fraction:Q",
-                                    title="Fraction of alt-supporting reads with any N",
-                                    scale=alt.Scale(domain=[0, 1]),
-                                ),
-                                color=alt.Color("side:N", title=None),
-                                tooltip=[
-                                    "side:N",
-                                    alt.Tooltip("fraction:Q", title="Fraction", format=".3%"),
-                                ],
-                            )
-                            .properties(title="Fraction of alt-supporting reads with any N", height=220),
-                            width="stretch",
-                        )
-
-                        _density_groupby = ["side"] + (
-                            ["read_group"] if _nctx_color_mode == "R1/R2" else []
-                        )
-                        _nctx_chart = (
-                            alt.Chart(_nctx_long)
-                            .transform_density(
-                                "frac_n",
-                                as_=["frac_n", "density"],
-                                groupby=_density_groupby,
-                                extent=[0, 0.05],
-                                steps=100,
-                            )
+                            alt.Chart(_density_plot_df)
                             .mark_line(strokeWidth=3)
                             .encode(
                                 x=alt.X(
@@ -4228,32 +4474,23 @@ with tab_reads:
                                     scale=alt.Scale(domain=[0, 0.05]),
                                 ),
                                 y=alt.Y("density:Q", title="Density"),
-                                color=alt.Color("side:N", title=None),
+                                color=_density_color,
                                 tooltip=[
-                                    "side:N",
+                                    alt.Tooltip("side:N"),
                                     alt.Tooltip("frac_n:Q", title="Fraction N", format=".3f"),
                                     alt.Tooltip("density:Q", title="Density", format=".3f"),
-                                    *(
-                                        [alt.Tooltip("read_group:N", title="Read group")]
-                                        if _nctx_color_mode == "R1/R2"
-                                        else []
-                                    ),
                                 ],
                             )
-                            .properties(title="Leading vs trailing N burden", height=320)
+                            .properties(title="Leading vs trailing N burden", height=320),
+                            width="stretch",
                         )
-                        if _nctx_color_mode == "R1/R2":
-                            _nctx_chart = _nctx_chart.facet(
-                                column=alt.Column("read_group:N", title=None)
-                            )
-                        st.altair_chart(_nctx_chart, width="stretch")
 
-                        st.caption(
-                            "Each read is normalized by the number of available bases on that side of the alt. "
-                            "For example, 1 `N` out of 1 base after the alt contributes 1.00, while 5 `N`s out of 100 "
-                            "bases after the alt contributes 0.05. The curves show the density of those per-read fractions "
-                            "before versus after the alt."
-                        )
+                    st.caption(
+                        "Each read is normalized by the number of available bases on that side of the alt. "
+                        "For example, 1 `N` out of 1 base after the alt contributes 1.00, while 5 `N`s out of 100 "
+                        "bases after the alt contributes 0.05. The curves show the density of those per-read fractions "
+                        "before versus after the alt."
+                    )
 
         # ── Row 3b: N-asymmetry locus discovery ───────────────────────────────
         st.subheader("N-asymmetry locus discovery")
@@ -4508,6 +4745,149 @@ with tab_reads:
                                 "Click a point in the scatter to load just those loci in IGV. "
                                 "Shift-click to select multiple."
                             )
+
+        # ── Row 3c: N-rich supporting loci ────────────────────────────────────
+        st.subheader("N-rich supporting loci")
+        if not _has_alt_reads_cols("n_n_before_alt", "n_n_after_alt", "trailing_n_run_len"):
+            st.info(
+                "N-rich loci analysis requires a newer `alt_reads` schema. "
+                "Re-run `geac collect --reads-output` and `geac merge` to enable this section."
+            )
+        else:
+            _nrich_enabled = st.checkbox(
+                "Enable N-rich loci analysis",
+                value=False,
+                key="nrich_enabled",
+                help=(
+                    "Identifies loci where alt-supporting reads are systematically enriched "
+                    "for N bases — a signal that the apparent alt support may be dominated by "
+                    "low-confidence or damaged read context. Runs a GROUP BY on alt_reads; "
+                    "may be slow on large cohorts."
+                ),
+            )
+            if not _nrich_enabled:
+                st.info(
+                    "N-rich loci analysis is disabled by default. "
+                    "Tick the checkbox above to run it."
+                )
+            else:
+                _nrich_min_frac = st.slider(
+                    "Min fraction of alt reads with any N",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.1,
+                    step=0.05,
+                    help=(
+                        "Show only loci where at least this fraction of alt-supporting reads "
+                        "carry one or more N bases in the tracked read context "
+                        "(n_n_before_alt + n_n_after_alt > 0)."
+                    ),
+                )
+
+                _nrich_cache_key = ("nrich_df", where, _r_reads_filter, _nrich_min_frac)
+                if st.session_state.get("_nrich_cache_key") != _nrich_cache_key:
+                    st.session_state["_nrich_cache_key"] = _nrich_cache_key
+                    st.session_state["_nrich_locus_cache_key"] = None  # invalidate dependent cache
+                    with _timed("nrich_df GROUP BY [cache miss]"):
+                        st.session_state["_nrich_df_cache"] = con.execute(f"""
+                            SELECT
+                                ar.sample_id,
+                                ar.chrom,
+                                ar.pos,
+                                ar.alt_allele,
+                                COUNT(*)                                                     AS n_alt_reads,
+                                AVG(CASE WHEN ar.n_n_before_alt + ar.n_n_after_alt > 0
+                                         THEN 1.0 ELSE 0.0 END)                             AS frac_reads_with_any_n,
+                                AVG(CASE WHEN ar.trailing_n_run_len > 0
+                                         THEN 1.0 ELSE 0.0 END)                             AS frac_reads_with_trailing_n,
+                                AVG(ar.trailing_n_run_len)                                   AS mean_trailing_n_run_len,
+                                AVG(CASE WHEN (ar.n_before_alt + ar.n_after_alt) > 0
+                                         THEN (ar.n_n_before_alt + ar.n_n_after_alt) * 1.0
+                                              / (ar.n_before_alt + ar.n_after_alt)
+                                         ELSE NULL END)                                      AS mean_total_n_frac
+                            FROM {_r_join}
+                            GROUP BY ar.sample_id, ar.chrom, ar.pos, ar.alt_allele
+                        """).df()
+                else:
+                    _TIMINGS.append(("nrich_df [cache hit]", 0.0))
+                _nrich_df = st.session_state["_nrich_df_cache"]
+
+                if _nrich_df.empty:
+                    st.info("No loci available under current filters.")
+                else:
+                    # Merge in VAF, variant_type, alt_count, total_depth from the locus table.
+                    _nrich_locus_cache_key = ("nrich_locus", where)
+                    if st.session_state.get("_nrich_locus_cache_key") != _nrich_locus_cache_key:
+                        st.session_state["_nrich_locus_cache_key"] = _nrich_locus_cache_key
+                        st.session_state["_nrich_locus_cache"] = con.execute(f"""
+                            SELECT sample_id, chrom, pos, alt_allele, variant_type,
+                                   ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                                   alt_count, total_depth
+                            FROM {table_expr}
+                            WHERE {where}
+                        """).df()
+                    _nrich_df = _nrich_df.merge(
+                        st.session_state["_nrich_locus_cache"],
+                        on=["sample_id", "chrom", "pos", "alt_allele"],
+                        how="left",
+                    )
+
+                    # Apply the threshold filter.
+                    _nrich_df = _nrich_df[_nrich_df["frac_reads_with_any_n"] >= _nrich_min_frac]
+
+                    if _nrich_df.empty:
+                        st.info(
+                            f"No loci where ≥{_nrich_min_frac:.0%} of alt reads carry N. "
+                            "Try lowering the threshold."
+                        )
+                    else:
+                        _nrich_display = (
+                            _nrich_df
+                            .sort_values("frac_reads_with_any_n", ascending=False)
+                            [["sample_id", "chrom", "pos", "alt_allele", "variant_type",
+                              "vaf", "alt_count", "total_depth", "n_alt_reads",
+                              "frac_reads_with_any_n", "frac_reads_with_trailing_n",
+                              "mean_trailing_n_run_len", "mean_total_n_frac"]]
+                            .reset_index(drop=True)
+                        )
+                        st.caption(
+                            f"{len(_nrich_display):,} loci where ≥{_nrich_min_frac:.0%} of alt reads "
+                            "carry N — sorted by fraction of reads with any N, descending."
+                        )
+                        st.dataframe(_nrich_display, width="stretch", hide_index=True)
+
+                        # IGV buttons for the full N-rich loci set.
+                        # Cache the OR clause and backing df on filters + threshold so it
+                        # doesn't rebuild the huge OR string on every widget interaction.
+                        _nrich_tbl_cache_key = (
+                            "nrich_tbl", where, _r_reads_filter, _nrich_min_frac
+                        )
+                        if (
+                            st.session_state.get("_nrich_tbl_cache_key") != _nrich_tbl_cache_key
+                            or "_nrich_tbl_df_cache" not in st.session_state
+                        ):
+                            _nrich_table_or = " OR ".join(
+                                f"(sample_id = '{_sql_str(r['sample_id'])}' "
+                                f"AND chrom = '{_sql_str(r['chrom'])}' "
+                                f"AND pos = {int(r['pos'])} "
+                                f"AND alt_allele = '{_sql_str(r['alt_allele'])}')"
+                                for _, r in _nrich_display.iterrows()
+                            )
+                            st.session_state["_nrich_tbl_cache_key"] = _nrich_tbl_cache_key
+                            st.session_state["_nrich_tbl_or_cache"] = _nrich_table_or
+                            st.session_state["_nrich_tbl_df_cache"] = con.execute(f"""
+                                SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                                       pos + 1 AS pos_display
+                                FROM {table_expr}
+                                WHERE ({_nrich_table_or})
+                                ORDER BY chrom, pos
+                            """).df()
+                        igv_buttons(
+                            [f"({st.session_state['_nrich_tbl_or_cache']})"],
+                            st.session_state["_nrich_tbl_df_cache"],
+                            key="nrich_table_igv",
+                            use_global_filters=False,
+                        )
 
         # ── Row 4: Insert size distribution ───────────────────────────────────
         if "_cached_has_insert_size" not in st.session_state:

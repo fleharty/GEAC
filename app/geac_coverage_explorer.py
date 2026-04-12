@@ -13,7 +13,7 @@ from coverage_profile import (
 )
 from igv_helpers import load_manifest, resolve_index_uri
 from explorer import COVERAGE_FILTER_STATE, GEAC_VERSION, DataSource
-from explorer.data_source import sort_chroms
+from explorer.data_source import sort_chroms, parse_region
 
 st.set_page_config(page_title="GEAC Coverage Explorer", layout="wide")
 st.title("GEAC Coverage Explorer")
@@ -95,12 +95,11 @@ sample_sel = st.sidebar.multiselect(
 )
 
 all_chroms = sort_chroms(data_source.distinct_values("chrom"))
-chrom_sel = st.sidebar.selectbox("Chromosome", ["All"] + all_chroms, key="chrom_sel")
-
-if _has_gene:
-    gene_text = st.sidebar.text_input("Gene (partial match)", "", key="gene_text")
-else:
-    gene_text = ""
+chrom_sel = st.sidebar.text_input(
+    "Region or gene",
+    placeholder="chr1 · 1 · chr1:100000 · 1:100000-200000 · TP53",
+    key="chrom_sel",
+)
 
 if _has_on_target:
     on_target_sel = st.sidebar.selectbox(
@@ -188,12 +187,16 @@ def _filter_clauses(extra: list[str] | None = None) -> list[str]:
     if sample_sel:
         ids = ", ".join(f"'{s.replace(chr(39), chr(39)*2)}'" for s in sample_sel)
         clauses.append(f"sample_id IN ({ids})")
-    if chrom_sel != "All":
-        c = chrom_sel.replace("'", "''")
-        clauses.append(f"chrom = '{c}'")
-    if gene_text.strip():
-        g = gene_text.strip().replace("'", "''")
-        clauses.append(f"LOWER(gene) LIKE '%{g.lower()}%'")
+    _region = parse_region(chrom_sel, all_chroms)
+    if _region.chrom is not None:
+        clauses.append(f"chrom = '{_region.chrom.replace(chr(39), chr(39)*2)}'")
+    if _region.start is not None:
+        if _region.end is not None:
+            clauses.append(f"pos BETWEEN {_region.start} AND {_region.end}")
+        else:
+            clauses.append(f"pos = {_region.start}")
+    if _region.gene is not None and _has_gene:
+        clauses.append(f"gene = '{_region.gene.replace(chr(39), chr(39)*2)}'")
     if on_target_sel == "On target":
         clauses.append("on_target = true")
     elif on_target_sel == "Off target":
