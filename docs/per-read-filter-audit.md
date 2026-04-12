@@ -33,9 +33,9 @@ The per-read filter system spans three layers:
 | cycle                | Int32   | no       | 1-based: `alignment.qpos() + 1`       |
 | read_length          | Int32   | no       | `record.seq_len()`                    |
 | is_read1             | Boolean | no       | BAM flag `0x40`                       |
-| ab_count             | Int32 | **yes**  | fgbio `aD` tag                        |
-| ba_count             | Int32 | **yes**  | fgbio `bD` tag                        |
-| family_size          | Int32 | **yes**  | fgbio `cD` tag                        |
+| ab_count             | Int32 | **yes**  | pipeline-aware support count: fgbio `aD`, DRAGEN `XV` |
+| ba_count             | Int32 | **yes**  | pipeline-aware second-strand support: fgbio `bD`, DRAGEN null |
+| family_size          | Int32 | **yes**  | pipeline-aware total support: fgbio `cD`, DRAGEN `XW` when present else `XV` |
 | base_qual            | Int32 | no       | `record.qual()[qpos]`                 |
 | map_qual             | Int32 | no       | `record.mapq()`                       |
 | insert_size          | Int32 | **yes**  | `|TLEN|`; NULL when 0 (unpaired)      |

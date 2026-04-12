@@ -612,12 +612,16 @@ Features:
 - **Per-read filters** (DuckDB only, requires `--reads-output`) — when an `alt_reads`
   table is present, a "Per-read filters" section appears in the sidebar with four
   range sliders. All filters use include-only (BETWEEN) semantics:
-  - *Family size* — filter by fgbio `cD` tag (total molecules per consensus read).
+  - *Family size* — filter by a pipeline-aware support count for consensus reads.
+    For fgbio this is `cD` (with `aD`/`bD` available as strand-specific support).
+    For DRAGEN this is `XW` when duplex support is present, otherwise `XV`.
     Raising the minimum excludes singleton families that are likely PCR or sequencing
     errors. If a locus's alt count drops to zero after filtering, the locus is removed
     from the table entirely. This is the most useful filter for error-corrected data:
     a variant that disappears when singletons are excluded is almost certainly noise;
     one that holds up at family size ≥ 2 or 3 has stronger support.
+    DRAGEN users should rerun `geac collect --reads-output` and rebuild merged cohorts
+    if they want family-size-related Explorer behavior to reflect the `XV`/`XW` tag mapping.
   - *Cycle number* — filter by 1-based sequencing cycle (position within the read).
     Variants clustered at high cycle numbers (near the read end) are a common
     alignment artefact; lowering the upper bound removes these reads.
@@ -758,9 +762,9 @@ fragment at a locus. Linked to the locus table by `(sample_id, chrom, pos, alt_a
 | `cycle` | int32 | 1-based sequencing cycle at the alt position. Forward reads: `hard_clips_5prime + qpos + 1`; reverse reads: `hard_clips_5prime + read_length − qpos`. Hard-clipped bases at the 5′ end of synthesis are included so cycle reflects true polymerase position. |
 | `read_length` | int32 | Stored sequence length in bases (hard-clipped bases excluded, soft-clipped bases included) |
 | `is_read1` | bool | `true` if R1 (BAM flag `0x40`), `false` if R2 or unpaired |
-| `ab_count` | int32? | fgbio `aD` tag: AB (top-strand) raw read count; null if tag absent |
-| `ba_count` | int32? | fgbio `bD` tag: BA (bottom-strand) raw read count; null if tag absent |
-| `family_size` | int32? | fgbio `cD` tag: total raw read count (`aD + bD` for duplex; sole count for simplex); null if tag absent |
+| `ab_count` | int32? | Pipeline-aware strand/family support count. fgbio: `aD` (AB/top-strand raw read count). DRAGEN: `XV` (collapsed family fragments). Null if tag absent. |
+| `ba_count` | int32? | Pipeline-aware second-strand support count. fgbio: `bD` (BA/bottom-strand raw read count). DRAGEN: null (no equivalent second-strand count currently exposed by GEAC). |
+| `family_size` | int32? | Pipeline-aware total support count. fgbio: `cD` (with fallback to `aD + bD` when needed). DRAGEN: `XW` when duplex fragments are present, otherwise `XV`. Null if tag absent. |
 | `base_qual` | int32 | Base quality at the alt position |
 | `map_qual` | int32 | Mapping quality of the read |
 | `insert_size` | int32? | SAM TLEN (template length / insert size); null when 0 (unpaired or mate unmapped) |
@@ -845,9 +849,9 @@ Columns are identical to the `alt_reads` table except there is no `alt_allele` c
 | `cycle` | int32 | 1-based sequencing cycle at the queried position |
 | `read_length` | int32 | Stored read length in bases |
 | `is_read1` | bool | `true` if R1 (BAM flag `0x40`) |
-| `ab_count` | int32? | fgbio `aD` tag (null if absent) |
-| `ba_count` | int32? | fgbio `bD` tag (null if absent) |
-| `family_size` | int32? | fgbio `cD` tag (null if absent) |
+| `ab_count` | int32? | Pipeline-aware strand/family support count. fgbio: `aD`; DRAGEN: `XV`; null if absent. |
+| `ba_count` | int32? | Pipeline-aware second-strand support count. fgbio: `bD`; DRAGEN: null; null if absent. |
+| `family_size` | int32? | Pipeline-aware total support count. fgbio: `cD`; DRAGEN: `XW` when present, otherwise `XV`; null if absent. |
 | `base_qual` | int32 | Base quality at the queried position |
 | `map_qual` | int32 | Mapping quality of the read |
 | `insert_size` | int32? | SAM TLEN (null when 0) |

@@ -371,12 +371,14 @@ pub struct AltRead {
     pub read_length: i32,
     /// true if this read is R1 (BAM flag 0x40), false if R2 or unpaired
     pub is_read1: bool,
-    /// fgbio aD tag: AB (top-strand) raw read count; None if tag absent
+    /// Pipeline-aware strand/family support count.
+    /// fgbio: aD (AB/top-strand raw read count); DRAGEN: XV (family fragments).
     pub ab_count: Option<i32>,
-    /// fgbio bD tag: BA (bottom-strand) raw read count; None if tag absent
+    /// Pipeline-aware second-strand support count.
+    /// fgbio: bD (BA/bottom-strand raw read count); DRAGEN: no equivalent tag exposed.
     pub ba_count: Option<i32>,
-    /// fgbio cD tag: total raw read count (aD + bD for duplex; sole count for simplex).
-    /// This is the primary family size field — present for both simplex and duplex data.
+    /// Pipeline-aware total support count.
+    /// fgbio: cD (with fallback to aD + bD when needed); DRAGEN: XW when present, otherwise XV.
     pub family_size: Option<i32>,
     pub base_qual: i32,
     pub map_qual: i32,
