@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use rust_htslib::bam;
+use crate::record::Pipeline;
 
 /// Per-read detail collected during tallying, used to build AltRead records.
 #[derive(Clone)]
@@ -130,6 +131,35 @@ pub(super) fn read_context_metrics(bases: &[u8], qpos: usize) -> ReadContextMetr
     }
 }
 
+pub(super) fn family_size_tags(
+    record: &bam::Record,
+    pipeline: Pipeline,
+) -> (Option<i32>, Option<i32>, Option<i32>) {
+    match pipeline {
+        Pipeline::Fgbio => {
+            let ab = aux_i32(record, b"aD");
+            let ba = aux_i32(record, b"bD");
+            let fs = aux_i32(record, b"cD").or_else(|| match (ab, ba) {
+                (Some(a), Some(b)) => Some(a + b),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            });
+            (ab, ba, fs)
+        }
+        Pipeline::Dragen => {
+            let xv = aux_i32(record, b"XV");
+            let xw = aux_i32(record, b"XW");
+            let fs = match xw {
+                Some(w) if w > 0 => Some(w),
+                _ => xv,
+            };
+            (xv, None, fs)
+        }
+        Pipeline::Raw => (None, None, None),
+    }
+}
+
 /// Tally each observed base at a pileup column with overlap detection.
 ///
 /// Overlap is detected by grouping reads by query name. A query name appearing
@@ -161,6 +191,7 @@ pub(super) fn read_context_metrics(bases: &[u8], qpos: usize) -> ReadContextMetr
 /// that all reads covering a position are captured regardless of which allele they support.
 pub(super) fn tally_pileup(
     pileup: &rust_htslib::bam::pileup::Pileup,
+    pipeline: Pipeline,
     min_base_qual: u8,
     min_map_qual: u8,
     include_duplicates: bool,
@@ -227,9 +258,7 @@ pub(super) fn tally_pileup(
         let hard_clip_before = if is_reverse { hc_trailing } else { hc_leading };
 
         let (ab_count, ba_count, family_size, insert_size) = if do_collect {
-            let ab = aux_i32(&record, b"aD");
-            let ba = aux_i32(&record, b"bD");
-            let fs = aux_i32(&record, b"cD");
+            let (ab, ba, fs) = family_size_tags(&record, pipeline);
             let tlen = record.insert_size();
             let ins = if tlen == 0 {
                 None
@@ -613,7 +642,11 @@ pub(super) fn true_cycle(
 
 #[cfg(test)]
 mod tests {
-    use super::{locus_n_context_summary, read_context_metrics, ReadDetail};
+    use rust_htslib::bam::{self, Record};
+
+    use crate::record::Pipeline;
+
+    use super::{family_size_tags, locus_n_context_summary, read_context_metrics, ReadDetail};
 
     fn detail(n_before: i32, n_n_before: i32, n_after: i32, n_n_after: i32) -> ReadDetail {
         ReadDetail {
@@ -705,6 +738,26 @@ mod tests {
         assert_eq!(m.n_n_after_alt, 2);
         assert_eq!(m.leading_n_run_len, 0);
         assert_eq!(m.trailing_n_run_len, 2);
+    }
+
+    #[test]
+    fn family_size_tags_reads_dragen_xv_xw() {
+        let mut rec = Record::new();
+        rec.push_aux(b"XV", bam::record::Aux::I32(7)).unwrap();
+        rec.push_aux(b"XW", bam::record::Aux::I32(3)).unwrap();
+        let (ab, ba, fs) = family_size_tags(&rec, Pipeline::Dragen);
+        assert_eq!(ab, Some(7));
+        assert_eq!(ba, None);
+        assert_eq!(fs, Some(3));
+    }
+
+    #[test]
+    fn family_size_tags_fallbacks_to_xv_when_xw_is_zero() {
+        let mut rec = Record::new();
+        rec.push_aux(b"XV", bam::record::Aux::I32(5)).unwrap();
+        rec.push_aux(b"XW", bam::record::Aux::I32(0)).unwrap();
+        let (_, _, fs) = family_size_tags(&rec, Pipeline::Dragen);
+        assert_eq!(fs, Some(5));
     }
 
     #[test]

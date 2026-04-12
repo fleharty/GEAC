@@ -103,6 +103,7 @@ pub fn collect_alt_bases(
             read_details,
         } = tally_pileup(
             &pileup,
+            args.pipeline,
             args.min_base_qual,
             args.min_map_qual,
             args.include_duplicates,
@@ -206,6 +207,7 @@ pub fn collect_alt_bases(
 
         let (indels, indel_read_details) = tally_indels(
             &pileup,
+            args.pipeline,
             pos,
             ref_cache.current_seq(),
             args.min_map_qual,

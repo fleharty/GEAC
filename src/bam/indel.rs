@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use rust_htslib::bam::pileup::Indel;
 
-use crate::record::VariantType;
+use crate::record::{Pipeline, VariantType};
 
-use super::pileup::{aux_i32, hard_clip_counts, read_context_metrics, ReadDetail};
+use super::pileup::{family_size_tags, hard_clip_counts, read_context_metrics, ReadDetail};
 
 /// Per-indel-allele tally at a pileup position.
 pub(super) struct IndelCount {
@@ -49,6 +49,7 @@ pub(super) fn indels_compatible(a: &str, b: &str) -> bool {
 /// so that overlapping pairs are correctly identified even when one read has no indel.
 pub(super) fn tally_indels(
     pileup: &rust_htslib::bam::pileup::Pileup,
+    pipeline: Pipeline,
     pos: i64,
     chrom_seq: &[u8],
     min_map_qual: u8,
@@ -152,6 +153,7 @@ pub(super) fn tally_indels(
             let context = read_context_metrics(&seq_bases, qpos);
             let (hc_leading, hc_trailing) = hard_clip_counts(&record);
             let hard_clip_before = if is_reverse { hc_trailing } else { hc_leading };
+            let (ab_count, ba_count, family_size) = family_size_tags(&record, pipeline);
             Some(ReadDetail {
                 qpos,
                 read_len: record.seq_len(),
@@ -160,9 +162,9 @@ pub(super) fn tally_indels(
                 hard_clip_before,
                 base_qual: qual.get(qpos).copied().unwrap_or(0),
                 map_qual: record.mapq(),
-                ab_count: aux_i32(&record, b"aD"),
-                ba_count: aux_i32(&record, b"bD"),
-                family_size: aux_i32(&record, b"cD"),
+                ab_count,
+                ba_count,
+                family_size,
                 insert_size: if tlen == 0 {
                     None
                 } else {

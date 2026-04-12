@@ -909,6 +909,7 @@ fn reads_reverse_strand_cycle_counts_from_read_end() {
             trailing_hard_clips: 0,
             seq,
             quals,
+            aux_i32_tags: vec![],
         }],
     );
     let out = dir.path().join("rev.parquet");
@@ -965,6 +966,7 @@ fn reads_forward_hard_clips_counted_in_cycle() {
             trailing_hard_clips: 0,
             seq,
             quals,
+            aux_i32_tags: vec![],
         }],
     );
     let out = dir.path().join("fwd_hc.parquet");
@@ -1023,6 +1025,7 @@ fn reads_reverse_hard_clips_counted_in_cycle() {
             trailing_hard_clips: 5,
             seq,
             quals,
+            aux_i32_tags: vec![],
         }],
     );
     let out = dir.path().join("rev_hc.parquet");
@@ -1075,6 +1078,7 @@ fn reads_record_n_context_metrics() {
             trailing_hard_clips: 0,
             seq,
             quals,
+            aux_i32_tags: vec![],
         }],
     );
     let out = dir.path().join("nctx.parquet");
@@ -1114,6 +1118,52 @@ fn reads_record_n_context_metrics() {
         parquet_query_i32(&reads_pq, "trailing_n_run_len", "alt_allele = 'T'"),
         2
     );
+}
+
+#[test]
+fn dragen_reads_use_xv_xw_for_family_size() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 200);
+
+    let mut seq = vec![b'A'; 10];
+    seq[5] = b'T';
+    let quals = vec![40u8; 10];
+    let bam = write_cycle_bam(
+        dir.path(),
+        "dragen_tags.bam",
+        "sample1",
+        200,
+        vec![CycleTestRead {
+            pos: 40,
+            flags: 0,
+            leading_hard_clips: 0,
+            trailing_hard_clips: 0,
+            seq,
+            quals,
+            aux_i32_tags: vec![(*b"XV", 7), (*b"XW", 3)],
+        }],
+    );
+    let out = dir.path().join("dragen_tags.parquet");
+
+    assert_geac_success(&[
+        "collect",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+        "--read-type",
+        "duplex",
+        "--pipeline",
+        "dragen",
+        "--reads-output",
+    ]);
+
+    let reads_pq = dir.path().join("dragen_tags.reads.parquet");
+    assert!(reads_pq.exists(), "reads parquet not created");
+    assert_eq!(parquet_query_i32(&reads_pq, "ab_count", "alt_allele = 'T'"), 7);
+    assert_eq!(parquet_query_i32(&reads_pq, "family_size", "alt_allele = 'T'"), 3);
 }
 
 /// .normal_evidence.parquet files are routed to the normal_evidence table.

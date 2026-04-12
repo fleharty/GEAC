@@ -127,6 +127,7 @@ pub fn collect_ref_bases(
 
             let result = tally_pileup(
                 &pileup,
+                args.pipeline,
                 args.min_base_qual,
                 args.min_map_qual,
                 args.include_duplicates,

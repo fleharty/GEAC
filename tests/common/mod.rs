@@ -427,6 +427,8 @@ pub struct CycleTestRead {
     pub seq: Vec<u8>,
     /// Base qualities, same length as `seq`.
     pub quals: Vec<u8>,
+    /// Optional integer auxiliary tags to add to the BAM record.
+    pub aux_i32_tags: Vec<([u8; 2], i32)>,
 }
 
 /// Write a coordinate-sorted, indexed BAM from explicit `CycleTestRead` specifications.
@@ -484,6 +486,9 @@ pub fn write_cycle_bam(
         rec.set_mapq(60);
         rec.push_aux(b"RG", bam::record::Aux::String("rg1"))
             .unwrap();
+        for (tag, value) in &r.aux_i32_tags {
+            rec.push_aux(tag, bam::record::Aux::I32(*value)).unwrap();
+        }
         writer.write(&rec).unwrap();
     }
 
