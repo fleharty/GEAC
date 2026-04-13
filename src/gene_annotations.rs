@@ -24,7 +24,7 @@ pub struct GeneAnnotation {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FeatureKind {
     Gene,
-    Utr,   // UTR where 5'/3' not determinable (e.g. GTF plain "UTR")
+    Utr, // UTR where 5'/3' not determinable (e.g. GTF plain "UTR")
     Utr5,
     Utr3,
     Exon,
@@ -34,37 +34,37 @@ enum FeatureKind {
 impl FeatureKind {
     fn priority(self) -> u8 {
         match self {
-            Self::Cds             => 4,
-            Self::Exon            => 3,
+            Self::Cds => 4,
+            Self::Exon => 3,
             Self::Utr5 | Self::Utr3 | Self::Utr => 2,
-            Self::Gene            => 0,
+            Self::Gene => 0,
         }
     }
 
     fn as_str(self) -> Option<&'static str> {
         match self {
-            Self::Cds  => Some("CDS"),
+            Self::Cds => Some("CDS"),
             Self::Exon => Some("exon"),
             Self::Utr5 => Some("5UTR"),
             Self::Utr3 => Some("3UTR"),
-            Self::Utr  => Some("UTR"),
+            Self::Utr => Some("UTR"),
             Self::Gene => None,
         }
     }
 }
 
 struct GeneRecord {
-    start:       u32,
-    end:         u32,
-    gene:        String,
-    kind:        FeatureKind,
+    start: u32,
+    end: u32,
+    gene: String,
+    kind: FeatureKind,
     exon_number: Option<i32>,
 }
 
 /// Per-chromosome gene intervals, sorted by start with a prefix-max of end values
 /// to support efficient overlap queries even when genes overlap.
 struct ChromGenes {
-    intervals:      Vec<GeneRecord>,
+    intervals: Vec<GeneRecord>,
     /// prefix_max_end[i] = max(end[0], end[1], …, end[i])
     prefix_max_end: Vec<u32>,
 }
@@ -82,7 +82,10 @@ impl ChromGenes {
                 })
                 .collect()
         };
-        Self { intervals: records, prefix_max_end }
+        Self {
+            intervals: records,
+            prefix_max_end,
+        }
     }
 
     /// Returns the highest-priority interval covering `pos` (0-based), or None.
@@ -99,7 +102,7 @@ impl ChromGenes {
             if self.intervals[i].end > pos {
                 let candidate = &self.intervals[i];
                 let better = match best {
-                    None    => true,
+                    None => true,
                     Some(b) => candidate.kind.priority() > b.kind.priority(),
                 };
                 if better {
@@ -149,8 +152,8 @@ impl GeneAnnotations {
 
             match fmt {
                 Format::GenePred => parse_genepred_line(&line, &mut raw),
-                Format::Gtf      => parse_gtf_line(&line, &mut raw),
-                Format::Gff3     => parse_gff3_line(&line, &mut raw),
+                Format::Gtf => parse_gtf_line(&line, &mut raw),
+                Format::Gff3 => parse_gff3_line(&line, &mut raw),
             }
         }
 
@@ -172,9 +175,9 @@ impl GeneAnnotations {
         let p = pos as u32;
         let record = self.lookup(chrom, p)?;
         Some(GeneAnnotation {
-            gene:         record.gene.clone(),
+            gene: record.gene.clone(),
             feature_type: record.kind.as_str().map(str::to_string),
-            exon_number:  record.exon_number,
+            exon_number: record.exon_number,
         })
     }
 
@@ -206,23 +209,31 @@ impl GeneAnnotations {
 
 // ── Format detection ───────────────────────────────────────────────────────────
 
-enum Format { GenePred, Gtf, Gff3 }
+enum Format {
+    GenePred,
+    Gtf,
+    Gff3,
+}
 
 fn detect_format(path: &Path) -> Format {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let inner = name.strip_suffix(".gz").unwrap_or(name);
-    match Path::new(inner).extension().and_then(|e| e.to_str()).unwrap_or("") {
-        "txt"          => Format::GenePred,
+    match Path::new(inner)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+    {
+        "txt" => Format::GenePred,
         "gff3" | "gff" => Format::Gff3,
-        _              => Format::Gtf,
+        _ => Format::Gtf,
     }
 }
 
 // ── File opening (transparent gzip) ───────────────────────────────────────────
 
 fn open_reader(path: &Path) -> Result<Box<dyn BufRead>> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("cannot open {}", path.display()))?;
+    let file =
+        std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     if path.extension().and_then(|e| e.to_str()) == Some("gz") {
         Ok(Box::new(BufReader::new(GzDecoder::new(file))))
     } else {
@@ -238,13 +249,13 @@ fn parse_gtf_line(line: &str, raw: &mut HashMap<String, Vec<GeneRecord>>) {
         return;
     }
     let kind = match fields[2] {
-        "gene"            => FeatureKind::Gene,
-        "exon"            => FeatureKind::Exon,
-        "CDS"             => FeatureKind::Cds,
-        "five_prime_UTR"  | "five_prime_utr"  => FeatureKind::Utr5,
+        "gene" => FeatureKind::Gene,
+        "exon" => FeatureKind::Exon,
+        "CDS" => FeatureKind::Cds,
+        "five_prime_UTR" | "five_prime_utr" => FeatureKind::Utr5,
         "three_prime_UTR" | "three_prime_utr" => FeatureKind::Utr3,
-        "UTR"             => FeatureKind::Utr,
-        _                 => return,
+        "UTR" => FeatureKind::Utr,
+        _ => return,
     };
 
     // GTF is 1-based inclusive → convert to 0-based half-open.
@@ -260,23 +271,27 @@ fn parse_gtf_line(line: &str, raw: &mut HashMap<String, Vec<GeneRecord>>) {
     let attrs = fields[8];
     let gene = match parse_gtf_gene_name(attrs) {
         Some(g) => g,
-        None    => return,
+        None => return,
     };
     let exon_number = if matches!(kind, FeatureKind::Exon) {
-        extract_gtf_attr(attrs, "exon_number")
-            .and_then(|v| v.parse::<i32>().ok())
+        extract_gtf_attr(attrs, "exon_number").and_then(|v| v.parse::<i32>().ok())
     } else {
         None
     };
 
     raw.entry(fields[0].to_string())
         .or_default()
-        .push(GeneRecord { start, end, gene, kind, exon_number });
+        .push(GeneRecord {
+            start,
+            end,
+            gene,
+            kind,
+            exon_number,
+        });
 }
 
 fn parse_gtf_gene_name(attrs: &str) -> Option<String> {
-    extract_gtf_attr(attrs, "gene_name")
-        .or_else(|| extract_gtf_attr(attrs, "gene_id"))
+    extract_gtf_attr(attrs, "gene_name").or_else(|| extract_gtf_attr(attrs, "gene_id"))
 }
 
 fn extract_gtf_attr(attrs: &str, key: &str) -> Option<String> {
@@ -309,12 +324,12 @@ fn parse_gff3_line(line: &str, raw: &mut HashMap<String, Vec<GeneRecord>>) {
         return;
     }
     let kind = match fields[2] {
-        "gene"            => FeatureKind::Gene,
-        "exon"            => FeatureKind::Exon,
-        "CDS"             => FeatureKind::Cds,
-        "five_prime_UTR"  => FeatureKind::Utr5,
+        "gene" => FeatureKind::Gene,
+        "exon" => FeatureKind::Exon,
+        "CDS" => FeatureKind::Cds,
+        "five_prime_UTR" => FeatureKind::Utr5,
         "three_prime_UTR" => FeatureKind::Utr3,
-        _                 => return,
+        _ => return,
     };
 
     let start: u32 = match fields[3].parse::<u32>() {
@@ -329,18 +344,23 @@ fn parse_gff3_line(line: &str, raw: &mut HashMap<String, Vec<GeneRecord>>) {
     let attrs = fields[8];
     let gene = match parse_gff3_gene_name(attrs) {
         Some(g) => g,
-        None    => return,
+        None => return,
     };
     let exon_number = if matches!(kind, FeatureKind::Exon) {
-        extract_gff3_attr(attrs, "exon_number")
-            .and_then(|v| v.parse::<i32>().ok())
+        extract_gff3_attr(attrs, "exon_number").and_then(|v| v.parse::<i32>().ok())
     } else {
         None
     };
 
     raw.entry(fields[0].to_string())
         .or_default()
-        .push(GeneRecord { start, end, gene, kind, exon_number });
+        .push(GeneRecord {
+            start,
+            end,
+            gene,
+            kind,
+            exon_number,
+        });
 }
 
 fn parse_gff3_gene_name(attrs: &str) -> Option<String> {
@@ -388,14 +408,13 @@ fn parse_genepred_line(line: &str, raw: &mut HashMap<String, Vec<GeneRecord>>) {
     }
 
     // Emit the transcript-level gene interval.
-    raw.entry(chrom.to_string())
-        .or_default()
-        .push(GeneRecord {
-            start: tx_start, end: tx_end,
-            gene: gene.clone(),
-            kind: FeatureKind::Gene,
-            exon_number: None,
-        });
+    raw.entry(chrom.to_string()).or_default().push(GeneRecord {
+        start: tx_start,
+        end: tx_end,
+        gene: gene.clone(),
+        kind: FeatureKind::Gene,
+        exon_number: None,
+    });
 
     // Emit per-exon intervals numbered 1..=exonCount.
     let exon_starts: Vec<u32> = fields[9]
@@ -457,23 +476,20 @@ mod tests {
 
     #[test]
     fn gtf_basic_lookup() {
-        let ga = load_gtf(
-            "chr1\t.\tgene\t100\t500\t.\t+\t.\tgene_id \"GENE1\"; gene_name \"GENE1\";\n",
-        );
-        assert_eq!(gene(&ga, "chr1", 99),  Some("GENE1".into()));
+        let ga =
+            load_gtf("chr1\t.\tgene\t100\t500\t.\t+\t.\tgene_id \"GENE1\"; gene_name \"GENE1\";\n");
+        assert_eq!(gene(&ga, "chr1", 99), Some("GENE1".into()));
         assert_eq!(gene(&ga, "chr1", 250), Some("GENE1".into()));
         assert_eq!(gene(&ga, "chr1", 499), Some("GENE1".into()));
         assert_eq!(gene(&ga, "chr1", 500), None);
-        assert_eq!(gene(&ga, "chr1", 98),  None);
+        assert_eq!(gene(&ga, "chr1", 98), None);
         // Gene-level feature_type is None
         assert_eq!(feature(&ga, "chr1", 250), None);
     }
 
     #[test]
     fn gtf_gene_id_fallback() {
-        let ga = load_gtf(
-            "chr1\t.\tgene\t1\t100\t.\t+\t.\tgene_id \"FALLBACK\";\n",
-        );
+        let ga = load_gtf("chr1\t.\tgene\t1\t100\t.\t+\t.\tgene_id \"FALLBACK\";\n");
         assert_eq!(gene(&ga, "chr1", 0), Some("FALLBACK".into()));
     }
 
@@ -484,11 +500,11 @@ mod tests {
             "chr1\t.\texon\t100\t300\t.\t+\t.\tgene_name \"BRCA1\"; exon_number \"2\";\n",
         ));
         // Inside exon → feature_type = "exon", exon_number = 2
-        assert_eq!(gene(&ga, "chr1", 150),    Some("BRCA1".into()));
+        assert_eq!(gene(&ga, "chr1", 150), Some("BRCA1".into()));
         assert_eq!(feature(&ga, "chr1", 150), Some("exon".into()));
         assert_eq!(exon_num(&ga, "chr1", 150), Some(2));
         // Inside gene but outside exon → feature_type = None
-        assert_eq!(feature(&ga, "chr1", 50),  None);
+        assert_eq!(feature(&ga, "chr1", 50), None);
         assert_eq!(exon_num(&ga, "chr1", 50), None);
     }
 
@@ -512,7 +528,7 @@ mod tests {
             "chr1\t.\tfive_prime_UTR\t1\t100\t.\t+\t.\tgene_name \"MYC\";\n",
             "chr1\t.\tthree_prime_UTR\t900\t1000\t.\t+\t.\tgene_name \"MYC\";\n",
         ));
-        assert_eq!(feature(&ga, "chr1", 50),  Some("5UTR".into()));
+        assert_eq!(feature(&ga, "chr1", 50), Some("5UTR".into()));
         assert_eq!(feature(&ga, "chr1", 950), Some("3UTR".into()));
         assert_eq!(feature(&ga, "chr1", 500), None); // gene only
     }
@@ -523,7 +539,7 @@ mod tests {
             "chr1\t.\ttranscript\t1\t1000\t.\t+\t.\tgene_id \"TX1\"; gene_name \"TX1\";\n",
             "chr1\t.\tgene\t300\t500\t.\t+\t.\tgene_id \"G1\"; gene_name \"G1\";\n",
         ));
-        assert_eq!(gene(&ga, "chr1", 50),  None);
+        assert_eq!(gene(&ga, "chr1", 50), None);
         assert_eq!(gene(&ga, "chr1", 400), Some("G1".into()));
     }
 
@@ -555,10 +571,9 @@ mod tests {
 
     #[test]
     fn gff3_basic_lookup() {
-        let ga = load_gff3(
-            "##gff-version 3\nchr1\t.\tgene\t100\t500\t.\t+\t.\tID=gene1;Name=BRCA1\n",
-        );
-        assert_eq!(gene(&ga, "chr1", 99),  Some("BRCA1".into()));
+        let ga =
+            load_gff3("##gff-version 3\nchr1\t.\tgene\t100\t500\t.\t+\t.\tID=gene1;Name=BRCA1\n");
+        assert_eq!(gene(&ga, "chr1", 99), Some("BRCA1".into()));
         assert_eq!(gene(&ga, "chr1", 499), Some("BRCA1".into()));
         assert_eq!(gene(&ga, "chr1", 500), None);
     }
@@ -575,9 +590,7 @@ mod tests {
 
     #[test]
     fn gff3_gene_name_fallbacks() {
-        let ga = load_gff3(
-            "chr1\t.\tgene\t1\t100\t.\t+\t.\tID=g1;gene_id=FALLBACK_ID\n",
-        );
+        let ga = load_gff3("chr1\t.\tgene\t1\t100\t.\t+\t.\tID=g1;gene_id=FALLBACK_ID\n");
         assert_eq!(gene(&ga, "chr1", 0), Some("FALLBACK_ID".into()));
     }
 
@@ -588,7 +601,7 @@ mod tests {
             "chr1\t.\tfive_prime_UTR\t1\t100\t.\t+\t.\tgene_name=MYC\n",
             "chr1\t.\tthree_prime_UTR\t900\t1000\t.\t+\t.\tgene_name=MYC\n",
         ));
-        assert_eq!(feature(&ga, "chr1", 50),  Some("5UTR".into()));
+        assert_eq!(feature(&ga, "chr1", 50), Some("5UTR".into()));
         assert_eq!(feature(&ga, "chr1", 950), Some("3UTR".into()));
     }
 
@@ -601,14 +614,14 @@ mod tests {
         let ga = load_genepred(
             "0\tNM_001\tchr1\t+\t99\t500\t99\t500\t1\t99,\t500,\t0\tBRCA1\tcmpl\tcmpl\t0\n",
         );
-        assert_eq!(gene(&ga, "chr1", 99),  Some("BRCA1".into()));
+        assert_eq!(gene(&ga, "chr1", 99), Some("BRCA1".into()));
         assert_eq!(gene(&ga, "chr1", 300), Some("BRCA1".into()));
         assert_eq!(gene(&ga, "chr1", 499), Some("BRCA1".into()));
         assert_eq!(gene(&ga, "chr1", 500), None);
-        assert_eq!(gene(&ga, "chr1", 98),  None);
+        assert_eq!(gene(&ga, "chr1", 98), None);
         // Single exon → exon_number = 1
-        assert_eq!(feature(&ga, "chr1", 200),   Some("exon".into()));
-        assert_eq!(exon_num(&ga, "chr1", 200),  Some(1));
+        assert_eq!(feature(&ga, "chr1", 200), Some("exon".into()));
+        assert_eq!(exon_num(&ga, "chr1", 200), Some(1));
     }
 
     #[test]
@@ -621,7 +634,7 @@ mod tests {
         assert_eq!(exon_num(&ga, "chr1", 350), Some(2));
         // Intronic gap → gene-level only
         assert_eq!(feature(&ga, "chr1", 250), None);
-        assert_eq!(gene(&ga, "chr1", 250),    Some("MYGENE".into()));
+        assert_eq!(gene(&ga, "chr1", 250), Some("MYGENE".into()));
     }
 
     #[test]
@@ -644,20 +657,16 @@ mod tests {
 
     #[test]
     fn chr_prefix_ucsc_annotation_ncbi_query() {
-        let ga = load_gtf(
-            "chr1\t.\tgene\t100\t500\t.\t+\t.\tgene_name \"TP53\";\n",
-        );
-        assert_eq!(gene(&ga, "1",    200), Some("TP53".into()));
+        let ga = load_gtf("chr1\t.\tgene\t100\t500\t.\t+\t.\tgene_name \"TP53\";\n");
+        assert_eq!(gene(&ga, "1", 200), Some("TP53".into()));
         assert_eq!(gene(&ga, "chr1", 200), Some("TP53".into()));
     }
 
     #[test]
     fn chr_prefix_ncbi_annotation_ucsc_query() {
-        let ga = load_gtf(
-            "1\t.\tgene\t100\t500\t.\t+\t.\tgene_name \"TP53\";\n",
-        );
+        let ga = load_gtf("1\t.\tgene\t100\t500\t.\t+\t.\tgene_name \"TP53\";\n");
         assert_eq!(gene(&ga, "chr1", 200), Some("TP53".into()));
-        assert_eq!(gene(&ga, "1",    200), Some("TP53".into()));
+        assert_eq!(gene(&ga, "1", 200), Some("TP53".into()));
     }
 
     #[test]
@@ -666,7 +675,7 @@ mod tests {
             "chr1\t.\tgene\t100\t500\t.\t+\t.\tgene_name \"GENE1\";\n",
             "chr10\t.\tgene\t100\t500\t.\t+\t.\tgene_name \"GENE10\";\n",
         ));
-        assert_eq!(gene(&ga, "1",  200), Some("GENE1".into()));
+        assert_eq!(gene(&ga, "1", 200), Some("GENE1".into()));
         assert_eq!(gene(&ga, "10", 200), Some("GENE10".into()));
     }
 

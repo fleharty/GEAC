@@ -26,7 +26,9 @@ pub fn annotate_normal(args: &AnnotateNormalArgs) -> Result<Vec<NormalEvidence>>
     .context("failed to load tumor Parquet")?;
 
     let tumor_sample_id: String = db
-        .query_row("SELECT ANY_VALUE(sample_id) FROM tumor", [], |row| row.get(0))
+        .query_row("SELECT ANY_VALUE(sample_id) FROM tumor", [], |row| {
+            row.get(0)
+        })
         .context("failed to read tumor sample_id from Parquet")?;
 
     info!(tumor_sample_id = %tumor_sample_id, "loaded tumor Parquet");
@@ -98,23 +100,21 @@ pub fn annotate_normal(args: &AnnotateNormalArgs) -> Result<Vec<NormalEvidence>>
             // htslib region strings are 1-based inclusive.
             let region = format!("{}:{}-{}", chrom, pos + 1, pos + 1);
             let found = match bam.fetch(region.as_str()) {
-                Ok(()) => {
-                    pileup_position(
-                        &mut bam,
-                        chrom,
-                        pos,
-                        ref_allele,
-                        tumor_alt_alleles,
-                        &tumor_sample_id,
-                        &normal_sample_id,
-                        args.min_base_qual,
-                        args.min_map_qual,
-                        args.include_duplicates,
-                        args.include_secondary,
-                        args.include_supplementary,
-                        &mut results,
-                    )?
-                }
+                Ok(()) => pileup_position(
+                    &mut bam,
+                    chrom,
+                    pos,
+                    ref_allele,
+                    tumor_alt_alleles,
+                    &tumor_sample_id,
+                    &normal_sample_id,
+                    args.min_base_qual,
+                    args.min_map_qual,
+                    args.include_duplicates,
+                    args.include_secondary,
+                    args.include_supplementary,
+                    &mut results,
+                )?,
                 // If the chromosome is not in the normal BAM index (e.g. the normal
                 // was aligned to a different reference), treat as zero-depth.
                 Err(_) => false,

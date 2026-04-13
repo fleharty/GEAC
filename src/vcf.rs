@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rust_htslib::bcf::{self, Read as BcfRead};
 use rust_htslib::bcf::header::HeaderView;
+use rust_htslib::bcf::{self, Read as BcfRead};
 
 /// Annotation attached to a called variant locus.
 #[derive(Debug, Clone)]
@@ -62,18 +62,18 @@ impl VcfIndex {
 
             // Allele-level exact match for each alt
             for alt_bytes in record.alleles().iter().skip(1) {
-                let alt = std::str::from_utf8(alt_bytes)
-                    .unwrap_or(".")
-                    .to_string();
+                let alt = std::str::from_utf8(alt_bytes).unwrap_or(".").to_string();
                 by_allele
                     .entry((chrom.clone(), pos, alt))
                     .or_insert_with(|| annotation.clone());
             }
         }
 
-        Ok(Self { by_allele, by_position })
+        Ok(Self {
+            by_allele,
+            by_position,
+        })
     }
-
 }
 
 impl VariantAnnotator for VcfIndex {

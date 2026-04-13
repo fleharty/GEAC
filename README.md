@@ -107,14 +107,28 @@ For example, `--output SAMPLE_001.parquet --reads-output` produces:
 - `SAMPLE_001.reads.parquet`
 
 The reads table is linked to the locus table by `(sample_id, chrom, pos, alt_allele)`.
+Newer cohorts also store `read_type` and `pipeline` on each read row, which enables
+true read-level splitting in Explorer plots when the same sample has been processed
+through multiple pipelines or read types.
+
+When `--targets` is provided, `geac collect` also writes:
+
+- `{stem}.sample_metrics.parquet` — one row per sample with target-depth summary metrics
+  (`mean_target_depth_covered`, `mean_target_depth_all`, `median_target_depth_covered`,
+  `median_target_depth_all`, `pct_fragment_bases_on_target`)
+
+These metrics are intended for sample-level normalization, including later bait-bias analysis.
 
 **When to use:** filtering by family size (fgbio duplex reads), diagnosing end-of-read
 artefacts via cycle number, investigating local read-sequence context around alt-supporting
 reads (for example, alt calls followed by runs of `N`), or read-level phasing
 (e.g. MNV detection).
 
-When `geac merge` is given a mix of `.locus.parquet` and `.reads.parquet` files, it routes
-them automatically: locus files → `alt_bases` table; reads files → `alt_reads` table.
+When `geac merge` is given a mix of `.locus.parquet`, `.reads.parquet`, and
+`.sample_metrics.parquet` files, it routes them automatically:
+- locus files → `alt_bases` table
+- reads files → `alt_reads` table
+- sample-metrics files → `sample_metrics` table
 
 #### Reference-site output (`--emit-ref-sites`)
 
@@ -590,7 +604,8 @@ Features:
     insert size distribution with gap-correction toggle; insert size by allele frequency
     class; family size vs VAF scatter; mapping quality distribution; cohort artefact
     family size comparison (boxplot of family size by cohort frequency); all plots support
-    aggregate / sample / batch color-by options
+    aggregate / sample / batch color-by options, and read-position plots can also split
+    by `pipeline` / `read_type` when those columns are present in `alt_reads`
   - *Duplex/Simplex* (DuckDB only, requires `--reads-output`) — analyses focused on
     error-corrected sequencing: AB/BA strand balance distribution (`aD`/`bD` fgbio tags),
     read position bias by cycle, base quality distribution, family size vs VAF scatter,
@@ -622,6 +637,9 @@ Features:
     one that holds up at family size ≥ 2 or 3 has stronger support.
     DRAGEN users should rerun `geac collect --reads-output` and rebuild merged cohorts
     if they want family-size-related Explorer behavior to reflect the `XV`/`XW` tag mapping.
+    Likewise, to enable true read-level per-pipeline or per-read-type splitting in the
+    Explorer, existing cohorts must be rebuilt from `.reads.parquet` / `.ref_reads.parquet`
+    files produced by a GEAC version that writes `pipeline` and `read_type` on read rows.
   - *Cycle number* — filter by 1-based sequencing cycle (position within the read).
     Variants clustered at high cycle numbers (near the read end) are a common
     alignment artefact; lowering the upper bound removes these reads.
@@ -759,6 +777,8 @@ fragment at a locus. Linked to the locus table by `(sample_id, chrom, pos, alt_a
 | `chrom` | string | Chromosome |
 | `pos` | int64 | 0-based position |
 | `alt_allele` | string | Alt allele (links to locus table) |
+| `read_type` | string | `raw` / `simplex` / `duplex` |
+| `pipeline` | string | `fgbio` / `dragen` / `raw` |
 | `cycle` | int32 | 1-based sequencing cycle at the alt position. Forward reads: `hard_clips_5prime + qpos + 1`; reverse reads: `hard_clips_5prime + read_length − qpos`. Hard-clipped bases at the 5′ end of synthesis are included so cycle reflects true polymerase position. |
 | `read_length` | int32 | Stored sequence length in bases (hard-clipped bases excluded, soft-clipped bases included) |
 | `is_read1` | bool | `true` if R1 (BAM flag `0x40`), `false` if R2 or unpaired |
@@ -846,6 +866,8 @@ Columns are identical to the `alt_reads` table except there is no `alt_allele` c
 | `sample_id` | string | Sample identifier |
 | `chrom` | string | Chromosome |
 | `pos` | int64 | 0-based position |
+| `read_type` | string | `raw` / `simplex` / `duplex` |
+| `pipeline` | string | `fgbio` / `dragen` / `raw` |
 | `cycle` | int32 | 1-based sequencing cycle at the queried position |
 | `read_length` | int32 | Stored read length in bases |
 | `is_read1` | bool | `true` if R1 (BAM flag `0x40`) |
@@ -993,7 +1015,7 @@ WDL 1.0 workflows are provided in `wdl/`:
 | `disk_gb` | Int | Default: 100 |
 | `preemptible` | Int | Default: 2 |
 
-Outputs: `locus_parquet` (File) — per-sample locus Parquet; `reads_parquets` (Array[File]) — per-read Parquet (one element when `reads_output=true`, empty otherwise).
+Outputs: `locus_parquet` (File) — per-sample locus Parquet; `reads_parquets` (Array[File]) — per-read Parquet (one element when `reads_output=true`, empty otherwise); `sample_metrics_parquets` (Array[File]) — sample-level target-depth metrics Parquet (one element when `targets` is provided, empty otherwise).
 
 ### `geac_cohort.wdl` inputs
 
@@ -1020,7 +1042,7 @@ Shared inputs applied to all samples: `reference_fasta`, `targets`, `gene_annota
 | `locus_depth_memory_gb` | Int | `4` | Memory per `LocusDepth` task |
 | `locus_depth_disk_gb` | Int | `20` | Disk per `LocusDepth` task |
 
-Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty when `reads_output=false`), `cohort_db` (File, the merged DuckDB). When a second pass is enabled: `exported_loci_tsv` (File?). When `emit_ref_sites = true`: `cohort_db_with_ref_sites` (File?) — the final DuckDB with `ref_bases` and `ref_reads` tables for bait-bias analysis. When `collect_locus_depth = true`: `locus_depth_parquets` (Array[File]?), `cohort_db_with_locus_depth` (File?).
+Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty when `reads_output=false`), `sample_metrics_parquets` (Array[File], empty when `targets` is absent), `cohort_db` (File, the merged DuckDB). When a second pass is enabled: `exported_loci_tsv` (File?). When `emit_ref_sites = true`: `cohort_db_with_ref_sites` (File?) — the final DuckDB with `ref_bases` and `ref_reads` tables for bait-bias analysis. When `collect_locus_depth = true`: `locus_depth_parquets` (Array[File]?), `cohort_db_with_locus_depth` (File?).
 
 ### `geac_merge.wdl` inputs
 
@@ -1083,6 +1105,7 @@ Output: `pon_evidence_parquet` (File) — `{tumor_stem}.pon_evidence.parquet`.
 
 ```
 geac collect  →  per-sample .locus.parquet  [+ .reads.parquet with --reads-output]
+                  [+ .sample_metrics.parquet with --targets]
                        │
                        ├──► geac annotate-normal  (paired normal BAM)
                        │         →  .normal_evidence.parquet
@@ -1094,6 +1117,7 @@ geac merge  →  cohort .duckdb
     alt_bases           (locus Parquets or existing .duckdb files)
     samples             (one-row-per-sample summary, always rebuilt)
     alt_reads           (.reads.parquet files, optional)
+    sample_metrics      (.sample_metrics.parquet files, optional)
     normal_evidence     (.normal_evidence.parquet files, optional)
     pon_evidence        (.pon_evidence.parquet files, optional)
     coverage            (.coverage.parquet files, optional)

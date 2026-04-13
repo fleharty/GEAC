@@ -10,19 +10,19 @@ use crate::cli::QcArgs;
 const SBS6: [&str; 6] = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G"];
 
 struct OverallStats {
-    sample_id:           String,
-    n_snv:               i64,
-    n_insertion:         i64,
-    n_deletion:          i64,
-    mean_depth:          f64,
-    mean_vaf:            f64,
-    strand_balance:      f64,
+    sample_id: String,
+    n_snv: i64,
+    n_insertion: i64,
+    n_deletion: i64,
+    mean_depth: f64,
+    mean_vaf: f64,
+    strand_balance: f64,
     overlap_concordance: Option<f64>,
 }
 
 struct SubstStats {
-    n_loci:         i64,
-    mean_vaf:       f64,
+    n_loci: i64,
+    mean_vaf: f64,
     strand_balance: f64,
 }
 
@@ -38,7 +38,10 @@ pub fn run_qc(args: &QcArgs) -> Result<()> {
     let source = if file_list.len() == 1 {
         format!("read_parquet({}, union_by_name=true)", file_list[0])
     } else {
-        format!("read_parquet([{}], union_by_name=true)", file_list.join(", "))
+        format!(
+            "read_parquet([{}], union_by_name=true)",
+            file_list.join(", ")
+        )
     };
 
     let filter = if args.on_target_only {
@@ -75,17 +78,19 @@ pub fn run_qc(args: &QcArgs) -> Result<()> {
         ORDER BY sample_id
     ";
 
-    let mut stmt = con.prepare(overall_sql).context("failed to prepare overall query")?;
+    let mut stmt = con
+        .prepare(overall_sql)
+        .context("failed to prepare overall query")?;
     let overall: Vec<OverallStats> = stmt
         .query_map([], |row| {
             Ok(OverallStats {
-                sample_id:           row.get(0)?,
-                n_snv:               row.get(1)?,
-                n_insertion:         row.get(2)?,
-                n_deletion:          row.get(3)?,
-                mean_depth:          row.get(4)?,
-                mean_vaf:            row.get(5)?,
-                strand_balance:      row.get(6)?,
+                sample_id: row.get(0)?,
+                n_snv: row.get(1)?,
+                n_insertion: row.get(2)?,
+                n_deletion: row.get(3)?,
+                mean_depth: row.get(4)?,
+                mean_vaf: row.get(5)?,
+                strand_balance: row.get(6)?,
                 overlap_concordance: row.get(7)?,
             })
         })?
@@ -122,15 +127,17 @@ pub fn run_qc(args: &QcArgs) -> Result<()> {
         ORDER BY sample_id, substitution
     ";
 
-    let mut stmt = con.prepare(subst_sql).context("failed to prepare substitution query")?;
+    let mut stmt = con
+        .prepare(subst_sql)
+        .context("failed to prepare substitution query")?;
     let subst_rows: Vec<(String, String, SubstStats)> = stmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 SubstStats {
-                    n_loci:         row.get(2)?,
-                    mean_vaf:       row.get(3)?,
+                    n_loci: row.get(2)?,
+                    mean_vaf: row.get(3)?,
                     strand_balance: row.get(4)?,
                 },
             ))
@@ -165,13 +172,10 @@ pub fn run_qc(args: &QcArgs) -> Result<()> {
             s.strand_balance
         );
         match s.overlap_concordance {
-            Some(c) => println!(
-                "    Overlap concordance : {:>10.4}  (1.0 = perfect)",
-                c
-            ),
-            None => println!(
-                "    Overlap concordance :          —  (no overlapping fragment pairs)"
-            ),
+            Some(c) => println!("    Overlap concordance : {:>10.4}  (1.0 = perfect)", c),
+            None => {
+                println!("    Overlap concordance :          —  (no overlapping fragment pairs)")
+            }
         }
 
         println!();

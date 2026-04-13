@@ -106,7 +106,7 @@ fn main() -> Result<()> {
                 })
                 .transpose()?;
 
-            let (records, read_records) = bam::collect_alt_bases(
+            let (records, read_records, sample_metrics) = bam::collect_alt_bases(
                 &args,
                 annotator,
                 target_intervals.as_ref().map(|t| t as &_),
@@ -115,7 +115,9 @@ fn main() -> Result<()> {
             )?;
 
             let (locus_output, reads_output_path) = if args.reads_output {
-                let stem = args.output.file_stem()
+                let stem = args
+                    .output
+                    .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("output");
                 let parent = args.output.parent().unwrap_or(std::path::Path::new("."));
@@ -135,27 +137,38 @@ fn main() -> Result<()> {
                 writer::parquet_reads::write_parquet(&read_records, reads_path)?;
             }
 
+            if let Some(metrics) = sample_metrics {
+                let stem = args
+                    .output
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("output");
+                let parent = args.output.parent().unwrap_or(std::path::Path::new("."));
+                let sample_metrics_path = parent.join(format!("{stem}.sample_metrics.parquet"));
+                info!(
+                    output = %sample_metrics_path.display(),
+                    "writing sample metrics Parquet"
+                );
+                writer::parquet_sample_metrics::write_parquet(&[metrics], &sample_metrics_path)?;
+            }
+
             if args.emit_ref_sites {
-                let ti = target_intervals.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("--emit-ref-sites requires --targets")
-                })?;
+                let ti = target_intervals
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("--emit-ref-sites requires --targets"))?;
 
                 let stem = locus_output
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("output");
-                let parent = locus_output
-                    .parent()
-                    .unwrap_or(std::path::Path::new("."));
+                let parent = locus_output.parent().unwrap_or(std::path::Path::new("."));
                 // Strip a trailing ".locus" so both output modes yield the same stem.
                 let base_stem = stem.strip_suffix(".locus").unwrap_or(stem);
                 let ref_bases_path = parent.join(format!("{base_stem}.ref_bases.parquet"));
                 let ref_reads_path = parent.join(format!("{base_stem}.ref_reads.parquet"));
 
-                let alt_positions: std::collections::HashSet<(String, i64)> = records
-                    .iter()
-                    .map(|r| (r.chrom.clone(), r.pos))
-                    .collect();
+                let alt_positions: std::collections::HashSet<(String, i64)> =
+                    records.iter().map(|r| (r.chrom.clone(), r.pos)).collect();
 
                 info!(
                     n_alt_positions = alt_positions.len(),
@@ -276,7 +289,11 @@ fn main() -> Result<()> {
                 .transpose()?;
 
             if let Some(ref ti) = target_intervals {
-                info!(n_targets = ti.n_targets(), total_bases = ti.total_bases(), "target intervals loaded");
+                info!(
+                    n_targets = ti.n_targets(),
+                    total_bases = ti.total_bases(),
+                    "target intervals loaded"
+                );
             }
 
             let gene_annots = args
@@ -300,7 +317,8 @@ fn main() -> Result<()> {
             };
 
             let track_names = track_set.as_ref().map_or(&[][..], |ts| ts.names());
-            let mut cov_writer = writer::parquet_coverage::CoverageWriter::new(&args.output, track_names)?;
+            let mut cov_writer =
+                writer::parquet_coverage::CoverageWriter::new(&args.output, track_names)?;
 
             let interval_records = coverage::collect_coverage(
                 &args,
@@ -319,7 +337,9 @@ fn main() -> Result<()> {
                     "writing per-interval summary"
                 );
                 let mut iv_writer =
-                    writer::parquet_coverage_intervals::CoverageIntervalsWriter::new(intervals_path)?;
+                    writer::parquet_coverage_intervals::CoverageIntervalsWriter::new(
+                        intervals_path,
+                    )?;
                 for record in interval_records {
                     iv_writer.push(record)?;
                 }

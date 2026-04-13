@@ -9,7 +9,7 @@ use tracing::info;
 
 use crate::cli::MergeArgs;
 
-const DUCKDB_SCHEMA_VERSION: &str = "duckdb-v2";
+const DUCKDB_SCHEMA_VERSION: &str = "duckdb-v4";
 
 struct TableSpec {
     table: &'static str,
@@ -93,6 +93,15 @@ const TABLE_SPECS: &[TableSpec] = &[
         rebuild_samples_summary: false,
     },
     TableSpec {
+        table: "sample_metrics",
+        suffix: Some(".sample_metrics.parquet"),
+        index_sql: Some(
+            "CREATE INDEX IF NOT EXISTS idx_sample_metrics_sample \
+             ON sample_metrics (sample_id);",
+        ),
+        rebuild_samples_summary: false,
+    },
+    TableSpec {
         table: "ref_bases",
         suffix: Some(".ref_bases.parquet"),
         index_sql: Some(
@@ -154,7 +163,9 @@ fn modified_at_epoch_seconds(path: &Path) -> Option<f64> {
 
 fn sample_id_column(table: &str) -> Option<&'static str> {
     match table {
-        "alt_bases" | "alt_reads" | "coverage" | "coverage_intervals" => Some("sample_id"),
+        "alt_bases" | "alt_reads" | "coverage" | "coverage_intervals" | "sample_metrics" => {
+            Some("sample_id")
+        }
         "normal_evidence" | "pon_evidence" => Some("tumor_sample_id"),
         _ => None,
     }
@@ -595,6 +606,7 @@ fn write_metadata(
     let normal_evidence_rows = dst_table_row_count(conn, "normal_evidence")?;
     let pon_evidence_rows = dst_table_row_count(conn, "pon_evidence")?;
     let coverage_rows = dst_table_row_count(conn, "coverage")?;
+    let sample_metrics_rows = dst_table_row_count(conn, "sample_metrics")?;
     let samples_rows = dst_table_row_count(conn, "samples")?;
 
     conn.execute_batch(&format!(
@@ -613,6 +625,7 @@ fn write_metadata(
              n_normal_evidence_inputs BIGINT,
              n_pon_evidence_inputs BIGINT,
              n_coverage_inputs BIGINT,
+             n_sample_metrics_inputs BIGINT,
              n_duckdb_inputs BIGINT,
              n_samples BIGINT,
              alt_bases_rows BIGINT,
@@ -620,6 +633,7 @@ fn write_metadata(
              normal_evidence_rows BIGINT,
              pon_evidence_rows BIGINT,
              coverage_rows BIGINT,
+             sample_metrics_rows BIGINT,
              samples_rows BIGINT
          );
          INSERT INTO geac_metadata VALUES (
@@ -631,6 +645,8 @@ fn write_metadata(
              '{}',
              '{}',
              '{}',
+             {},
+             {},
              {},
              {},
              {},
@@ -657,6 +673,7 @@ fn write_metadata(
         parquet_groups.get("normal_evidence").map_or(0, Vec::len),
         parquet_groups.get("pon_evidence").map_or(0, Vec::len),
         parquet_groups.get("coverage").map_or(0, Vec::len),
+        parquet_groups.get("sample_metrics").map_or(0, Vec::len),
         duckdb_inputs.len(),
         n_samples,
         alt_bases_rows,
@@ -664,6 +681,7 @@ fn write_metadata(
         normal_evidence_rows,
         pon_evidence_rows,
         coverage_rows,
+        sample_metrics_rows,
         samples_rows,
     ))
     .context("failed to write geac_metadata table")?;

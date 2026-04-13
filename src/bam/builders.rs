@@ -163,6 +163,8 @@ impl LocusContext {
             chrom: self.chrom.clone(),
             pos: self.pos,
             alt_allele: alt_allele.to_string(),
+            read_type: self.read_type,
+            pipeline: self.pipeline,
             cycle: true_cycle(
                 detail.qpos,
                 detail.read_len,

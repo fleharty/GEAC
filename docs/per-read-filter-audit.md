@@ -30,6 +30,8 @@ The per-read filter system spans three layers:
 | chrom                | Utf8    | no       | BAM pileup                            |
 | pos                  | Int64   | no       | BAM pileup (0-based)                  |
 | alt_allele           | Utf8    | no       | observed alt base/indel string        |
+| read_type            | Utf8    | no       | CLI `--read-type`                     |
+| pipeline             | Utf8    | no       | CLI `--pipeline`                      |
 | cycle                | Int32   | no       | 1-based: `alignment.qpos() + 1`       |
 | read_length          | Int32   | no       | `record.seq_len()`                    |
 | is_read1             | Boolean | no       | BAM flag `0x40`                       |
@@ -45,6 +47,10 @@ The per-read filter system spans three layers:
 | n_n_after_alt        | Int32 | no       | count of `N` bases after alt          |
 | leading_n_run_len    | Int32 | no       | contiguous `N` run immediately before |
 | trailing_n_run_len   | Int32 | no       | contiguous `N` run immediately after  |
+
+`read_type` and `pipeline` are now carried on each `alt_reads` row so read-level Explorer
+plots can separate cohorts where the same `sample_id` appears in multiple pipelines or
+read types without collapsing those reads together.
 
 ---
 

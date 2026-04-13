@@ -221,6 +221,8 @@ pub struct RefRead {
     pub chrom: String,
     /// 0-based position
     pub pos: i64,
+    pub read_type: ReadType,
+    pub pipeline: Pipeline,
     pub cycle: i32,
     pub read_length: i32,
     pub is_read1: bool,
@@ -239,6 +241,24 @@ pub struct RefRead {
     pub leading_n_run_len: i32,
     pub trailing_n_run_len: i32,
     pub input_checksum_sha256: Option<String>,
+}
+
+/// Sample-level target-depth and on-target burden metrics produced by `geac collect`
+/// when `--targets` is provided.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SampleMetricsRecord {
+    pub sample_id: String,
+    pub batch: Option<String>,
+    pub read_type: ReadType,
+    pub pipeline: Pipeline,
+    pub input_checksum_sha256: Option<String>,
+    pub n_target_positions: i32,
+    pub n_target_positions_covered: i32,
+    pub mean_target_depth_covered: Option<f32>,
+    pub mean_target_depth_all: Option<f32>,
+    pub median_target_depth_covered: Option<f32>,
+    pub median_target_depth_all: Option<f32>,
+    pub pct_fragment_bases_on_target: Option<f32>,
 }
 
 /// Total depth at a single locus for one sample, produced by `geac locus-depth`.
@@ -366,6 +386,8 @@ pub struct AltRead {
     /// 0-based position
     pub pos: i64,
     pub alt_allele: String,
+    pub read_type: ReadType,
+    pub pipeline: Pipeline,
     /// 1-based sequencing cycle (= query position + 1)
     pub cycle: i32,
     pub read_length: i32,
@@ -405,47 +427,47 @@ pub struct AltRead {
 /// One row per target interval. Coordinates are 0-based half-open [start, end).
 #[derive(Debug, Clone)]
 pub struct IntervalRecord {
-    pub sample_id:    String,
-    pub chrom:        String,
+    pub sample_id: String,
+    pub chrom: String,
     /// 0-based interval start (from the targets file)
-    pub start:        i64,
+    pub start: i64,
     /// 0-based interval end (exclusive)
-    pub end:          i64,
+    pub end: i64,
     /// Name field from BED col 4 or Picard interval name col
     pub interval_name: Option<String>,
-    pub gene:         Option<String>,
+    pub gene: Option<String>,
     pub feature_type: Option<String>,
-    pub exon_number:  Option<i32>,
+    pub exon_number: Option<i32>,
 
     // ── Depth summary ─────────────────────────────────────────────────────────
     /// Total number of positions in the interval (= end - start)
-    pub n_bases:      i32,
-    pub mean_depth:   f32,
+    pub n_bases: i32,
+    pub mean_depth: f32,
     pub median_depth: f32,
-    pub min_depth:    i32,
-    pub max_depth:    i32,
+    pub min_depth: i32,
+    pub max_depth: i32,
     /// Fraction of positions with total_depth >= 1
-    pub frac_at_1x:   f32,
-    pub frac_at_10x:  f32,
-    pub frac_at_20x:  f32,
-    pub frac_at_30x:  f32,
-    pub frac_at_50x:  f32,
+    pub frac_at_1x: f32,
+    pub frac_at_10x: f32,
+    pub frac_at_20x: f32,
+    pub frac_at_30x: f32,
+    pub frac_at_50x: f32,
     pub frac_at_100x: f32,
 
     // ── Aggregated QC signals (means across all positions in the interval) ────
-    pub mean_gc_content:   f32,
-    pub mean_mapq:         f32,
-    pub mean_frac_mapq0:   f32,
-    pub mean_frac_dup:     f32,
+    pub mean_gc_content: f32,
+    pub mean_mapq: f32,
+    pub mean_frac_mapq0: f32,
+    pub mean_frac_dup: f32,
     pub mean_frac_overlap: f32,
-    pub mean_base_qual:    f32,
-    pub mean_insert_size:  f32,
+    pub mean_base_qual: f32,
+    pub mean_insert_size: f32,
 
     // ── Provenance ────────────────────────────────────────────────────────────
     pub read_type: ReadType,
-    pub pipeline:  Pipeline,
-    pub batch:     Option<String>,
-    pub label1:    Option<String>,
-    pub label2:    Option<String>,
-    pub label3:    Option<String>,
+    pub pipeline: Pipeline,
+    pub batch: Option<String>,
+    pub label1: Option<String>,
+    pub label2: Option<String>,
+    pub label3: Option<String>,
 }

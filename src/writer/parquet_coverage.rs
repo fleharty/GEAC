@@ -2,9 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use arrow::array::{
-    ArrayRef, BooleanArray, Float32Array, Int32Array, Int64Array, StringArray,
-};
+use arrow::array::{ArrayRef, BooleanArray, Float32Array, Int32Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
@@ -23,10 +21,10 @@ const BATCH_SIZE: usize = 100_000;
 /// `track_names` determines the dynamic track columns inserted after `gc_content`
 /// in the schema. Pass an empty slice when no `--track` flags were given.
 pub struct CoverageWriter {
-    writer:      ArrowWriter<std::fs::File>,
-    schema:      Arc<Schema>,
+    writer: ArrowWriter<std::fs::File>,
+    schema: Arc<Schema>,
     track_names: Vec<String>,
-    buf:         Vec<CoverageRecord>,
+    buf: Vec<CoverageRecord>,
 }
 
 impl CoverageWriter {
@@ -60,53 +58,57 @@ impl CoverageWriter {
             return Ok(());
         }
         let batch = records_to_batch(&self.buf, Arc::clone(&self.schema), &self.track_names)?;
-        self.writer.write(&batch).context("failed to write record batch")?;
+        self.writer
+            .write(&batch)
+            .context("failed to write record batch")?;
         self.buf.clear();
         Ok(())
     }
 
     pub fn close(mut self) -> Result<()> {
         self.flush()?;
-        self.writer.close().context("failed to finalize Parquet file")?;
+        self.writer
+            .close()
+            .context("failed to finalize Parquet file")?;
         Ok(())
     }
 }
 
 fn coverage_schema(track_names: &[String]) -> Arc<Schema> {
     let mut fields = vec![
-        Field::new("sample_id",          DataType::Utf8,    false),
-        Field::new("chrom",              DataType::Utf8,    false),
-        Field::new("pos",                DataType::Int64,   false),
-        Field::new("end",                DataType::Int64,   false),
-        Field::new("bin_n",              DataType::Int32,   false),
+        Field::new("sample_id", DataType::Utf8, false),
+        Field::new("chrom", DataType::Utf8, false),
+        Field::new("pos", DataType::Int64, false),
+        Field::new("end", DataType::Int64, false),
+        Field::new("bin_n", DataType::Int32, false),
         // Fragment depth
-        Field::new("total_depth",        DataType::Int32,   false),
-        Field::new("min_depth",          DataType::Int32,   false),
-        Field::new("max_depth",          DataType::Int32,   false),
-        Field::new("fwd_depth",          DataType::Int32,   false),
-        Field::new("rev_depth",          DataType::Int32,   false),
+        Field::new("total_depth", DataType::Int32, false),
+        Field::new("min_depth", DataType::Int32, false),
+        Field::new("max_depth", DataType::Int32, false),
+        Field::new("fwd_depth", DataType::Int32, false),
+        Field::new("rev_depth", DataType::Int32, false),
         // Duplicate metrics
-        Field::new("raw_read_depth",     DataType::Int32,   false),
-        Field::new("frac_dup",           DataType::Float32, false),
+        Field::new("raw_read_depth", DataType::Int32, false),
+        Field::new("frac_dup", DataType::Float32, false),
         // Overlap metrics
-        Field::new("overlap_depth",      DataType::Int32,   false),
-        Field::new("frac_overlap",       DataType::Float32, false),
+        Field::new("overlap_depth", DataType::Int32, false),
+        Field::new("frac_overlap", DataType::Float32, false),
         // Mappability signals
-        Field::new("mean_mapq",          DataType::Float32, false),
-        Field::new("frac_mapq0",         DataType::Float32, false),
-        Field::new("frac_low_mapq",      DataType::Float32, false),
+        Field::new("mean_mapq", DataType::Float32, false),
+        Field::new("frac_mapq0", DataType::Float32, false),
+        Field::new("frac_low_mapq", DataType::Float32, false),
         // Base quality signals
-        Field::new("mean_base_qual",     DataType::Float32, false),
-        Field::new("min_base_qual_obs",  DataType::Int32,   false),
-        Field::new("max_base_qual_obs",  DataType::Int32,   false),
-        Field::new("frac_low_bq",        DataType::Float32, false),
+        Field::new("mean_base_qual", DataType::Float32, false),
+        Field::new("min_base_qual_obs", DataType::Int32, false),
+        Field::new("max_base_qual_obs", DataType::Int32, false),
+        Field::new("frac_low_bq", DataType::Float32, false),
         // Insert size
-        Field::new("mean_insert_size",   DataType::Float32, false),
-        Field::new("min_insert_size",    DataType::Int32,   false),
-        Field::new("max_insert_size",    DataType::Int32,   false),
-        Field::new("n_insert_size_obs",  DataType::Int32,   false),
+        Field::new("mean_insert_size", DataType::Float32, false),
+        Field::new("min_insert_size", DataType::Int32, false),
+        Field::new("max_insert_size", DataType::Int32, false),
+        Field::new("n_insert_size_obs", DataType::Int32, false),
         // GC content
-        Field::new("gc_content",         DataType::Float32, false),
+        Field::new("gc_content", DataType::Float32, false),
     ];
 
     // Dynamic track columns (nullable Float32, one per --track flag).
@@ -116,17 +118,17 @@ fn coverage_schema(track_names: &[String]) -> Arc<Schema> {
 
     fields.extend([
         // Annotations (nullable)
-        Field::new("on_target",          DataType::Boolean, true),
-        Field::new("gene",               DataType::Utf8,    true),
-        Field::new("feature_type",       DataType::Utf8,    true),
-        Field::new("exon_number",        DataType::Int32,   true),
+        Field::new("on_target", DataType::Boolean, true),
+        Field::new("gene", DataType::Utf8, true),
+        Field::new("feature_type", DataType::Utf8, true),
+        Field::new("exon_number", DataType::Int32, true),
         // Provenance
-        Field::new("read_type",          DataType::Utf8,    false),
-        Field::new("pipeline",           DataType::Utf8,    false),
-        Field::new("batch",              DataType::Utf8,    true),
-        Field::new("label1",             DataType::Utf8,    true),
-        Field::new("label2",             DataType::Utf8,    true),
-        Field::new("label3",             DataType::Utf8,    true),
+        Field::new("read_type", DataType::Utf8, false),
+        Field::new("pipeline", DataType::Utf8, false),
+        Field::new("batch", DataType::Utf8, true),
+        Field::new("label1", DataType::Utf8, true),
+        Field::new("label2", DataType::Utf8, true),
+        Field::new("label3", DataType::Utf8, true),
     ]);
 
     Arc::new(Schema::new(fields))
@@ -145,44 +147,94 @@ fn records_to_batch(
     ));
     let pos: ArrayRef = Arc::new(Int64Array::from_iter_values(records.iter().map(|r| r.pos)));
     let end: ArrayRef = Arc::new(Int64Array::from_iter_values(records.iter().map(|r| r.end)));
-    let bin_n: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.bin_n)));
+    let bin_n: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.bin_n),
+    ));
 
-    let total_depth:   ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.total_depth)));
-    let min_depth:     ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.min_depth)));
-    let max_depth:     ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.max_depth)));
-    let fwd_depth:     ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.fwd_depth)));
-    let rev_depth:     ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.rev_depth)));
+    let total_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.total_depth),
+    ));
+    let min_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.min_depth),
+    ));
+    let max_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.max_depth),
+    ));
+    let fwd_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.fwd_depth),
+    ));
+    let rev_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.rev_depth),
+    ));
 
-    let raw_read_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.raw_read_depth)));
-    let frac_dup:       ArrayRef = Arc::new(Float32Array::from_iter_values(records.iter().map(|r| r.frac_dup)));
+    let raw_read_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.raw_read_depth),
+    ));
+    let frac_dup: ArrayRef = Arc::new(Float32Array::from_iter_values(
+        records.iter().map(|r| r.frac_dup),
+    ));
 
-    let overlap_depth:  ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.overlap_depth)));
-    let frac_overlap:   ArrayRef = Arc::new(Float32Array::from_iter_values(records.iter().map(|r| r.frac_overlap)));
+    let overlap_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.overlap_depth),
+    ));
+    let frac_overlap: ArrayRef = Arc::new(Float32Array::from_iter_values(
+        records.iter().map(|r| r.frac_overlap),
+    ));
 
-    let mean_mapq:     ArrayRef = Arc::new(Float32Array::from_iter_values(records.iter().map(|r| r.mean_mapq)));
-    let frac_mapq0:    ArrayRef = Arc::new(Float32Array::from_iter_values(records.iter().map(|r| r.frac_mapq0)));
-    let frac_low_mapq: ArrayRef = Arc::new(Float32Array::from_iter_values(records.iter().map(|r| r.frac_low_mapq)));
+    let mean_mapq: ArrayRef = Arc::new(Float32Array::from_iter_values(
+        records.iter().map(|r| r.mean_mapq),
+    ));
+    let frac_mapq0: ArrayRef = Arc::new(Float32Array::from_iter_values(
+        records.iter().map(|r| r.frac_mapq0),
+    ));
+    let frac_low_mapq: ArrayRef = Arc::new(Float32Array::from_iter_values(
+        records.iter().map(|r| r.frac_low_mapq),
+    ));
 
-    let mean_base_qual:    ArrayRef = Arc::new(Float32Array::from_iter_values(records.iter().map(|r| r.mean_base_qual)));
-    let min_base_qual_obs: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.min_base_qual_obs)));
-    let max_base_qual_obs: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.max_base_qual_obs)));
-    let frac_low_bq:       ArrayRef = Arc::new(Float32Array::from_iter_values(records.iter().map(|r| r.frac_low_bq)));
+    let mean_base_qual: ArrayRef = Arc::new(Float32Array::from_iter_values(
+        records.iter().map(|r| r.mean_base_qual),
+    ));
+    let min_base_qual_obs: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.min_base_qual_obs),
+    ));
+    let max_base_qual_obs: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.max_base_qual_obs),
+    ));
+    let frac_low_bq: ArrayRef = Arc::new(Float32Array::from_iter_values(
+        records.iter().map(|r| r.frac_low_bq),
+    ));
 
-    let mean_insert_size:  ArrayRef = Arc::new(Float32Array::from_iter_values(records.iter().map(|r| r.mean_insert_size)));
-    let min_insert_size:   ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.min_insert_size)));
-    let max_insert_size:   ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.max_insert_size)));
-    let n_insert_size_obs: ArrayRef = Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.n_insert_size_obs)));
+    let mean_insert_size: ArrayRef = Arc::new(Float32Array::from_iter_values(
+        records.iter().map(|r| r.mean_insert_size),
+    ));
+    let min_insert_size: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.min_insert_size),
+    ));
+    let max_insert_size: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.max_insert_size),
+    ));
+    let n_insert_size_obs: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.n_insert_size_obs),
+    ));
 
-    let gc_content: ArrayRef = Arc::new(Float32Array::from_iter_values(records.iter().map(|r| r.gc_content)));
+    let gc_content: ArrayRef = Arc::new(Float32Array::from_iter_values(
+        records.iter().map(|r| r.gc_content),
+    ));
 
     let on_target: ArrayRef = Arc::new(BooleanArray::from(
         records.iter().map(|r| r.on_target).collect::<Vec<_>>(),
     ));
     let gene: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.gene.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.gene.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let feature_type: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.feature_type.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.feature_type.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let exon_number: ArrayRef = Arc::new(Int32Array::from(
         records.iter().map(|r| r.exon_number).collect::<Vec<_>>(),
@@ -195,39 +247,83 @@ fn records_to_batch(
         records.iter().map(|r| r.pipeline.to_string()),
     ));
     let batch: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.batch.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.batch.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let label1: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.label1.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.label1.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let label2: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.label2.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.label2.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let label3: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.label3.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.label3.as_deref())
+            .collect::<Vec<_>>(),
     ));
 
     // Build the column list in schema order.
     let mut columns: Vec<ArrayRef> = vec![
-        sample_id, chrom, pos, end, bin_n,
-        total_depth, min_depth, max_depth, fwd_depth, rev_depth,
-        raw_read_depth, frac_dup,
-        overlap_depth, frac_overlap,
-        mean_mapq, frac_mapq0, frac_low_mapq,
-        mean_base_qual, min_base_qual_obs, max_base_qual_obs, frac_low_bq,
-        mean_insert_size, min_insert_size, max_insert_size, n_insert_size_obs,
+        sample_id,
+        chrom,
+        pos,
+        end,
+        bin_n,
+        total_depth,
+        min_depth,
+        max_depth,
+        fwd_depth,
+        rev_depth,
+        raw_read_depth,
+        frac_dup,
+        overlap_depth,
+        frac_overlap,
+        mean_mapq,
+        frac_mapq0,
+        frac_low_mapq,
+        mean_base_qual,
+        min_base_qual_obs,
+        max_base_qual_obs,
+        frac_low_bq,
+        mean_insert_size,
+        min_insert_size,
+        max_insert_size,
+        n_insert_size_obs,
         gc_content,
     ];
 
     // Dynamic track columns: one Float32 nullable column per track.
     for (i, _name) in track_names.iter().enumerate() {
         let col: ArrayRef = Arc::new(Float32Array::from(
-            records.iter().map(|r| r.track_values.get(i).copied().flatten()).collect::<Vec<_>>(),
+            records
+                .iter()
+                .map(|r| r.track_values.get(i).copied().flatten())
+                .collect::<Vec<_>>(),
         ));
         columns.push(col);
     }
 
-    columns.extend([on_target, gene, feature_type, exon_number, read_type, pipeline, batch, label1, label2, label3]);
+    columns.extend([
+        on_target,
+        gene,
+        feature_type,
+        exon_number,
+        read_type,
+        pipeline,
+        batch,
+        label1,
+        label2,
+        label3,
+    ]);
 
     RecordBatch::try_new(schema, columns).context("failed to create Arrow record batch")
 }

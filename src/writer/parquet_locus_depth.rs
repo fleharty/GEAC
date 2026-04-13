@@ -26,7 +26,9 @@ pub fn write_parquet(records: &[LocusDepthRecord], output: &Path) -> Result<()> 
     let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))
         .context("failed to create Parquet writer")?;
 
-    writer.write(&batch).context("failed to write record batch")?;
+    writer
+        .write(&batch)
+        .context("failed to write record batch")?;
     writer.close().context("failed to finalize Parquet file")?;
 
     Ok(())
@@ -34,12 +36,12 @@ pub fn write_parquet(records: &[LocusDepthRecord], output: &Path) -> Result<()> 
 
 fn locus_depth_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
-        Field::new("sample_id",   DataType::Utf8,  false),
-        Field::new("chrom",       DataType::Utf8,  false),
-        Field::new("pos",         DataType::Int64, false),
+        Field::new("sample_id", DataType::Utf8, false),
+        Field::new("chrom", DataType::Utf8, false),
+        Field::new("pos", DataType::Int64, false),
         Field::new("total_depth", DataType::Int32, false),
-        Field::new("fwd_depth",   DataType::Int32, false),
-        Field::new("rev_depth",   DataType::Int32, false),
+        Field::new("fwd_depth", DataType::Int32, false),
+        Field::new("rev_depth", DataType::Int32, false),
     ]))
 }
 
@@ -51,12 +53,15 @@ fn records_to_batch(records: &[LocusDepthRecord], schema: Arc<Schema>) -> Result
         records.iter().map(|r| r.chrom.as_str()),
     ));
     let pos: ArrayRef = Arc::new(Int64Array::from_iter_values(records.iter().map(|r| r.pos)));
-    let total_depth: ArrayRef =
-        Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.total_depth)));
-    let fwd_depth: ArrayRef =
-        Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.fwd_depth)));
-    let rev_depth: ArrayRef =
-        Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.rev_depth)));
+    let total_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.total_depth),
+    ));
+    let fwd_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.fwd_depth),
+    ));
+    let rev_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.rev_depth),
+    ));
 
     RecordBatch::try_new(
         schema,

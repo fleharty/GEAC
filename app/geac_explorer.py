@@ -32,6 +32,10 @@ from pipeline_compare_helpers import (
     build_unique_pipeline_characterization_df,
     summarize_unique_pipeline_groups,
 )
+from bait_bias_helpers import (
+    compute_bait_bias_candidates,
+    compute_bait_bias_locus_detail,
+)
 from read_context_helpers import (
     add_read_context_fraction_metrics,
     compute_locus_n_asymmetry,
@@ -193,6 +197,19 @@ _alt_reads_cols = st.session_state["_alt_reads_cols_cached"]
 
 def _has_alt_reads_cols(*cols: str) -> bool:
     return all(col in _alt_reads_cols for col in cols)
+
+
+_alt_reads_has_pipeline = _has_alt_reads_cols("pipeline")
+_alt_reads_has_read_type = _has_alt_reads_cols("read_type")
+
+
+def _alt_reads_meta_join(alias: str) -> str:
+    parts = [f"ar.sample_id = {alias}.sample_id"]
+    if _alt_reads_has_pipeline:
+        parts.append(f"ar.pipeline = {alias}.pipeline")
+    if _alt_reads_has_read_type:
+        parts.append(f"ar.read_type = {alias}.read_type")
+    return " AND ".join(parts)
 
 # ── Version check ─────────────────────────────────────────────────────────────
 if data_source.is_duckdb:
@@ -1320,10 +1337,20 @@ where = " AND ".join(conditions) if conditions else "TRUE"
 # Joins alt_reads to the current filtered locus set so all reads plots respect
 # the active sidebar filters.  Defined here so both tabs can share it.
 _r_reads_filter = f"WHERE {_reads_where}" if _reads_active else ""
+_r_filt_extra_cols = []
+_r_join_extra_parts = []
+if _alt_reads_has_pipeline:
+    _r_filt_extra_cols.append("pipeline")
+    _r_join_extra_parts.append("AND ar.pipeline = _filt.pipeline")
+if _alt_reads_has_read_type:
+    _r_filt_extra_cols.append("read_type")
+    _r_join_extra_parts.append("AND ar.read_type = _filt.read_type")
+_r_filt_extra_sql = "".join(f", {col}" for col in _r_filt_extra_cols)
+_r_join_extra_sql = "\n    ".join(_r_join_extra_parts)
 _r_join = f"""
     (SELECT * FROM alt_reads {_r_reads_filter}) ar
     INNER JOIN (
-        SELECT DISTINCT sample_id, chrom, pos, alt_allele
+        SELECT DISTINCT sample_id, chrom, pos, alt_allele{_r_filt_extra_sql}
         FROM {table_expr}
         WHERE {where}
     ) _filt
@@ -1331,16 +1358,58 @@ _r_join = f"""
     AND ar.chrom      = _filt.chrom
     AND ar.pos        = _filt.pos
     AND ar.alt_allele = _filt.alt_allele
+    {_r_join_extra_sql}
 """
 
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
-tab_summary, tab1, tab2, tab3, tab_cohort, tab_reads, tab_duplex, tab_tn, tab_pon, tab_pipeline, tab_read_type, tab_ai = st.tabs(
-    [module.LABEL for module in TAB_MODULES],
-    key="main_tabs",
+_MAIN_TAB_LABELS = [module.LABEL for module in TAB_MODULES]
+
+
+def query_records(extra: list[str] = [], limit: int | None = None) -> pd.DataFrame:
+    """Query records with current filters plus any extra conditions."""
+    w = " AND ".join(conditions + extra)
+    limit_clause = f"LIMIT {limit}" if limit is not None else ""
+    return con.execute(f"""
+        SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+               pos + 1 AS pos_display
+        FROM {table_expr}
+        WHERE {w}
+        ORDER BY chrom, pos, alt_allele, sample_id
+        {limit_clause}
+    """).df()
+
+
+def _display_table_cols(_df: pd.DataFrame) -> list[str]:
+    return [
+        c for c in [
+            "sample_id", "chrom", "pos_display", "ref_allele", "alt_allele",
+            "variant_type", "vaf", *( ["original_vaf"] if _reads_active else []), "alt_count", "ref_count", "total_depth",
+            "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
+            "overlap_alt_disagree", "variant_called", "variant_filter", "on_target", "gene", "gnomad_af",
+        ]
+        if c in _df.columns
+    ]
+
+
+_table_cols = _display_table_cols(query_records(limit=1))
+
+with _timed("total_count"):
+    total_count = con.execute(f"SELECT COUNT(*) FROM {table_expr} WHERE {where}").fetchone()[0]
+
+if total_count == 0:
+    st.warning("No records match the current filters.", icon="🔎")
+    st.stop()
+
+_active_main_tab = st.radio(
+    "Main section",
+    _MAIN_TAB_LABELS,
+    key="main_tab_label",
+    horizontal=True,
+    label_visibility="collapsed",
 )
 
-with tab_summary:
+if _active_main_tab == TAB_MODULES[0].LABEL:
     # ── Summary stats display ──────────────────────────────────────────────────────
     fstats = con.execute(f"""
         SELECT
@@ -1360,26 +1429,6 @@ with tab_summary:
     fpct_called  = f"{100 * fn_called / fn_annotated:.1f}%" if fn_annotated > 0 else "N/A"
 
     render_summary_metrics(stats, fstats, pct_called, fpct_called)
-
-    def query_records(extra: list[str] = [], limit: int | None = None) -> pd.DataFrame:
-        """Query records with current filters plus any extra conditions."""
-        w = " AND ".join(conditions + extra)
-        limit_clause = f"LIMIT {limit}" if limit is not None else ""
-        return con.execute(f"""
-            SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                   pos + 1 AS pos_display
-            FROM {table_expr}
-            WHERE {w}
-            ORDER BY chrom, pos, alt_allele, sample_id
-            {limit_clause}
-        """).df()
-
-    with _timed("total_count"):
-        total_count = con.execute(f"SELECT COUNT(*) FROM {table_expr} WHERE {where}").fetchone()[0]
-
-    if total_count == 0:
-        st.warning("No records match the current filters.", icon="🔎")
-        st.stop()
 
     st.info(f"**{total_count:,}** records match the current filters.", icon="✅")
 
@@ -1568,16 +1617,6 @@ with tab_summary:
     with _timed("main_table_query"):
         df = query_records(limit=_tbl_limit)
 
-    _table_cols = [
-        c for c in [
-            "sample_id", "chrom", "pos_display", "ref_allele", "alt_allele",
-            "variant_type", "vaf", *( ["original_vaf"] if _reads_active else []), "alt_count", "ref_count", "total_depth",
-            "fwd_alt_count", "rev_alt_count", "overlap_alt_agree",
-            "overlap_alt_disagree", "variant_called", "variant_filter", "on_target", "gene", "gnomad_af",
-        ]
-        if c in df.columns
-    ]
-
     _tbl_event = render_records_table(
         df,
         total_count,
@@ -1608,7 +1647,7 @@ with tab_summary:
             igv_buttons=igv_buttons,
         )
 
-with tab1:
+if _active_main_tab == TAB_MODULES[1].LABEL:
     for vtype, color in [
         ("SNV",       "#4c78a8"),
         ("insertion", "#f58518"),
@@ -1971,6 +2010,242 @@ with tab1:
                     use_container_width=True,
                 )
 
+            st.caption(
+                "**Site-specific bait-bias estimate** — for each carrier locus, GEAC estimates "
+                "the depth the site would likely have had if it were hom-ref by combining "
+                "(1) that carrier sample's median on-target hom-ref depth and "
+                "(2) the locus's typical relative depth across non-carrier samples. "
+                "The main score is **percent expected depth retained** "
+                "(observed depth / expected depth). Values near 1.0 suggest little depth loss; "
+                "lower values indicate stronger bait-bias-like depletion. "
+                "Use the non-carrier count as a confidence cue."
+            )
+
+            _bb_cache_key = ("bait_bias_candidates", where, _ab_on_tgt, _rb_on_tgt)
+            if st.session_state.get("_bb_cache_key") != _bb_cache_key:
+                st.session_state["_bb_cache_key"] = _bb_cache_key
+                st.session_state["_bb_detail_cache_key"] = None
+                with _timed("bait_bias_candidates [cache miss]"):
+                    st.session_state["_bb_candidates_cache"] = compute_bait_bias_candidates(
+                        con,
+                        table_expr,
+                        where,
+                        ab_on_tgt=_ab_on_tgt,
+                        rb_on_tgt=_rb_on_tgt,
+                        gene_expr="gene" if _genes_available else "NULL",
+                    )
+            else:
+                _TIMINGS.append(("bait_bias_candidates [cache hit]", 0.0))
+
+            _bb_candidates = st.session_state["_bb_candidates_cache"]
+            if _bb_candidates.empty:
+                st.info("No loci with enough data to estimate site-specific bait bias under current filters.")
+            else:
+                _bb_metric_cols = st.columns(4)
+                _bb_metric_cols[0].metric("Candidate loci", f"{len(_bb_candidates):,}")
+                _bb_metric_cols[1].metric(
+                    "Median retained depth",
+                    (
+                        f"{_bb_candidates['median_depth_retained'].median():.1%}"
+                        if _bb_candidates["median_depth_retained"].notna().any()
+                        else "NA"
+                    ),
+                )
+                _bb_metric_cols[2].metric(
+                    "Median observed depth",
+                    (
+                        f"{_bb_candidates['median_observed_depth'].median():.1f}"
+                        if _bb_candidates["median_observed_depth"].notna().any()
+                        else "NA"
+                    ),
+                )
+                _bb_metric_cols[3].metric(
+                    "Median expected depth",
+                    (
+                        f"{_bb_candidates['median_expected_depth'].median():.1f}"
+                        if _bb_candidates["median_expected_depth"].notna().any()
+                        else "NA"
+                    ),
+                )
+
+                _bb_display = (
+                    _bb_candidates.assign(pos_display=_bb_candidates["pos"] + 1)
+                    .loc[:, [
+                        "chrom", "pos_display", "alt_allele", "variant_type", "gene",
+                        "n_carrier_samples", "n_noncarrier_samples",
+                        "median_observed_depth", "median_expected_depth",
+                        "median_depth_retained",
+                    ]]
+                )
+                st.caption(
+                    "Ranked loci with the strongest inferred depth depletion in carriers. "
+                    "Click a row to inspect the site-level model and launch IGV."
+                )
+                _bb_event = st.dataframe(
+                    _bb_display,
+                    width="stretch",
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key="bait_bias_candidates_table",
+                )
+
+                _bb_sel_rows = (_bb_event.selection or {}).get("rows", [])
+                if _bb_sel_rows:
+                    _bb_row = _bb_candidates.iloc[_bb_sel_rows[0]]
+                    _bb_detail_key = (
+                        "bait_bias_detail",
+                        where,
+                        _ab_on_tgt,
+                        _rb_on_tgt,
+                        str(_bb_row["chrom"]),
+                        int(_bb_row["pos"]),
+                        str(_bb_row["alt_allele"]),
+                    )
+                    if st.session_state.get("_bb_detail_cache_key") != _bb_detail_key:
+                        st.session_state["_bb_detail_cache_key"] = _bb_detail_key
+                        with _timed("bait_bias_locus_detail [cache miss]"):
+                            _bb_carriers, _bb_noncarriers = compute_bait_bias_locus_detail(
+                                con,
+                                table_expr,
+                                where,
+                                chrom=str(_bb_row["chrom"]),
+                                pos=int(_bb_row["pos"]),
+                                alt_allele=str(_bb_row["alt_allele"]),
+                                ab_on_tgt=_ab_on_tgt,
+                                rb_on_tgt=_rb_on_tgt,
+                                gene_expr="gene" if _genes_available else "NULL",
+                            )
+                            st.session_state["_bb_carrier_detail_cache"] = _bb_carriers
+                            st.session_state["_bb_noncarrier_detail_cache"] = _bb_noncarriers
+                    else:
+                        _TIMINGS.append(("bait_bias_locus_detail [cache hit]", 0.0))
+
+                    _bb_carriers = st.session_state["_bb_carrier_detail_cache"]
+                    _bb_noncarriers = st.session_state["_bb_noncarrier_detail_cache"]
+                    st.markdown(
+                        f"**Selected bait-bias locus:** {str(_bb_row['chrom'])}:{int(_bb_row['pos']) + 1} "
+                        f"{str(_bb_row['alt_allele'])} ({str(_bb_row['variant_type'])})"
+                    )
+                    _bb_detail_cols = st.columns(4)
+                    _bb_detail_cols[0].metric(
+                        "Median retained depth",
+                        (
+                            f"{_bb_carriers['depth_retained'].median():.1%}"
+                            if not _bb_carriers.empty and _bb_carriers["depth_retained"].notna().any()
+                            else "NA"
+                        ),
+                    )
+                    _bb_detail_cols[1].metric(
+                        "Median expected depth",
+                        (
+                            f"{_bb_carriers['expected_depth'].median():.1f}"
+                            if not _bb_carriers.empty and _bb_carriers["expected_depth"].notna().any()
+                            else "NA"
+                        ),
+                    )
+                    _bb_detail_cols[2].metric(
+                        "Non-carrier samples",
+                        f"{len(_bb_noncarriers):,}",
+                    )
+                    _bb_detail_cols[3].metric(
+                        "Median relative depth",
+                        (
+                            f"{_bb_noncarriers['relative_depth'].median():.3f}"
+                            if not _bb_noncarriers.empty and _bb_noncarriers["relative_depth"].notna().any()
+                            else "NA"
+                        ),
+                    )
+
+                    if not _bb_noncarriers.empty:
+                        _bb_spread = (
+                            f"Non-carrier relative depth: median "
+                            f"{_bb_noncarriers['relative_depth'].median():.3f}, "
+                            f"IQR [{_bb_noncarriers['relative_depth'].quantile(0.25):.3f}, "
+                            f"{_bb_noncarriers['relative_depth'].quantile(0.75):.3f}], "
+                            f"range [{_bb_noncarriers['relative_depth'].min():.3f}, "
+                            f"{_bb_noncarriers['relative_depth'].max():.3f}]."
+                        )
+                        st.caption(_bb_spread)
+
+                    if not _bb_carriers.empty:
+                        _bb_show = _bb_carriers.copy()
+                        _bb_show["pos_display"] = _bb_show["pos"] + 1
+                        st.caption("Carrier sample estimates at this locus")
+                        st.dataframe(
+                            _bb_show[[
+                                "sample_id", "chrom", "pos_display", "alt_allele",
+                                "observed_depth", "sample_baseline_depth",
+                                "expected_depth", "depth_retained",
+                            ]],
+                            width="stretch",
+                            hide_index=True,
+                        )
+
+                    _bb_locus_cond = (
+                        f"chrom = '{_sql_str(str(_bb_row['chrom']))}' "
+                        f"AND pos = {int(_bb_row['pos'])} "
+                        f"AND alt_allele = '{_sql_str(str(_bb_row['alt_allele']))}'"
+                    )
+                    _bb_locus_df = con.execute(f"""
+                        SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                               pos + 1 AS pos_display
+                        FROM {table_expr}
+                        WHERE {_bb_locus_cond} AND {where}
+                        ORDER BY sample_id, chrom, pos
+                    """).df()
+                    igv_buttons(
+                        [_bb_locus_cond],
+                        _bb_locus_df,
+                        key=f"bait_bias_locus_{_sql_str(str(_bb_row['chrom']))}_{int(_bb_row['pos'])}_{_sql_str(str(_bb_row['alt_allele']))}",
+                        use_global_filters=False,
+                    )
+
+                    if _has_ref_reads and _has_alt_reads and _has_alt_reads_cols("family_size"):
+                        _bb_fs_detail = con.execute(f"""
+                            WITH carrier_fs AS (
+                                SELECT
+                                    ar.sample_id,
+                                    MEDIAN(ar.family_size) AS median_family_size,
+                                    COUNT(*) AS n_reads
+                                FROM alt_reads ar
+                                WHERE ar.chrom = '{_sql_str(str(_bb_row['chrom']))}'
+                                  AND ar.pos = {int(_bb_row['pos'])}
+                                  AND ar.alt_allele = '{_sql_str(str(_bb_row['alt_allele']))}'
+                                  AND ar.family_size IS NOT NULL
+                                GROUP BY ar.sample_id
+                            ),
+                            noncarrier_fs AS (
+                                SELECT
+                                    rr.sample_id,
+                                    MEDIAN(rr.family_size) AS median_family_size,
+                                    COUNT(*) AS n_reads
+                                FROM ref_reads rr
+                                WHERE rr.chrom = '{_sql_str(str(_bb_row['chrom']))}'
+                                  AND rr.pos = {int(_bb_row['pos'])}
+                                  AND rr.family_size IS NOT NULL
+                                  {_rr_on_tgt}
+                                GROUP BY rr.sample_id
+                            )
+                            SELECT 'Carrier' AS carrier_group, * FROM carrier_fs
+                            UNION ALL
+                            SELECT 'Non-carrier' AS carrier_group, * FROM noncarrier_fs
+                        """).df()
+                        if not _bb_fs_detail.empty:
+                            st.caption("Consensus family size at the selected locus")
+                            _bb_fs_summary = (
+                                _bb_fs_detail.groupby("carrier_group")
+                                .agg(
+                                    n_samples=("sample_id", "nunique"),
+                                    median_family_size=("median_family_size", "median"),
+                                    median_reads=("n_reads", "median"),
+                                )
+                                .reset_index()
+                            )
+                            st.dataframe(_bb_fs_summary, width="stretch", hide_index=True)
+                else:
+                    st.caption("Click a bait-bias candidate row to inspect the site-level estimate.")
+
         # Family size comparison (only if ref_reads and alt_reads with family_size are present)
         if _has_ref_reads and _has_alt_reads and _has_alt_reads_cols("family_size"):
             _bias_fs_available = con.execute(
@@ -2161,73 +2436,68 @@ def _load_cosmic(p: str) -> pd.DataFrame:
     return pd.read_csv(p, sep="\t", index_col=0)
 
 
-with tab2:
-    _SBS_ORDER = [
-        f"{b5}[{mt}]{b3}"
-        for mt in _SBS_MUT_TYPES
-        for b5 in "ACGT"
-        for b3 in "ACGT"
-    ]
+def _to_spec96_strat(raw_df):
+    if raw_df.empty:
+        return None, 0
+    df = raw_df.copy()
+    df["sbs_label"] = df.apply(
+        lambda r: _sbs_label(r["trinuc_context"], r["ref_allele"], r["alt_allele"]),
+        axis=1,
+    )
+    df = df.dropna(subset=["sbs_label"])
+    df["mut_type"] = df["sbs_label"].str.extract(r'\[([A-Z]>[A-Z])\]')[0]
+    agg = df.groupby(["sbs_label", "mut_type"], as_index=False)["count"].sum()
+    full = pd.DataFrame({
+        "sbs_label": _SBS_ORDER,
+        "mut_type":  [lbl[2:5] for lbl in _SBS_ORDER],
+    })
+    s96 = full.merge(agg, on=["sbs_label", "mut_type"], how="left")
+    s96["count"] = s96["count"].fillna(0).astype(int)
+    total = int(s96["count"].sum())
+    s96["fraction"] = s96["count"] / total if total > 0 else 0.0
+    return s96, total
 
-    # ── Helpers for stratified SBS96 spectra (used in Error Spectrum and Reads tabs) ──
-    def _to_spec96_strat(raw_df):
-        if raw_df.empty:
-            return None, 0
-        df = raw_df.copy()
-        df["sbs_label"] = df.apply(
-            lambda r: _sbs_label(r["trinuc_context"], r["ref_allele"], r["alt_allele"]),
-            axis=1,
-        )
-        df = df.dropna(subset=["sbs_label"])
-        df["mut_type"] = df["sbs_label"].str.extract(r'\[([A-Z]>[A-Z])\]')[0]
-        agg = df.groupby(["sbs_label", "mut_type"], as_index=False)["count"].sum()
-        full = pd.DataFrame({
-            "sbs_label": _SBS_ORDER,
-            "mut_type":  [lbl[2:5] for lbl in _SBS_ORDER],
-        })
-        s96 = full.merge(agg, on=["sbs_label", "mut_type"], how="left")
-        s96["count"] = s96["count"].fillna(0).astype(int)
-        total = int(s96["count"].sum())
-        s96["fraction"] = s96["count"] / total if total > 0 else 0.0
-        return s96, total
 
-    def _strat_sbs96_chart(spec_df, title, y_max=None, sel_name=None):
-        _y_scale = alt.Scale(domain=[0, y_max]) if y_max is not None else alt.Undefined
-        _sel = (
-            alt.selection_point(name=sel_name, fields=["sbs_label"], on="click")
-            if sel_name else None
-        )
-        panels = []
-        for _mt in _SBS_MUT_TYPES:
-            _s = spec_df[spec_df["mut_type"] == _mt]
-            _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
-            _enc = dict(
-                x=alt.X("sbs_label:N", sort=_order, title=None,
-                         axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
-                y=alt.Y("fraction:Q", title="Fraction",
-                         scale=_y_scale, axis=alt.Axis(format=".3f")),
-                tooltip=["sbs_label:N",
-                         alt.Tooltip("fraction:Q", format=".3f", title="Fraction")],
-            )
-            if _sel is not None:
-                # Reference by name dict to avoid auto-embedding the param definition
-                # in each sub-chart (which would cause Altair deduplication warnings).
-                _enc["opacity"] = alt.condition({"param": sel_name}, alt.value(1.0), alt.value(0.4))
-            panels.append(
-                alt.Chart(_s).mark_bar(color=_SBS_COLORS[_mt]).encode(**_enc).properties(
-                    title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt],
-                                          fontSize=11, fontWeight="bold"),
-                    width=120, height=110,
-                )
-            )
-        chart = (
-            alt.concat(*panels, columns=3)
-            .resolve_scale(y="shared")
-            .properties(title=alt.TitleParams(title, fontSize=13))
+def _strat_sbs96_chart(spec_df, title, y_max=None, sel_name=None):
+    _y_scale = alt.Scale(domain=[0, y_max]) if y_max is not None else alt.Undefined
+    _sel = (
+        alt.selection_point(name=sel_name, fields=["sbs_label"], on="click")
+        if sel_name else None
+    )
+    panels = []
+    for _mt in _SBS_MUT_TYPES:
+        _s = spec_df[spec_df["mut_type"] == _mt]
+        _order = [lbl for lbl in _SBS_ORDER if f"[{_mt}]" in lbl]
+        _enc = dict(
+            x=alt.X("sbs_label:N", sort=_order, title=None,
+                     axis=alt.Axis(labelAngle=-90, labelFontSize=7)),
+            y=alt.Y("fraction:Q", title="Fraction",
+                     scale=_y_scale, axis=alt.Axis(format=".3f")),
+            tooltip=["sbs_label:N",
+                     alt.Tooltip("fraction:Q", format=".3f", title="Fraction")],
         )
         if _sel is not None:
-            chart = chart.add_params(_sel)
-        return chart
+            # Reference by name dict to avoid auto-embedding the param definition
+            # in each sub-chart (which would cause Altair deduplication warnings).
+            _enc["opacity"] = alt.condition({"param": sel_name}, alt.value(1.0), alt.value(0.4))
+        panels.append(
+            alt.Chart(_s).mark_bar(color=_SBS_COLORS[_mt]).encode(**_enc).properties(
+                title=alt.TitleParams(_mt, color=_SBS_COLORS[_mt],
+                                      fontSize=11, fontWeight="bold"),
+                width=120, height=110,
+            )
+        )
+    chart = (
+        alt.concat(*panels, columns=3)
+        .resolve_scale(y="shared")
+        .properties(title=alt.TitleParams(title, fontSize=13))
+    )
+    if _sel is not None:
+        chart = chart.add_params(_sel)
+    return chart
+
+
+if _active_main_tab == TAB_MODULES[2].LABEL:
 
     def _load_sample_sbs96_matrix():
         _has_batch = _has_data("batch")
@@ -3557,7 +3827,7 @@ with tab2:
                     "Contexts ordered by mutation type (C>A, C>G, C>T, T>A, T>C, T>G) then flanking bases."
                 )
 
-with tab3:
+if _active_main_tab == TAB_MODULES[3].LABEL:
     _sb_col1, _sb_col2 = st.columns(2)
     _sb_scale = _sb_col1.radio(
         "Axis scale", ["Linear", "log1p"], horizontal=True, key="sb_scale",
@@ -3793,7 +4063,7 @@ with tab3:
     else:
         st.caption("Click a point to select it; shift-click to select multiple.")
 
-with tab_cohort:
+if _active_main_tab == TAB_MODULES[4].LABEL:
     if not path.endswith(".duckdb"):
         st.info("Cohort view is available when loading a merged DuckDB file (`geac merge` output).")
     else:
@@ -4044,7 +4314,7 @@ with tab_cohort:
                     "is typical of background noise."
                 )
 
-with tab_reads:
+if _active_main_tab == TAB_MODULES[5].LABEL:
     if not _has_alt_reads:
         st.info(
             "Per-read detail table not available. "
@@ -4062,6 +4332,8 @@ with tab_reads:
         _dfe_color_options = ["All samples (aggregate)", "Sample"]
         if _has_data("batch"):
             _dfe_color_options.append("Batch")
+        if _has_alt_reads_cols("pipeline"):
+            _dfe_color_options.append("Pipeline")
         if _has_data("label1"):
             _dfe_color_options.append("Label 1")
         if _has_data("label2"):
@@ -4079,21 +4351,31 @@ with tab_reads:
         _dfe_by_read   = _dfe_ctrl3.checkbox("Show R1/R2", value=False, key="dfe_show_r1r2")
         _dfe_by_sample = _dfe_color_by == "Sample"
         _dfe_by_batch  = _dfe_color_by == "Batch"
+        _dfe_by_pipeline = _dfe_color_by == "Pipeline"
         _dfe_by_label  = _dfe_color_by in ("Label 1", "Label 2", "Label 3")
         _dfe_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_dfe_color_by)
         _dfe_normalize = _dfe_y_mode == "Fraction"
         _DFE_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
         _dfe_batch_src = (
-            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr}"
-            f" WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
+            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id"
+            f"{', pipeline' if _alt_reads_has_pipeline else ''}"
+            f"{', read_type' if _alt_reads_has_read_type else ''}, batch FROM {table_expr}"
+            f" WHERE batch IS NOT NULL) ab ON {_alt_reads_meta_join('ab')}"
         )
         _dfe_label_src = (
-            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, {_dfe_lbl_col} FROM {table_expr}"
-            f" WHERE {_dfe_lbl_col} IS NOT NULL) _lbl ON ar.sample_id = _lbl.sample_id"
+            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id"
+            f"{', pipeline' if _alt_reads_has_pipeline else ''}"
+            f"{', read_type' if _alt_reads_has_read_type else ''}, {_dfe_lbl_col} FROM {table_expr}"
+            f" WHERE {_dfe_lbl_col} IS NOT NULL) _lbl ON {_alt_reads_meta_join('_lbl')}"
         ) if _dfe_by_label else _r_join
         if _dfe_by_batch and _dfe_by_read:
             _dfe_source      = _dfe_batch_src
             _dfe_select_expr = f"ab.batch || ' ' || {_DFE_READ_EXPR} AS label, "
+            _dfe_group_expr  = "label, "
+            _dfe_label_col   = "label"
+        elif _dfe_by_pipeline and _dfe_by_read:
+            _dfe_source      = _r_join
+            _dfe_select_expr = f"ar.pipeline || ' ' || {_DFE_READ_EXPR} AS label, "
             _dfe_group_expr  = "label, "
             _dfe_label_col   = "label"
         elif _dfe_by_label and _dfe_by_read:
@@ -4116,6 +4398,11 @@ with tab_reads:
             _dfe_select_expr = "ab.batch AS batch, "
             _dfe_group_expr  = "ab.batch, "
             _dfe_label_col   = "batch"
+        elif _dfe_by_pipeline:
+            _dfe_source      = _r_join
+            _dfe_select_expr = "ar.pipeline AS pipeline, "
+            _dfe_group_expr  = "ar.pipeline, "
+            _dfe_label_col   = "pipeline"
         elif _dfe_by_label:
             _dfe_source      = _dfe_label_src
             _dfe_select_expr = f"_lbl.{_dfe_lbl_col} AS {_dfe_lbl_col}, "
@@ -5230,7 +5517,7 @@ with tab_reads:
                 "Low MAPQ at repetitive loci indicates multi-mapping artefacts."
             )
 
-with tab_duplex:
+if _active_main_tab == TAB_MODULES[6].LABEL:
     if not _has_alt_reads:
         st.info(
             "Per-read detail table not available. "
@@ -5394,6 +5681,12 @@ with tab_duplex:
                 .head(3000)
                 .reset_index(drop=True)
             )
+            _fsvaf_sel = alt.selection_point(
+                name="fsvaf_select",
+                fields=["sample_id", "chrom", "pos", "alt_allele"],
+                on="click",
+                toggle="event.shiftKey",
+            )
             _fsvaf_chart = (
                 alt.Chart(_fsvaf_plot_df)
                 .mark_point(filled=True, size=60)
@@ -5402,6 +5695,8 @@ with tab_duplex:
                     alt.Y("vaf:Q", title="VAF", scale=alt.Scale(domain=[0, 1])),
                     alt.Color("sample_id:N", title="Sample",
                               scale=alt.Scale(scheme="tableau10")),
+                    opacity=alt.condition(_fsvaf_sel, alt.value(1.0), alt.value(0.35)),
+                    size=alt.condition(_fsvaf_sel, alt.value(110), alt.value(55)),
                     tooltip=[
                         alt.Tooltip("sample_id:N"),
                         alt.Tooltip("chrom:N"),
@@ -5412,13 +5707,48 @@ with tab_duplex:
                         alt.Tooltip("n_reads:Q", title="Alt reads"),
                     ],
                 )
+                .add_params(_fsvaf_sel)
                 .properties(height=350)
             )
-            st.altair_chart(_fsvaf_chart, width="stretch")
+            _fsvaf_event = st.altair_chart(
+                _fsvaf_chart,
+                width="stretch",
+                on_select="rerun",
+                key="fsvaf_scatter",
+            )
             st.caption(
                 "True low-VAF variants should have reasonable mean family sizes. "
                 "Artefacts at low VAF tend to cluster at low family size."
             )
+            _fsvaf_pts = (_fsvaf_event.selection or {}).get("fsvaf_select", [])
+            if _fsvaf_pts:
+                _fsvaf_or = " OR ".join(
+                    f"(sample_id = '{_sql_str(p['sample_id'])}' AND chrom = '{_sql_str(p['chrom'])}' "
+                    f"AND pos = {int(p['pos'])} AND alt_allele = '{_sql_str(p['alt_allele'])}')"
+                    for p in _fsvaf_pts
+                    if all(k in p for k in ["sample_id", "chrom", "pos", "alt_allele"])
+                )
+                if _fsvaf_or:
+                    _fsvaf_sel_df = con.execute(f"""
+                        SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                               pos + 1 AS pos_display
+                        FROM {table_expr}
+                        WHERE ({_fsvaf_or})
+                        ORDER BY sample_id, chrom, pos, alt_allele
+                    """).df()
+                    st.caption(
+                        f"{len(_fsvaf_sel_df)} selected loci across "
+                        f"{_fsvaf_sel_df['sample_id'].nunique()} sample(s) — "
+                        "shift-click to select multiple"
+                    )
+                    st.dataframe(_fsvaf_sel_df[_table_cols], width="stretch", hide_index=True)
+                    igv_buttons(
+                        [f"({_fsvaf_or})"],
+                        _fsvaf_sel_df,
+                        key=f"fsvaf_{'_'.join(str(int(p['pos'])) for p in _fsvaf_pts[:5] if 'pos' in p)}",
+                    )
+            else:
+                st.caption("Click a point to select it; shift-click to select multiple.")
 
         # ── Family-size stratified spectrum ───────────────────────────────────
         if _has_alt_reads and _fs_has_data:
@@ -5677,7 +6007,7 @@ with tab_duplex:
                     igv_buttons([_ab_cond], _ab_sel_df, key=_ab_key)
 
 # ── Tumor/Normal tab ──────────────────────────────────────────────────────────
-with tab_tn:
+if _active_main_tab == TAB_MODULES[7].LABEL:
     if not _has_normal_evidence:
         st.info(
             "No `normal_evidence` table found in this database. "
@@ -5895,7 +6225,7 @@ with tab_tn:
                 )
 
 # ── Panel of Normals tab ──────────────────────────────────────────────────────
-with tab_pon:
+if _active_main_tab == TAB_MODULES[8].LABEL:
     if not _has_pon_evidence:
         st.info(
             "No `pon_evidence` table found in this database. "
@@ -6102,7 +6432,7 @@ with tab_pon:
 # ──────────────────────────────────────────────────────────────────────────────
 # Tab 10 — Pipeline comparison
 # ──────────────────────────────────────────────────────────────────────────────
-with tab_pipeline:
+if _active_main_tab == TAB_MODULES[9].LABEL:
     if not data_source.is_duckdb:
         st.info(
             "Pipeline comparison requires a merged DuckDB file. "
@@ -6697,7 +7027,7 @@ with tab_pipeline:
                         "Systematic offset suggests different duplicate-collapsing or overlap behaviour."
                     )
 
-with tab_read_type:
+if _active_main_tab == TAB_MODULES[10].LABEL:
     if not data_source.is_duckdb:
         st.info(
             "Read-type comparison requires a merged DuckDB file. "
@@ -7074,7 +7404,7 @@ with tab_read_type:
                     )
 
 # ── AI Plot Builder ────────────────────────────────────────────────────────────
-with tab_ai:
+if _active_main_tab == TAB_MODULES[11].LABEL:
     st.header("AI Plot Builder")
     st.caption(
         "Describe a plot in plain English and Claude will write the code to render it. "

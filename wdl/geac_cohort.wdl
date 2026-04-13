@@ -52,6 +52,7 @@ version 1.0
 ## Outputs:
 ##   locus_parquets          - Per-sample locus Parquet files from geac collect
 ##   reads_parquets          - Per-sample reads Parquet files (empty when reads_output=false)
+##   sample_metrics_parquets - Per-sample sample_metrics Parquet files (empty when targets absent)
 ##   cohort_db               - Merged cohort DuckDB from geac merge
 ##   exported_loci_tsv       - TSV of exported loci (present when a second pass is enabled)
 ##   ref_sites_parquets      - Per-sample ref_bases+ref_reads Parquets (present when emit_ref_sites=true)
@@ -194,10 +195,11 @@ workflow GeacCohort {
     # Flatten per-sample reads parquet arrays into a single array.
     # When reads_output=false every inner array is empty, so the result is [].
     Array[File] all_reads_parquets = flatten(Collect.reads_parquets)
+    Array[File] all_sample_metrics_parquets = flatten(Collect.sample_metrics_parquets)
 
     call Merge {
         input:
-            parquets     = flatten([Collect.locus_parquet, all_reads_parquets]),
+            parquets     = flatten([Collect.locus_parquet, all_reads_parquets, all_sample_metrics_parquets]),
             cohort_name  = cohort_name,
             docker_image = docker_image,
             memory_gb    = merge_memory_gb,
@@ -346,6 +348,7 @@ workflow GeacCohort {
     output {
         Array[File] locus_parquets = Collect.locus_parquet
         Array[File] reads_parquets = all_reads_parquets
+        Array[File] sample_metrics_parquets = all_sample_metrics_parquets
         File        cohort_db      = Merge.cohort_db
 
         # Shared second-pass output (present when either second-pass mode is enabled)
@@ -441,6 +444,7 @@ task Collect {
     output {
         File        locus_parquet  = locus_name
         Array[File] reads_parquets = glob("*.reads.parquet")
+        Array[File] sample_metrics_parquets = glob("*.sample_metrics.parquet")
     }
 
     runtime {

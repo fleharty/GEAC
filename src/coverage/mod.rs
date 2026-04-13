@@ -9,8 +9,8 @@ use crate::bam::{open_bam, read_group_sample_id, RefCache};
 use crate::cli::CoverageArgs;
 use crate::gene_annotations::GeneAnnotations;
 use crate::record::{CoverageRecord, IntervalRecord};
-use crate::track::TrackSet;
 use crate::targets::TargetIntervals;
+use crate::track::TrackSet;
 use crate::writer::parquet_coverage::CoverageWriter;
 
 /// Process a BAM/CRAM file and return per-position coverage records.
@@ -63,7 +63,11 @@ pub fn collect_coverage(
     // When --fill-zeros is set without targets, use a bitset to track covered positions.
     // ~375 MB for a 3 Gbp genome; far more efficient than a HashSet at WGS coverage depth.
     let do_refwide_zero_fill = args.fill_zeros && !has_targets && args.min_depth == 0;
-    let mut covered: Option<CoveredBitset> = if do_refwide_zero_fill { Some(CoveredBitset::new()) } else { None };
+    let mut covered: Option<CoveredBitset> = if do_refwide_zero_fill {
+        Some(CoveredBitset::new())
+    } else {
+        None
+    };
 
     // Per-interval accumulators — one per named interval, only when intervals output is requested.
     let do_intervals = args.intervals_output.is_some() && target_intervals.is_some();
@@ -131,8 +135,23 @@ pub fn collect_coverage(
             cov.mark(&chrom, pos);
         }
 
-        let record = build_record(&sample_id, &chrom, pos, &tally, gc, track_values, on_target, gene, feature_type, exon_number, args);
-        if args.adaptive_depth_threshold.map_or(false, |t| tally.total_depth < t) {
+        let record = build_record(
+            &sample_id,
+            &chrom,
+            pos,
+            &tally,
+            gc,
+            track_values,
+            on_target,
+            gene,
+            feature_type,
+            exon_number,
+            args,
+        );
+        if args
+            .adaptive_depth_threshold
+            .map_or(false, |t| tally.total_depth < t)
+        {
             // Flush any in-progress bin, then emit this position at single-base resolution
             if let Some(bin) = acc.finish() {
                 writer.push(bin)?;
@@ -189,7 +208,9 @@ pub fn collect_coverage(
             let mut zero_acc = BinAccumulator::new(args.bin_size);
             let mut zero_err: Option<anyhow::Error> = None;
             ti.for_each_position(|chrom, pos| {
-                if zero_err.is_some() { return; }
+                if zero_err.is_some() {
+                    return;
+                }
                 if seen.contains(&(chrom.to_string(), pos)) {
                     return;
                 }
@@ -199,7 +220,18 @@ pub fn collect_coverage(
                 let feature_type = annotation.as_ref().and_then(|a| a.feature_type.clone());
                 let exon_number = annotation.as_ref().and_then(|a| a.exon_number);
                 let track_values = track_set.map_or_else(Vec::new, |ts| ts.lookup(chrom, pos));
-                let record = build_zero_record(&sample_id, chrom, pos, gc, track_values, Some(true), gene, feature_type, exon_number, args);
+                let record = build_zero_record(
+                    &sample_id,
+                    chrom,
+                    pos,
+                    gc,
+                    track_values,
+                    Some(true),
+                    gene,
+                    feature_type,
+                    exon_number,
+                    args,
+                );
                 if let Some(bin) = zero_acc.push(record) {
                     if let Err(e) = writer.push(bin) {
                         zero_err = Some(e);
@@ -227,8 +259,12 @@ pub fn collect_coverage(
                         // Parse "chrom", "chrom:start-end", or "chrom:start"
                         if let Some((chrom, coords)) = r.split_once(':') {
                             let (s, e) = coords.split_once('-').unwrap_or((coords, ""));
-                            let start = s.replace(',', "").parse::<i64>().unwrap_or(0).saturating_sub(1);
-                            let end   = e.replace(',', "").parse::<i64>().unwrap_or(i64::MAX);
+                            let start = s
+                                .replace(',', "")
+                                .parse::<i64>()
+                                .unwrap_or(0)
+                                .saturating_sub(1);
+                            let end = e.replace(',', "").parse::<i64>().unwrap_or(i64::MAX);
                             (Some(chrom), start, end)
                         } else {
                             (Some(r.as_str()), 0, i64::MAX)
@@ -238,15 +274,28 @@ pub fn collect_coverage(
                 };
 
             let n_contigs = bam_contigs.len();
-            info!(n_contigs, "filling zero-depth positions across reference contigs");
+            info!(
+                n_contigs,
+                "filling zero-depth positions across reference contigs"
+            );
             let mut zero_ref = ZeroDepthRefReader::open(&args.reference)?;
             let mut zero_acc = BinAccumulator::new(args.bin_size);
             for (chrom, chrom_len) in &bam_contigs {
                 if let Some(rc) = region_chrom {
-                    if chrom != rc { continue; }
+                    if chrom != rc {
+                        continue;
+                    }
                 }
-                let fill_start = if region_chrom.is_some() { region_start } else { 0 };
-                let fill_end   = if region_chrom.is_some() { region_end.min(*chrom_len as i64) } else { *chrom_len as i64 };
+                let fill_start = if region_chrom.is_some() {
+                    region_start
+                } else {
+                    0
+                };
+                let fill_end = if region_chrom.is_some() {
+                    region_end.min(*chrom_len as i64)
+                } else {
+                    *chrom_len as i64
+                };
                 for pos in fill_start..fill_end {
                     if cov.contains(chrom, pos) {
                         continue;
@@ -257,7 +306,18 @@ pub fn collect_coverage(
                     let feature_type = annotation.as_ref().and_then(|a| a.feature_type.clone());
                     let exon_number = annotation.as_ref().and_then(|a| a.exon_number);
                     let track_values = track_set.map_or_else(Vec::new, |ts| ts.lookup(chrom, pos));
-                    let record = build_zero_record(&sample_id, chrom, pos, gc, track_values, None, gene, feature_type, exon_number, args);
+                    let record = build_zero_record(
+                        &sample_id,
+                        chrom,
+                        pos,
+                        gc,
+                        track_values,
+                        None,
+                        gene,
+                        feature_type,
+                        exon_number,
+                        args,
+                    );
                     if let Some(bin) = zero_acc.push(record) {
                         writer.push(bin)?;
                         positions_written += 1;
@@ -368,16 +428,34 @@ impl BinAccumulator {
             n: 0,
             chrom: String::new(),
             bin_start: 0,
-            sum_total: 0.0, min_total: 0, max_total: 0,
-            sum_fwd: 0.0, sum_rev: 0.0,
-            sum_raw: 0.0, sum_frac_dup: 0.0,
-            sum_overlap: 0.0, sum_frac_overlap: 0.0,
-            sum_mean_mapq: 0.0, sum_frac_mapq0: 0.0, sum_frac_low_mapq: 0.0,
-            sum_mean_bq: 0.0, min_bq: 0, max_bq: 0, sum_frac_low_bq: 0.0,
-            sum_mean_ins: 0.0, min_ins: 0, max_ins: 0, n_ins_obs: 0, n_ins_pos: 0,
+            sum_total: 0.0,
+            min_total: 0,
+            max_total: 0,
+            sum_fwd: 0.0,
+            sum_rev: 0.0,
+            sum_raw: 0.0,
+            sum_frac_dup: 0.0,
+            sum_overlap: 0.0,
+            sum_frac_overlap: 0.0,
+            sum_mean_mapq: 0.0,
+            sum_frac_mapq0: 0.0,
+            sum_frac_low_mapq: 0.0,
+            sum_mean_bq: 0.0,
+            min_bq: 0,
+            max_bq: 0,
+            sum_frac_low_bq: 0.0,
+            sum_mean_ins: 0.0,
+            min_ins: 0,
+            max_ins: 0,
+            n_ins_obs: 0,
+            n_ins_pos: 0,
             sum_gc: 0.0,
-            sum_track_values: Vec::new(), n_track_obs: Vec::new(),
-            on_target: None, gene: None, feature_type: None, exon_number: None,
+            sum_track_values: Vec::new(),
+            n_track_obs: Vec::new(),
+            on_target: None,
+            gene: None,
+            feature_type: None,
+            exon_number: None,
             sample_id: String::new(),
             read_type: crate::record::ReadType::Duplex,
             pipeline: crate::record::Pipeline::Fgbio,
@@ -402,26 +480,46 @@ impl BinAccumulator {
 
     /// Flush any remaining accumulated positions as a final bin record.
     fn finish(&mut self) -> Option<CoverageRecord> {
-        if self.n > 0 { Some(self.build()) } else { None }
+        if self.n > 0 {
+            Some(self.build())
+        } else {
+            None
+        }
     }
 
     fn reset(&mut self, r: &CoverageRecord, bin_start: i64) {
         self.chrom = r.chrom.clone();
         self.bin_start = bin_start;
         self.n = 0;
-        self.sum_total = 0.0; self.min_total = i32::MAX; self.max_total = i32::MIN;
-        self.sum_fwd = 0.0; self.sum_rev = 0.0;
-        self.sum_raw = 0.0; self.sum_frac_dup = 0.0;
-        self.sum_overlap = 0.0; self.sum_frac_overlap = 0.0;
-        self.sum_mean_mapq = 0.0; self.sum_frac_mapq0 = 0.0; self.sum_frac_low_mapq = 0.0;
-        self.sum_mean_bq = 0.0; self.min_bq = i32::MAX; self.max_bq = i32::MIN; self.sum_frac_low_bq = 0.0;
-        self.sum_mean_ins = 0.0; self.min_ins = i32::MAX; self.max_ins = i32::MIN;
-        self.n_ins_obs = 0; self.n_ins_pos = 0;
+        self.sum_total = 0.0;
+        self.min_total = i32::MAX;
+        self.max_total = i32::MIN;
+        self.sum_fwd = 0.0;
+        self.sum_rev = 0.0;
+        self.sum_raw = 0.0;
+        self.sum_frac_dup = 0.0;
+        self.sum_overlap = 0.0;
+        self.sum_frac_overlap = 0.0;
+        self.sum_mean_mapq = 0.0;
+        self.sum_frac_mapq0 = 0.0;
+        self.sum_frac_low_mapq = 0.0;
+        self.sum_mean_bq = 0.0;
+        self.min_bq = i32::MAX;
+        self.max_bq = i32::MIN;
+        self.sum_frac_low_bq = 0.0;
+        self.sum_mean_ins = 0.0;
+        self.min_ins = i32::MAX;
+        self.max_ins = i32::MIN;
+        self.n_ins_obs = 0;
+        self.n_ins_pos = 0;
         self.sum_gc = 0.0;
         let n_tracks = r.track_values.len();
         self.sum_track_values = vec![0.0; n_tracks];
         self.n_track_obs = vec![0u32; n_tracks];
-        self.on_target = None; self.gene = None; self.feature_type = None; self.exon_number = None;
+        self.on_target = None;
+        self.gene = None;
+        self.feature_type = None;
+        self.exon_number = None;
         self.sample_id = r.sample_id.clone();
         self.read_type = r.read_type;
         self.pipeline = r.pipeline;
@@ -511,16 +609,33 @@ impl BinAccumulator {
             frac_mapq0: mean(self.sum_frac_mapq0),
             frac_low_mapq: mean(self.sum_frac_low_mapq),
             mean_base_qual: mean(self.sum_mean_bq),
-            min_base_qual_obs: if self.min_bq == i32::MAX { 0 } else { self.min_bq },
-            max_base_qual_obs: if self.max_bq == i32::MIN { 0 } else { self.max_bq },
+            min_base_qual_obs: if self.min_bq == i32::MAX {
+                0
+            } else {
+                self.min_bq
+            },
+            max_base_qual_obs: if self.max_bq == i32::MIN {
+                0
+            } else {
+                self.max_bq
+            },
             frac_low_bq: mean(self.sum_frac_low_bq),
             mean_insert_size: mean_ins,
             min_insert_size: min_ins,
             max_insert_size: max_ins,
             n_insert_size_obs: self.n_ins_obs,
             gc_content: mean(self.sum_gc),
-            track_values: self.sum_track_values.iter().zip(self.n_track_obs.iter())
-                .map(|(&s, &n)| if n > 0 { Some((s / n as f64) as f32) } else { None })
+            track_values: self
+                .sum_track_values
+                .iter()
+                .zip(self.n_track_obs.iter())
+                .map(|(&s, &n)| {
+                    if n > 0 {
+                        Some((s / n as f64) as f32)
+                    } else {
+                        None
+                    }
+                })
                 .collect(),
             on_target: self.on_target,
             gene: self.gene.clone(),
@@ -543,19 +658,19 @@ impl BinAccumulator {
 #[derive(Default, Clone)]
 struct IntervalAccumulator {
     /// Depth at every position in the interval (including zero-depth positions).
-    depths:        Vec<i32>,
-    sum_gc:        f64,
+    depths: Vec<i32>,
+    sum_gc: f64,
     sum_mean_mapq: f64,
     sum_frac_mapq0: f64,
-    sum_frac_dup:  f64,
+    sum_frac_dup: f64,
     sum_frac_overlap: f64,
-    sum_mean_bq:   f64,
-    sum_mean_ins:  f64,
+    sum_mean_bq: f64,
+    sum_mean_ins: f64,
     /// Number of positions where insert size data was available.
-    n_ins_pos:     u32,
+    n_ins_pos: u32,
     /// First non-None gene seen in this interval.
-    gene:          Option<String>,
-    feature_type:  Option<String>,
+    gene: Option<String>,
+    feature_type: Option<String>,
 }
 
 impl IntervalAccumulator {
@@ -584,14 +699,14 @@ impl IntervalAccumulator {
         };
         let (mean_ins, _, _, n_ins) = insert_size_stats(&tally.insert_sizes);
 
-        self.sum_mean_mapq   += mean_mapq as f64;
-        self.sum_frac_mapq0  += frac_mapq0 as f64;
-        self.sum_frac_dup    += frac_dup as f64;
+        self.sum_mean_mapq += mean_mapq as f64;
+        self.sum_frac_mapq0 += frac_mapq0 as f64;
+        self.sum_frac_dup += frac_dup as f64;
         self.sum_frac_overlap += frac_overlap as f64;
-        self.sum_mean_bq     += mean_bq as f64;
+        self.sum_mean_bq += mean_bq as f64;
         if n_ins > 0 {
             self.sum_mean_ins += mean_ins as f64;
-            self.n_ins_pos    += 1;
+            self.n_ins_pos += 1;
         }
         if self.gene.is_none() {
             self.gene = gene;
@@ -626,42 +741,42 @@ impl IntervalAccumulator {
         let (mean_depth, median_depth, min_depth, max_depth) = depth_stats(&self.depths);
 
         IntervalRecord {
-            sample_id:    sample_id.to_string(),
-            chrom:        named.chrom.clone(),
-            start:        named.start as i64,
-            end:          named.end as i64,
+            sample_id: sample_id.to_string(),
+            chrom: named.chrom.clone(),
+            start: named.start as i64,
+            end: named.end as i64,
             interval_name: named.name.clone(),
-            gene:         self.gene.clone(),
+            gene: self.gene.clone(),
             feature_type: self.feature_type.clone(),
-            exon_number:  None,
+            exon_number: None,
             n_bases,
             mean_depth,
             median_depth,
             min_depth,
             max_depth,
-            frac_at_1x:   frac_at_threshold(&self.depths, 1),
-            frac_at_10x:  frac_at_threshold(&self.depths, 10),
-            frac_at_20x:  frac_at_threshold(&self.depths, 20),
-            frac_at_30x:  frac_at_threshold(&self.depths, 30),
-            frac_at_50x:  frac_at_threshold(&self.depths, 50),
+            frac_at_1x: frac_at_threshold(&self.depths, 1),
+            frac_at_10x: frac_at_threshold(&self.depths, 10),
+            frac_at_20x: frac_at_threshold(&self.depths, 20),
+            frac_at_30x: frac_at_threshold(&self.depths, 30),
+            frac_at_50x: frac_at_threshold(&self.depths, 50),
             frac_at_100x: frac_at_threshold(&self.depths, 100),
-            mean_gc_content:   (self.sum_gc / n_f) as f32,
-            mean_mapq:         (self.sum_mean_mapq / n_f) as f32,
-            mean_frac_mapq0:   (self.sum_frac_mapq0 / n_f) as f32,
-            mean_frac_dup:     (self.sum_frac_dup / n_f) as f32,
+            mean_gc_content: (self.sum_gc / n_f) as f32,
+            mean_mapq: (self.sum_mean_mapq / n_f) as f32,
+            mean_frac_mapq0: (self.sum_frac_mapq0 / n_f) as f32,
+            mean_frac_dup: (self.sum_frac_dup / n_f) as f32,
             mean_frac_overlap: (self.sum_frac_overlap / n_f) as f32,
-            mean_base_qual:    (self.sum_mean_bq / n_f) as f32,
-            mean_insert_size:  if self.n_ins_pos > 0 {
+            mean_base_qual: (self.sum_mean_bq / n_f) as f32,
+            mean_insert_size: if self.n_ins_pos > 0 {
                 (self.sum_mean_ins / self.n_ins_pos as f64) as f32
             } else {
                 0.0
             },
             read_type: args.read_type,
-            pipeline:  args.pipeline,
-            batch:     args.batch.clone(),
-            label1:    args.label1.clone(),
-            label2:    args.label2.clone(),
-            label3:    args.label3.clone(),
+            pipeline: args.pipeline,
+            batch: args.batch.clone(),
+            label1: args.label1.clone(),
+            label2: args.label2.clone(),
+            label3: args.label3.clone(),
         }
     }
 }
@@ -699,7 +814,7 @@ fn frac_at_threshold(depths: &[i32], threshold: i32) -> f32 {
 
 struct CoverageTally {
     raw_read_depth: i32,
-    dup_count:      i32,
+    dup_count: i32,
 
     /// Mapqs of non-dup reads (before mapq filter) — for mappability stats
     mapqs_non_dup: Vec<u8>,
@@ -711,9 +826,9 @@ struct CoverageTally {
     insert_sizes: Vec<i32>,
 
     // Fragment-level depth counts (collapsed by qname)
-    total_depth:   i32,
-    fwd_depth:     i32,
-    rev_depth:     i32,
+    total_depth: i32,
+    fwd_depth: i32,
+    rev_depth: i32,
     overlap_depth: i32,
 }
 
@@ -722,10 +837,7 @@ struct FragEntry {
     is_first_in_pair: bool,
 }
 
-fn tally_coverage(
-    pileup: &rust_htslib::bam::pileup::Pileup,
-    min_map_qual: u8,
-) -> CoverageTally {
+fn tally_coverage(pileup: &rust_htslib::bam::pileup::Pileup, min_map_qual: u8) -> CoverageTally {
     let mut raw_read_depth = 0i32;
     let mut dup_count = 0i32;
     let mut mapqs_non_dup: Vec<u8> = Vec::new();
@@ -766,10 +878,7 @@ fn tally_coverage(
         }
 
         // Insert size: properly-paired R1 reads only (avoid double-counting)
-        if record.is_paired()
-            && record.is_proper_pair()
-            && record.is_first_in_template()
-        {
+        if record.is_paired() && record.is_proper_pair() && record.is_first_in_template() {
             let tlen = record.insert_size().unsigned_abs() as i32;
             if tlen > 0 {
                 insert_sizes.push(tlen);
@@ -780,32 +889,48 @@ fn tally_coverage(
             .entry(record.qname().to_vec())
             .or_default()
             .push(FragEntry {
-                is_reverse:       record.is_reverse(),
+                is_reverse: record.is_reverse(),
                 is_first_in_pair: record.flags() & 0x40 != 0,
             });
     }
 
     // Collapse by qname for fragment-level depth counts
-    let mut total_depth   = 0i32;
-    let mut fwd_depth     = 0i32;
-    let mut rev_depth     = 0i32;
+    let mut total_depth = 0i32;
+    let mut fwd_depth = 0i32;
+    let mut rev_depth = 0i32;
     let mut overlap_depth = 0i32;
 
     for reads in by_qname.values() {
         total_depth += 1;
         match reads.as_slice() {
             [r] => {
-                if r.is_reverse { rev_depth += 1; } else { fwd_depth += 1; }
+                if r.is_reverse {
+                    rev_depth += 1;
+                } else {
+                    fwd_depth += 1;
+                }
             }
             [r1, r2] => {
                 overlap_depth += 1;
-                let r1_is_rev = if r1.is_first_in_pair { r1.is_reverse } else { r2.is_reverse };
-                if r1_is_rev { rev_depth += 1; } else { fwd_depth += 1; }
+                let r1_is_rev = if r1.is_first_in_pair {
+                    r1.is_reverse
+                } else {
+                    r2.is_reverse
+                };
+                if r1_is_rev {
+                    rev_depth += 1;
+                } else {
+                    fwd_depth += 1;
+                }
             }
             _ => {
                 // >2 reads with same qname: treat as non-overlapping
                 if let Some(r) = reads.first() {
-                    if r.is_reverse { rev_depth += 1; } else { fwd_depth += 1; }
+                    if r.is_reverse {
+                        rev_depth += 1;
+                    } else {
+                        fwd_depth += 1;
+                    }
                 }
             }
         }
@@ -974,7 +1099,7 @@ fn mapq_stats(mapqs: &[u8], min_map_qual: u8) -> (f32, f32, f32) {
     }
     let n = mapqs.len() as f32;
     let mean = mapqs.iter().map(|&q| q as f32).sum::<f32>() / n;
-    let frac_0   = mapqs.iter().filter(|&&q| q == 0).count() as f32 / n;
+    let frac_0 = mapqs.iter().filter(|&&q| q == 0).count() as f32 / n;
     let frac_low = mapqs.iter().filter(|&&q| q < min_map_qual).count() as f32 / n;
     (mean, frac_0, frac_low)
 }
@@ -1040,7 +1165,9 @@ struct CoveredBitset {
 
 impl CoveredBitset {
     fn new() -> Self {
-        Self { bits: HashMap::new() }
+        Self {
+            bits: HashMap::new(),
+        }
     }
 
     fn mark(&mut self, chrom: &str, pos: i64) {
@@ -1055,7 +1182,8 @@ impl CoveredBitset {
 
     fn contains(&self, chrom: &str, pos: i64) -> bool {
         let u = pos as usize;
-        self.bits.get(chrom)
+        self.bits
+            .get(chrom)
             .and_then(|v| v.get(u / 64))
             .map(|&w| w & (1u64 << (u % 64)) != 0)
             .unwrap_or(false)
@@ -1066,16 +1194,20 @@ impl CoveredBitset {
 
 /// Minimal reference reader for GC content at zero-depth positions.
 struct ZeroDepthRefReader {
-    fai:          rust_htslib::faidx::Reader,
+    fai: rust_htslib::faidx::Reader,
     cached_chrom: String,
-    cached_seq:   Vec<u8>,
+    cached_seq: Vec<u8>,
 }
 
 impl ZeroDepthRefReader {
     fn open(reference: &Path) -> Result<Self> {
         let fai = rust_htslib::faidx::Reader::from_path(reference)
             .with_context(|| format!("failed to open reference: {}", reference.display()))?;
-        Ok(Self { fai, cached_chrom: String::new(), cached_seq: Vec::new() })
+        Ok(Self {
+            fai,
+            cached_chrom: String::new(),
+            cached_seq: Vec::new(),
+        })
     }
 
     fn gc_content(&mut self, chrom: &str, pos: i64, window: usize) -> f32 {

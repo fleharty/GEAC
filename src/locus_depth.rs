@@ -65,9 +65,7 @@ pub fn collect_locus_depth(args: &LociDepthArgs) -> Result<Vec<LocusDepthRecord>
             rev_depth,
         });
 
-        if report_interval > 0
-            && last_report.elapsed().as_secs() >= report_interval
-        {
+        if report_interval > 0 && last_report.elapsed().as_secs() >= report_interval {
             let elapsed = start.elapsed().as_secs_f64();
             eprintln!(
                 "[{elapsed:>6.0}s] locus-depth: {i}/{} loci processed (current: {chrom}:{})",
@@ -79,7 +77,10 @@ pub fn collect_locus_depth(args: &LociDepthArgs) -> Result<Vec<LocusDepthRecord>
     }
 
     let elapsed = start.elapsed().as_secs_f64();
-    eprintln!("[done] locus-depth: elapsed={elapsed:.1}s loci={}", loci.len());
+    eprintln!(
+        "[done] locus-depth: elapsed={elapsed:.1}s loci={}",
+        loci.len()
+    );
     info!(n_records = results.len(), "locus-depth collection complete");
     Ok(results)
 }

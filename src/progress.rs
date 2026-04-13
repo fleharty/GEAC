@@ -96,7 +96,13 @@ impl ProgressReporter {
             }))
         };
 
-        (Self { state: state.clone(), handle }, state)
+        (
+            Self {
+                state: state.clone(),
+                handle,
+            },
+            state,
+        )
     }
 
     /// Print a final summary and stop the background thread.
@@ -110,7 +116,11 @@ impl ProgressReporter {
         let positions = self.state.positions_processed.load(Ordering::Relaxed);
         let reads = self.state.reads_processed.load(Ordering::Relaxed);
         let alts = self.state.alt_bases_found.load(Ordering::Relaxed);
-        let reads_per_sec = if elapsed > 0.0 { reads as f64 / elapsed } else { 0.0 };
+        let reads_per_sec = if elapsed > 0.0 {
+            reads as f64 / elapsed
+        } else {
+            0.0
+        };
 
         eprintln!(
             "[done] elapsed={elapsed:.1}s positions={positions} reads={reads} reads/sec={reads_per_sec:.0} alt_bases={alts}"

@@ -26,7 +26,9 @@ pub fn write_parquet(records: &[PonEvidence], output: &Path) -> Result<()> {
     let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))
         .context("failed to create Parquet writer")?;
 
-    writer.write(&batch).context("failed to write record batch")?;
+    writer
+        .write(&batch)
+        .context("failed to write record batch")?;
     writer.close().context("failed to finalize Parquet file")?;
 
     Ok(())
@@ -34,14 +36,14 @@ pub fn write_parquet(records: &[PonEvidence], output: &Path) -> Result<()> {
 
 fn pon_evidence_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
-        Field::new("tumor_sample_id",   DataType::Utf8,    false),
-        Field::new("chrom",             DataType::Utf8,    false),
-        Field::new("pos",               DataType::Int64,   false),
-        Field::new("tumor_alt_allele",  DataType::Utf8,    false),
-        Field::new("n_pon_samples",     DataType::Int64,   false),
-        Field::new("pon_total_samples", DataType::Int64,   false),
-        Field::new("max_pon_vaf",       DataType::Float64, true),  // nullable
-        Field::new("mean_pon_vaf",      DataType::Float64, true),  // nullable
+        Field::new("tumor_sample_id", DataType::Utf8, false),
+        Field::new("chrom", DataType::Utf8, false),
+        Field::new("pos", DataType::Int64, false),
+        Field::new("tumor_alt_allele", DataType::Utf8, false),
+        Field::new("n_pon_samples", DataType::Int64, false),
+        Field::new("pon_total_samples", DataType::Int64, false),
+        Field::new("max_pon_vaf", DataType::Float64, true), // nullable
+        Field::new("mean_pon_vaf", DataType::Float64, true), // nullable
     ]))
 }
 
@@ -52,15 +54,16 @@ fn records_to_batch(records: &[PonEvidence], schema: Arc<Schema>) -> Result<Reco
     let chrom: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.chrom.as_str()),
     ));
-    let pos: ArrayRef =
-        Arc::new(Int64Array::from_iter_values(records.iter().map(|r| r.pos)));
+    let pos: ArrayRef = Arc::new(Int64Array::from_iter_values(records.iter().map(|r| r.pos)));
     let tumor_alt_allele: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.tumor_alt_allele.as_str()),
     ));
-    let n_pon_samples: ArrayRef =
-        Arc::new(Int64Array::from_iter_values(records.iter().map(|r| r.n_pon_samples)));
-    let pon_total_samples: ArrayRef =
-        Arc::new(Int64Array::from_iter_values(records.iter().map(|r| r.pon_total_samples)));
+    let n_pon_samples: ArrayRef = Arc::new(Int64Array::from_iter_values(
+        records.iter().map(|r| r.n_pon_samples),
+    ));
+    let pon_total_samples: ArrayRef = Arc::new(Int64Array::from_iter_values(
+        records.iter().map(|r| r.pon_total_samples),
+    ));
     let max_pon_vaf: ArrayRef = Arc::new(Float64Array::from(
         records.iter().map(|r| r.max_pon_vaf).collect::<Vec<_>>(),
     ));

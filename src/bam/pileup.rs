@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use rust_htslib::bam;
 use crate::record::Pipeline;
+use rust_htslib::bam;
 
 /// Per-read detail collected during tallying, used to build AltRead records.
 #[derive(Clone)]

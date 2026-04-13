@@ -190,6 +190,34 @@ Also fixed `_to_spec96_strat` and `_strat_sbs96_chart` being defined inside
 Reads tab. Moved both definitions above `_trinuc_available` so they are always
 defined.
 
+### Top-level Explorer navigation refactor stranded shared helpers inside Summary tab
+**Symptom:** After replacing top-level `st.tabs(...)` navigation with a session-state-backed
+selector to preserve the active section across reruns, several non-Summary tabs started
+throwing `NameError` exceptions:
+- `NameError: name 'query_records' is not defined` in the VAF Distribution tab when clicking
+  insertion/deletion AF bars
+- `NameError: name '_to_spec96_strat' is not defined` in the Reads tab's
+  "Family-size stratified Spectrum"
+
+**Root cause:** The refactor changed top-level sections from `with tab_x:` containers to
+conditional `if _active_main_tab == ...:` blocks. Two helpers that had historically been
+shared across tabs were still defined inside tab-specific blocks:
+- `query_records()` and the `_table_cols` setup were defined inside the Summary section
+- `_to_spec96_strat()` / `_strat_sbs96_chart()` were defined inside the Error Spectrum section
+
+Under `st.tabs()`, every tab body reran, so those definitions were executed every time and the
+scope bug was masked. Once rendering became conditional, opening VAF Distribution or Reads
+directly no longer executed Summary or Error Spectrum first, so the helpers were undefined.
+
+**Fix:** Moved `query_records()`, `_table_cols` setup, `_to_spec96_strat()`, and
+`_strat_sbs96_chart()` back to shared top-level scope. Tab bodies now only contain rendering
+logic; shared query/chart helpers are defined unconditionally before any per-tab branches.
+
+**Lesson:** `st.tabs()` eagerly evaluates every tab body, which can accidentally hide bad
+scoping. When converting tab containers into conditional rendering, audit every helper and
+shared variable previously defined "inside a tab" and promote cross-tab dependencies to
+top-level scope first.
+
 ### Re-aggregation mode: COALESCE couldn't distinguish "no reads" from "no reads passing filter"
 **Symptom:** In `recompute_vaf=True` mode, loci where every read failed the per-read filter
 showed the original (unfiltered) `alt_count` instead of 0.

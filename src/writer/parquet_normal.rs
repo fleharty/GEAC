@@ -26,7 +26,9 @@ pub fn write_parquet(records: &[NormalEvidence], output: &Path) -> Result<()> {
     let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))
         .context("failed to create Parquet writer")?;
 
-    writer.write(&batch).context("failed to write record batch")?;
+    writer
+        .write(&batch)
+        .context("failed to write record batch")?;
     writer.close().context("failed to finalize Parquet file")?;
 
     Ok(())
@@ -34,14 +36,14 @@ pub fn write_parquet(records: &[NormalEvidence], output: &Path) -> Result<()> {
 
 fn normal_evidence_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
-        Field::new("tumor_sample_id",   DataType::Utf8,  false),
-        Field::new("chrom",             DataType::Utf8,  false),
-        Field::new("pos",               DataType::Int64, false),
-        Field::new("tumor_alt_allele",  DataType::Utf8,  false),
-        Field::new("normal_sample_id",  DataType::Utf8,  false),
-        Field::new("normal_alt_allele", DataType::Utf8,  true),  // nullable
-        Field::new("normal_depth",      DataType::Int32, false),
-        Field::new("normal_alt_count",  DataType::Int32, false),
+        Field::new("tumor_sample_id", DataType::Utf8, false),
+        Field::new("chrom", DataType::Utf8, false),
+        Field::new("pos", DataType::Int64, false),
+        Field::new("tumor_alt_allele", DataType::Utf8, false),
+        Field::new("normal_sample_id", DataType::Utf8, false),
+        Field::new("normal_alt_allele", DataType::Utf8, true), // nullable
+        Field::new("normal_depth", DataType::Int32, false),
+        Field::new("normal_alt_count", DataType::Int32, false),
     ]))
 }
 
@@ -65,10 +67,12 @@ fn records_to_batch(records: &[NormalEvidence], schema: Arc<Schema>) -> Result<R
             .map(|r| r.normal_alt_allele.as_deref())
             .collect::<Vec<_>>(),
     ));
-    let normal_depth: ArrayRef =
-        Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.normal_depth)));
-    let normal_alt_count: ArrayRef =
-        Arc::new(Int32Array::from_iter_values(records.iter().map(|r| r.normal_alt_count)));
+    let normal_depth: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.normal_depth),
+    ));
+    let normal_alt_count: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        records.iter().map(|r| r.normal_alt_count),
+    ));
 
     RecordBatch::try_new(
         schema,

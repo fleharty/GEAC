@@ -309,7 +309,7 @@ fn merge_produces_duckdb_with_both_samples() {
             |r| r.get(0),
         )
         .expect("could not read schema_version from geac_metadata");
-    assert_eq!(schema_version, "duckdb-v2");
+    assert_eq!(schema_version, "duckdb-v4");
     let recorded_samples: i64 = conn
         .query_row("SELECT n_samples FROM geac_metadata LIMIT 1", [], |r| {
             r.get(0)
@@ -853,8 +853,12 @@ fn merge_routes_reads_parquet_to_alt_reads_table() {
     assert!(locus_pq.exists(), "locus parquet not created");
     assert!(reads_pq.exists(), "reads parquet not created");
     let reads_cols = parquet_columns(&reads_pq);
+    assert!(reads_cols.contains(&"read_type".to_string()));
+    assert!(reads_cols.contains(&"pipeline".to_string()));
     assert!(reads_cols.contains(&"n_before_alt".to_string()));
     assert!(reads_cols.contains(&"trailing_n_run_len".to_string()));
+    assert_eq!(parquet_query_str(&reads_pq, "read_type", "TRUE"), "raw");
+    assert_eq!(parquet_query_str(&reads_pq, "pipeline", "TRUE"), "raw");
 
     let db = dir.path().join("cohort.duckdb");
     assert_geac_success(&[
@@ -874,8 +878,138 @@ fn merge_routes_reads_parquet_to_alt_reads_table() {
         "alt_reads table is empty"
     );
     let merged_cols = duckdb_columns(&db, "alt_reads");
+    assert!(merged_cols.contains(&"read_type".to_string()));
+    assert!(merged_cols.contains(&"pipeline".to_string()));
     assert!(merged_cols.contains(&"n_before_alt".to_string()));
     assert!(merged_cols.contains(&"trailing_n_run_len".to_string()));
+}
+
+#[test]
+fn collect_targets_emits_sample_metrics_parquet() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 200);
+    let bam = write_bam(
+        dir.path(),
+        "metrics.bam",
+        "sample1",
+        200,
+        vec![(45, b'T', 5, 10)],
+        20,
+    );
+    let bed = write_bed(dir.path(), "targets.bed", &[(40, 80)]);
+    let out = dir.path().join("metrics.parquet");
+
+    assert_geac_success(&[
+        "collect",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
+        "--targets",
+        bed.to_str().unwrap(),
+    ]);
+
+    let metrics_pq = dir.path().join("metrics.sample_metrics.parquet");
+    assert!(metrics_pq.exists(), "sample_metrics parquet not created");
+    assert_eq!(
+        parquet_count(&metrics_pq),
+        1,
+        "expected one sample-metrics row"
+    );
+    assert_eq!(
+        parquet_query_i32(&metrics_pq, "n_target_positions", "TRUE"),
+        40
+    );
+    assert_eq!(
+        parquet_query_i32(&metrics_pq, "n_target_positions_covered", "TRUE"),
+        15
+    );
+    assert_eq!(
+        parquet_query_f32(&metrics_pq, "mean_target_depth_covered", "TRUE"),
+        15.0
+    );
+    assert!(
+        (parquet_query_f32(&metrics_pq, "mean_target_depth_all", "TRUE") - 5.625).abs() < 1e-5,
+        "mean_target_depth_all should include zero-depth target positions"
+    );
+    assert_eq!(
+        parquet_query_f32(&metrics_pq, "median_target_depth_covered", "TRUE"),
+        15.0
+    );
+    assert_eq!(
+        parquet_query_f32(&metrics_pq, "median_target_depth_all", "TRUE"),
+        0.0
+    );
+    assert!(
+        (parquet_query_f32(&metrics_pq, "pct_fragment_bases_on_target", "TRUE") - 0.75).abs()
+            < 1e-5,
+        "on-target fragment-base fraction should reflect target overlap"
+    );
+}
+
+#[test]
+fn merge_routes_sample_metrics_parquet_to_sample_metrics_table() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 200);
+    let bam = write_bam(
+        dir.path(),
+        "metrics_merge.bam",
+        "sample1",
+        200,
+        vec![(45, b'T', 5, 10)],
+        20,
+    );
+    let bed = write_bed(dir.path(), "targets.bed", &[(40, 80)]);
+    let out = dir.path().join("metrics_merge.parquet");
+
+    assert_geac_success(&[
+        "collect",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
+        "--targets",
+        bed.to_str().unwrap(),
+    ]);
+
+    let locus_pq = dir.path().join("metrics_merge.parquet");
+    let sample_metrics_pq = dir.path().join("metrics_merge.sample_metrics.parquet");
+    let db = dir.path().join("cohort.duckdb");
+    assert_geac_success(&[
+        "merge",
+        "--output",
+        db.to_str().unwrap(),
+        locus_pq.to_str().unwrap(),
+        sample_metrics_pq.to_str().unwrap(),
+    ]);
+
+    assert!(
+        duckdb_table_exists(&db, "sample_metrics"),
+        "sample_metrics table not created"
+    );
+    assert_eq!(duckdb_count(&db, "sample_metrics"), 1);
+    assert_schema_columns_present(&duckdb_columns(&db, "sample_metrics"), "sample_metrics");
+    let conn = duckdb::Connection::open(&db).expect("open merged duckdb");
+    let sample_metrics_rows: i64 = conn
+        .query_row(
+            "SELECT sample_metrics_rows FROM geac_metadata LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .expect("read sample_metrics_rows");
+    assert_eq!(sample_metrics_rows, 1);
 }
 
 // ── Cycle number correctness ───────────────────────────────────────────────────
@@ -1100,8 +1234,14 @@ fn reads_record_n_context_metrics() {
 
     let reads_pq = dir.path().join("nctx.reads.parquet");
     assert!(reads_pq.exists(), "reads parquet not created");
-    assert_eq!(parquet_query_i32(&reads_pq, "n_before_alt", "alt_allele = 'T'"), 3);
-    assert_eq!(parquet_query_i32(&reads_pq, "n_after_alt", "alt_allele = 'T'"), 4);
+    assert_eq!(
+        parquet_query_i32(&reads_pq, "n_before_alt", "alt_allele = 'T'"),
+        3
+    );
+    assert_eq!(
+        parquet_query_i32(&reads_pq, "n_after_alt", "alt_allele = 'T'"),
+        4
+    );
     assert_eq!(
         parquet_query_i32(&reads_pq, "n_n_before_alt", "alt_allele = 'T'"),
         2
@@ -1162,8 +1302,14 @@ fn dragen_reads_use_xv_xw_for_family_size() {
 
     let reads_pq = dir.path().join("dragen_tags.reads.parquet");
     assert!(reads_pq.exists(), "reads parquet not created");
-    assert_eq!(parquet_query_i32(&reads_pq, "ab_count", "alt_allele = 'T'"), 7);
-    assert_eq!(parquet_query_i32(&reads_pq, "family_size", "alt_allele = 'T'"), 3);
+    assert_eq!(
+        parquet_query_i32(&reads_pq, "ab_count", "alt_allele = 'T'"),
+        7
+    );
+    assert_eq!(
+        parquet_query_i32(&reads_pq, "family_size", "alt_allele = 'T'"),
+        3
+    );
 }
 
 /// .normal_evidence.parquet files are routed to the normal_evidence table.
@@ -1760,24 +1906,27 @@ fn coverage_intervals_basic() {
 
     // BED with two named intervals.
     let bed = dir.path().join("targets.bed");
-    std::fs::write(
-        &bed,
-        "chr1\t100\t120\texon1\nchr1\t200\t220\texon2\n",
-    )
-    .unwrap();
+    std::fs::write(&bed, "chr1\t100\t120\texon1\nchr1\t200\t220\texon2\n").unwrap();
 
-    let cov_pq  = dir.path().join("s1.coverage.parquet");
-    let iv_pq   = dir.path().join("s1.coverage.intervals.parquet");
+    let cov_pq = dir.path().join("s1.coverage.parquet");
+    let iv_pq = dir.path().join("s1.coverage.intervals.parquet");
 
     assert_geac_success(&[
         "coverage",
-        "--input",       bam.to_str().unwrap(),
-        "--reference",   fa.to_str().unwrap(),
-        "--output",      cov_pq.to_str().unwrap(),
-        "--targets",     bed.to_str().unwrap(),
-        "--intervals-output", iv_pq.to_str().unwrap(),
-        "--read-type",   "raw",
-        "--pipeline",    "raw",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        cov_pq.to_str().unwrap(),
+        "--targets",
+        bed.to_str().unwrap(),
+        "--intervals-output",
+        iv_pq.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
     ]);
 
     assert!(iv_pq.exists(), "intervals Parquet not created");
@@ -1831,17 +1980,26 @@ fn coverage_track_column_populated_from_bedgraph() {
     let out = dir.path().join("track.coverage.parquet");
     assert_geac_success(&[
         "coverage",
-        "--input",     bam.to_str().unwrap(),
-        "--reference", fa.to_str().unwrap(),
-        "--output",    out.to_str().unwrap(),
-        "--track",     &format!("gem150:{}", bg.display()),
-        "--read-type", "raw",
-        "--pipeline",  "raw",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+        "--track",
+        &format!("gem150:{}", bg.display()),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
     ]);
 
     // The column "gem150" should be present.
     let cols = parquet_columns(&out);
-    assert!(cols.contains(&"gem150".to_string()), "gem150 column missing; found: {cols:?}");
+    assert!(
+        cols.contains(&"gem150".to_string()),
+        "gem150 column missing; found: {cols:?}"
+    );
 
     // pos=40 falls in [30, 60) → score 0.9.
     let score = parquet_query_f32(&out, "gem150", "pos = 40");
@@ -1869,11 +2027,16 @@ fn merge_routes_coverage_intervals_parquet_to_coverage_intervals_table() {
     let locus_pq = dir.path().join("locus.parquet");
     assert_geac_success(&[
         "collect",
-        "--input",     locus_bam.to_str().unwrap(),
-        "--reference", fa.to_str().unwrap(),
-        "--output",    locus_pq.to_str().unwrap(),
-        "--read-type", "raw",
-        "--pipeline",  "raw",
+        "--input",
+        locus_bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        locus_pq.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
     ]);
 
     let reads: Vec<CovRead> = (0..5).map(|_| CovRead::regular(100)).collect();
@@ -1882,22 +2045,30 @@ fn merge_routes_coverage_intervals_parquet_to_coverage_intervals_table() {
     std::fs::write(&bed, "chr1\t100\t120\texon1\nchr1\t200\t220\texon2\n").unwrap();
 
     let cov_pq = dir.path().join("sample1.coverage.parquet");
-    let iv_pq  = dir.path().join("sample1.coverage.intervals.parquet");
+    let iv_pq = dir.path().join("sample1.coverage.intervals.parquet");
     assert_geac_success(&[
         "coverage",
-        "--input",            bam.to_str().unwrap(),
-        "--reference",        fa.to_str().unwrap(),
-        "--output",           cov_pq.to_str().unwrap(),
-        "--targets",          bed.to_str().unwrap(),
-        "--intervals-output", iv_pq.to_str().unwrap(),
-        "--read-type",        "raw",
-        "--pipeline",         "raw",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        cov_pq.to_str().unwrap(),
+        "--targets",
+        bed.to_str().unwrap(),
+        "--intervals-output",
+        iv_pq.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
     ]);
 
     let db = dir.path().join("cohort.duckdb");
     assert_geac_success(&[
         "merge",
-        "--output",        db.to_str().unwrap(),
+        "--output",
+        db.to_str().unwrap(),
         locus_pq.to_str().unwrap(),
         cov_pq.to_str().unwrap(),
         iv_pq.to_str().unwrap(),
@@ -1907,7 +2078,11 @@ fn merge_routes_coverage_intervals_parquet_to_coverage_intervals_table() {
         duckdb_table_exists(&db, "coverage_intervals"),
         "coverage_intervals table not created"
     );
-    assert_eq!(duckdb_count(&db, "coverage_intervals"), 2, "expected 2 rows in coverage_intervals");
+    assert_eq!(
+        duckdb_count(&db, "coverage_intervals"),
+        2,
+        "expected 2 rows in coverage_intervals"
+    );
 }
 
 // ── fwd/rev alt count read-level semantics ────────────────────────────────────

@@ -17,7 +17,10 @@ pub fn run_cohort(args: &CohortArgs) -> Result<()> {
     let source = if file_list.len() == 1 {
         format!("read_parquet({}, union_by_name=true)", file_list[0])
     } else {
-        format!("read_parquet([{}], union_by_name=true)", file_list.join(", "))
+        format!(
+            "read_parquet([{}], union_by_name=true)",
+            file_list.join(", ")
+        )
     };
 
     let filter = if args.on_target_only {
@@ -41,11 +44,17 @@ pub fn run_cohort(args: &CohortArgs) -> Result<()> {
 
     // Extra annotation columns included in the file output only.
     let annot_select = [
-        ("gene",           "ANY_VALUE(gene)           AS gene"),
-        ("on_target",      "ANY_VALUE(on_target)      AS on_target"),
-        ("homopolymer_len","ANY_VALUE(homopolymer_len) AS homopolymer_len"),
-        ("str_len",        "ANY_VALUE(str_len)         AS str_len"),
-        ("trinuc_context", "ANY_VALUE(trinuc_context)  AS trinuc_context"),
+        ("gene", "ANY_VALUE(gene)           AS gene"),
+        ("on_target", "ANY_VALUE(on_target)      AS on_target"),
+        (
+            "homopolymer_len",
+            "ANY_VALUE(homopolymer_len) AS homopolymer_len",
+        ),
+        ("str_len", "ANY_VALUE(str_len)         AS str_len"),
+        (
+            "trinuc_context",
+            "ANY_VALUE(trinuc_context)  AS trinuc_context",
+        ),
     ]
     .iter()
     .filter(|(col, _)| has(col))
@@ -59,7 +68,7 @@ pub fn run_cohort(args: &CohortArgs) -> Result<()> {
         "l.n_samples >= {min_samples}
          AND l.n_samples * 1.0 / t.n_total >= {min_frac}",
         min_samples = args.min_samples,
-        min_frac    = args.min_sample_fraction,
+        min_frac = args.min_sample_fraction,
     );
 
     let cte = format!(
@@ -120,38 +129,40 @@ pub fn run_cohort(args: &CohortArgs) -> Result<()> {
     );
 
     struct Row {
-        chrom:                String,
-        pos:                  i64,
-        ref_allele:           String,
-        alt_allele:           String,
-        variant_type:         String,
-        n_samples:            i64,
-        total_samples:        i64,
-        sample_fraction:      f64,
-        mean_vaf:             f64,
-        max_vaf:              f64,
-        mean_depth:           f64,
-        mean_strand_balance:  f64,
-        max_strand_balance:   f64,
+        chrom: String,
+        pos: i64,
+        ref_allele: String,
+        alt_allele: String,
+        variant_type: String,
+        n_samples: i64,
+        total_samples: i64,
+        sample_fraction: f64,
+        mean_vaf: f64,
+        max_vaf: f64,
+        mean_depth: f64,
+        mean_strand_balance: f64,
+        max_strand_balance: f64,
     }
 
-    let mut stmt = con.prepare(&display_sql).context("failed to prepare display query")?;
+    let mut stmt = con
+        .prepare(&display_sql)
+        .context("failed to prepare display query")?;
     let rows: Vec<Row> = stmt
         .query_map([], |row| {
             Ok(Row {
-                chrom:               row.get(0)?,
-                pos:                 row.get(1)?,
-                ref_allele:          row.get(2)?,
-                alt_allele:          row.get(3)?,
-                variant_type:        row.get(4)?,
-                n_samples:           row.get(5)?,
-                total_samples:       row.get(6)?,
-                sample_fraction:     row.get(7)?,
-                mean_vaf:            row.get(8)?,
-                max_vaf:             row.get(9)?,
-                mean_depth:          row.get(10)?,
+                chrom: row.get(0)?,
+                pos: row.get(1)?,
+                ref_allele: row.get(2)?,
+                alt_allele: row.get(3)?,
+                variant_type: row.get(4)?,
+                n_samples: row.get(5)?,
+                total_samples: row.get(6)?,
+                sample_fraction: row.get(7)?,
+                mean_vaf: row.get(8)?,
+                max_vaf: row.get(9)?,
+                mean_depth: row.get(10)?,
                 mean_strand_balance: row.get(11)?,
-                max_strand_balance:  row.get(12)?,
+                max_strand_balance: row.get(12)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()
@@ -159,11 +170,9 @@ pub fn run_cohort(args: &CohortArgs) -> Result<()> {
 
     // ── Print stdout summary ───────────────────────────────────────────────────
     let total_samples: i64 = con
-        .query_row(
-            "SELECT COUNT(DISTINCT sample_id) FROM data",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT COUNT(DISTINCT sample_id) FROM data", [], |r| {
+            r.get(0)
+        })
         .context("failed to count total samples")?;
 
     println!(
@@ -173,9 +182,18 @@ pub fn run_cohort(args: &CohortArgs) -> Result<()> {
     println!();
     println!(
         "{:<6}  {:>12}  {:<4}  {:<12}  {:<9}  {:>9}  {:>8}  {:>10}  {:>10}  {:>10}  {:>12}  {:>12}",
-        "Chrom", "Pos", "Ref", "Alt", "Type",
-        "Samples", "Frac", "Mean VAF", "Max VAF", "Mean Depth",
-        "Mean Strand", "Max Strand",
+        "Chrom",
+        "Pos",
+        "Ref",
+        "Alt",
+        "Type",
+        "Samples",
+        "Frac",
+        "Mean VAF",
+        "Max VAF",
+        "Mean Depth",
+        "Mean Strand",
+        "Max Strand",
     );
     println!("{}", "─".repeat(122));
 
@@ -206,20 +224,23 @@ pub fn run_cohort(args: &CohortArgs) -> Result<()> {
     );
 
     let output_str = args.output.display().to_string().replace('\'', "''");
-    let fmt = match args.output.extension().and_then(|e| e.to_str()).unwrap_or("") {
+    let fmt = match args
+        .output
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+    {
         "parquet" => "FORMAT PARQUET".to_string(),
-        _         => "FORMAT CSV, DELIMITER '\\t', HEADER true".to_string(),
+        _ => "FORMAT CSV, DELIMITER '\\t', HEADER true".to_string(),
     };
 
     con.execute_batch(&format!("COPY ({full_query}) TO '{output_str}' ({fmt})"))
         .with_context(|| format!("failed to write output: {}", args.output.display()))?;
 
     let n_loci: i64 = con
-        .query_row(
-            &format!("SELECT COUNT(*) FROM ({full_query})"),
-            [],
-            |r| r.get(0),
-        )
+        .query_row(&format!("SELECT COUNT(*) FROM ({full_query})"), [], |r| {
+            r.get(0)
+        })
         .context("failed to count output loci")?;
 
     println!();

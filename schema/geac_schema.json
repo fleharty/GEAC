@@ -67,6 +67,8 @@
         "map_qual"
       ],
       "optional_columns": [
+        "read_type",
+        "pipeline",
         "ab_count",
         "ba_count",
         "family_size",
@@ -163,6 +165,7 @@
         "n_normal_evidence_inputs",
         "n_pon_evidence_inputs",
         "n_coverage_inputs",
+        "n_sample_metrics_inputs",
         "n_duckdb_inputs",
         "n_samples",
         "alt_bases_rows",
@@ -170,6 +173,7 @@
         "normal_evidence_rows",
         "pon_evidence_rows",
         "coverage_rows",
+        "sample_metrics_rows",
         "samples_rows"
       ],
       "optional_columns": []
@@ -234,11 +238,31 @@
         "trailing_n_run_len"
       ],
       "optional_columns": [
+        "read_type",
+        "pipeline",
         "ab_count",
         "ba_count",
         "family_size",
         "insert_size",
         "input_checksum_sha256"
+      ]
+    },
+    "sample_metrics": {
+      "required_columns": [
+        "sample_id",
+        "read_type",
+        "pipeline",
+        "n_target_positions",
+        "n_target_positions_covered"
+      ],
+      "optional_columns": [
+        "batch",
+        "input_checksum_sha256",
+        "mean_target_depth_covered",
+        "mean_target_depth_all",
+        "median_target_depth_covered",
+        "median_target_depth_all",
+        "pct_fragment_bases_on_target"
       ]
     },
     "geac_inputs": {

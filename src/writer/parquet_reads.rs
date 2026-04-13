@@ -40,6 +40,8 @@ fn alt_read_schema() -> Arc<Schema> {
         Field::new("chrom", DataType::Utf8, false),
         Field::new("pos", DataType::Int64, false),
         Field::new("alt_allele", DataType::Utf8, false),
+        Field::new("read_type", DataType::Utf8, false),
+        Field::new("pipeline", DataType::Utf8, false),
         Field::new("cycle", DataType::Int32, false),
         Field::new("read_length", DataType::Int32, false),
         Field::new("is_read1", DataType::Boolean, false),
@@ -69,6 +71,12 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
     let pos: ArrayRef = Arc::new(Int64Array::from_iter_values(records.iter().map(|r| r.pos)));
     let alt_allele: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.alt_allele.as_str()),
+    ));
+    let read_type: ArrayRef = Arc::new(StringArray::from_iter_values(
+        records.iter().map(|r| r.read_type.to_string()),
+    ));
+    let pipeline: ArrayRef = Arc::new(StringArray::from_iter_values(
+        records.iter().map(|r| r.pipeline.to_string()),
     ));
     let cycle: ArrayRef = Arc::new(Int32Array::from_iter_values(
         records.iter().map(|r| r.cycle),
@@ -129,6 +137,8 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
             chrom,
             pos,
             alt_allele,
+            read_type,
+            pipeline,
             cycle,
             read_length,
             is_read1,

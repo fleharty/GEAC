@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::vcf::{VcfAnnotation, VariantAnnotator};
+use crate::vcf::{VariantAnnotator, VcfAnnotation};
 
 /// Pre-loaded lookup built from a tab-separated variant list.
 ///
@@ -17,7 +17,7 @@ use crate::vcf::{VcfAnnotation, VariantAnnotator};
 /// "NoRules" is treated as "PASS".  If the column is absent or there is no
 /// header, all variants are annotated as "PASS".
 pub struct VariantsTsv {
-    by_allele:   HashMap<(String, i64, String), VcfAnnotation>,
+    by_allele: HashMap<(String, i64, String), VcfAnnotation>,
     by_position: HashMap<(String, i64), VcfAnnotation>,
 }
 
@@ -26,15 +26,23 @@ impl VariantsTsv {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read variants TSV: {}", path.display()))?;
 
-        let mut by_allele:   HashMap<(String, i64, String), VcfAnnotation> = HashMap::new();
-        let mut by_position: HashMap<(String, i64), VcfAnnotation>         = HashMap::new();
+        let mut by_allele: HashMap<(String, i64, String), VcfAnnotation> = HashMap::new();
+        let mut by_position: HashMap<(String, i64), VcfAnnotation> = HashMap::new();
 
         // Find the post_filter_flag column index from the header row, if present.
         // The header is identified by a non-numeric value in the pos_start column (col 1).
         let mut lines = content.lines().peekable();
         let filter_col: Option<usize> = match lines.peek() {
-            Some(first) if first.split('\t').nth(1).map(|v| v.parse::<i64>().is_err()).unwrap_or(false) => {
-                first.split('\t').position(|h| h.trim() == "post_filter_flag")
+            Some(first)
+                if first
+                    .split('\t')
+                    .nth(1)
+                    .map(|v| v.parse::<i64>().is_err())
+                    .unwrap_or(false) =>
+            {
+                first
+                    .split('\t')
+                    .position(|h| h.trim() == "post_filter_flag")
             }
             _ => None,
         };
@@ -57,14 +65,14 @@ impl VariantsTsv {
             };
 
             let chrom = cols[0].to_string();
-            let var   = cols[4].to_string();
+            let var = cols[4].to_string();
 
             // Use post_filter_flag column if we found it in the header.
             // "NoRules" means no filter rule fired — equivalent to PASS.
             let filter = match filter_col.and_then(|i| cols.get(i)).map(|s| s.trim()) {
                 None | Some("") => "PASS".to_string(),
                 Some("NoRules") => "PASS".to_string(),
-                Some(f)         => f.to_string(),
+                Some(f) => f.to_string(),
             };
 
             let annotation = VcfAnnotation { filter };
@@ -78,7 +86,10 @@ impl VariantsTsv {
                 .or_insert_with(|| annotation.clone());
         }
 
-        Ok(Self { by_allele, by_position })
+        Ok(Self {
+            by_allele,
+            by_position,
+        })
     }
 }
 

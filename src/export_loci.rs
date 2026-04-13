@@ -41,10 +41,7 @@ pub fn export_loci(args: &ExportLociArgs) -> Result<()> {
     // Build WHERE clause for VAF filter.
     let mut conditions = vec![
         "total_depth > 0".to_string(),
-        format!(
-            "alt_count * 1.0 / total_depth >= {}",
-            args.min_vaf
-        ),
+        format!("alt_count * 1.0 / total_depth >= {}", args.min_vaf),
     ];
 
     if let Some(max_vaf) = args.max_vaf {

@@ -64,9 +64,7 @@ pub fn collect_ref_bases(
     let n_ref_positions = n_target_positions.saturating_sub(n_alt_positions);
     info!(
         n_target_positions,
-        n_alt_positions,
-        n_ref_positions,
-        "collecting ref-site records"
+        n_alt_positions, n_ref_positions, "collecting ref-site records"
     );
 
     let mut ref_bases: Vec<RefBase> = Vec::new();
@@ -199,6 +197,8 @@ pub fn collect_ref_bases(
                         sample_id: sample_id.clone(),
                         chrom: chrom.to_string(),
                         pos,
+                        read_type: args.read_type,
+                        pipeline: args.pipeline,
                         cycle: true_cycle(
                             detail.qpos,
                             detail.read_len,

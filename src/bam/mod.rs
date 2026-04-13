@@ -16,7 +16,7 @@ use crate::cli::CollectArgs;
 use crate::gene_annotations::GeneAnnotations;
 use crate::gnomad::GnomadIndex;
 use crate::progress::ProgressReporter;
-use crate::record::{AltBase, AltRead};
+use crate::record::{AltBase, AltRead, SampleMetricsRecord};
 use crate::repeat::compute_repeat_metrics;
 use crate::targets::TargetIntervals;
 use crate::vcf::VariantAnnotator;
@@ -25,9 +25,9 @@ use builders::LocusContext;
 use indel::tally_indels;
 use pileup::{locus_n_context_summary, tally_pileup, PileupResult};
 
+pub use ref_collect::collect_ref_bases;
 pub(crate) use ref_utils::RefCache;
 pub use ref_utils::{open_bam, read_group_sample_id};
-pub use ref_collect::collect_ref_bases;
 
 /// Process a BAM/CRAM file and return all alt base records (and optionally per-read detail records).
 ///
@@ -40,7 +40,7 @@ pub fn collect_alt_bases(
     target_intervals: Option<&TargetIntervals>,
     gene_annots: Option<&GeneAnnotations>,
     mut gnomad: Option<&mut GnomadIndex>,
-) -> Result<(Vec<AltBase>, Vec<AltRead>)> {
+) -> Result<(Vec<AltBase>, Vec<AltRead>, Option<SampleMetricsRecord>)> {
     let input_checksum_sha256 = if args.input_checksum_sha256 {
         Some(compute_input_sha256(&args.input)?)
     } else {
@@ -83,6 +83,8 @@ pub fn collect_alt_bases(
     let collect_reads = args.reads_output;
     let mut records: Vec<AltBase> = Vec::new();
     let mut read_records: Vec<AltRead> = Vec::new();
+    let region_filter = args.region.as_deref().and_then(parse_region_spec);
+    let mut sample_metrics_acc = target_intervals.map(|_| SampleMetricsAccumulator::default());
 
     for pileup in bam.pileup() {
         let pileup = pileup.context("error reading pileup")?;
@@ -125,6 +127,15 @@ pub fn collect_alt_bases(
         }
 
         let on_target = target_intervals.map(|t| t.contains(&chrom, pos));
+        if let Some(acc) = sample_metrics_acc.as_mut() {
+            acc.observe_position(
+                &chrom,
+                pos,
+                total_depth,
+                on_target == Some(true),
+                region_filter.as_ref(),
+            );
+        }
         let gene = gene_annots.and_then(|g| g.get(&chrom, pos)).map(|a| a.gene);
         let repeat =
             compute_repeat_metrics(ref_cache.current_seq(), pos as usize, args.repeat_window);
@@ -260,7 +271,192 @@ pub fn collect_alt_bases(
     }
 
     reporter.finish(start);
-    Ok((records, read_records))
+
+    let sample_metrics = if let (Some(ti), Some(acc)) = (target_intervals, sample_metrics_acc) {
+        Some(acc.build(
+            &sample_id,
+            args.batch.clone(),
+            args.read_type,
+            args.pipeline,
+            input_checksum_sha256,
+            ti,
+            region_filter.as_ref(),
+        ))
+    } else {
+        None
+    };
+
+    Ok((records, read_records, sample_metrics))
+}
+
+#[derive(Debug, Clone)]
+struct RegionSpec {
+    chrom: String,
+    start: i64,
+    end: Option<i64>,
+}
+
+impl RegionSpec {
+    fn contains(&self, chrom: &str, pos: i64) -> bool {
+        if chrom != self.chrom || pos < self.start {
+            return false;
+        }
+        self.end.is_none_or(|end| pos < end)
+    }
+}
+
+fn parse_region_spec(region: &str) -> Option<RegionSpec> {
+    let (chrom, coords) = region.split_once(':').unwrap_or((region, ""));
+    if coords.is_empty() {
+        return Some(RegionSpec {
+            chrom: chrom.to_string(),
+            start: 0,
+            end: None,
+        });
+    }
+    let (start_s, end_s) = coords.split_once('-').unwrap_or((coords, ""));
+    let start = start_s
+        .replace(',', "")
+        .parse::<i64>()
+        .ok()?
+        .saturating_sub(1);
+    let end = if end_s.is_empty() {
+        None
+    } else {
+        Some(end_s.replace(',', "").parse::<i64>().ok()?)
+    };
+    Some(RegionSpec {
+        chrom: chrom.to_string(),
+        start,
+        end,
+    })
+}
+
+#[derive(Default)]
+struct SampleMetricsAccumulator {
+    total_fragment_bases: i64,
+    on_target_fragment_bases: i64,
+    covered_target_depths: Vec<i32>,
+}
+
+impl SampleMetricsAccumulator {
+    fn observe_position(
+        &mut self,
+        chrom: &str,
+        pos: i64,
+        total_depth: i32,
+        on_target: bool,
+        region: Option<&RegionSpec>,
+    ) {
+        if region.is_some_and(|r| !r.contains(chrom, pos)) {
+            return;
+        }
+        self.total_fragment_bases += i64::from(total_depth);
+        if on_target {
+            self.on_target_fragment_bases += i64::from(total_depth);
+            self.covered_target_depths.push(total_depth);
+        }
+    }
+
+    fn build(
+        mut self,
+        sample_id: &str,
+        batch: Option<String>,
+        read_type: crate::record::ReadType,
+        pipeline: crate::record::Pipeline,
+        input_checksum_sha256: Option<String>,
+        target_intervals: &TargetIntervals,
+        region: Option<&RegionSpec>,
+    ) -> SampleMetricsRecord {
+        let mut n_target_positions = 0_i32;
+        target_intervals.for_each_position(|chrom, pos| {
+            if region.is_none_or(|r| r.contains(chrom, pos)) {
+                n_target_positions += 1;
+            }
+        });
+
+        self.covered_target_depths.sort_unstable();
+        let n_target_positions_covered = self.covered_target_depths.len() as i32;
+        let zero_target_positions =
+            n_target_positions.saturating_sub(n_target_positions_covered) as usize;
+        let sum_target_depths: i64 = self
+            .covered_target_depths
+            .iter()
+            .map(|&d| i64::from(d))
+            .sum();
+
+        let mean_target_depth_covered = if n_target_positions_covered > 0 {
+            Some(sum_target_depths as f32 / n_target_positions_covered as f32)
+        } else {
+            None
+        };
+        let mean_target_depth_all = if n_target_positions > 0 {
+            Some(sum_target_depths as f32 / n_target_positions as f32)
+        } else {
+            None
+        };
+        let median_target_depth_covered = median_sorted_i32(&self.covered_target_depths);
+        let median_target_depth_all =
+            median_sorted_with_leading_zeros(&self.covered_target_depths, zero_target_positions);
+        let pct_fragment_bases_on_target = if self.total_fragment_bases > 0 {
+            Some(self.on_target_fragment_bases as f32 / self.total_fragment_bases as f32)
+        } else {
+            None
+        };
+
+        SampleMetricsRecord {
+            sample_id: sample_id.to_string(),
+            batch,
+            read_type,
+            pipeline,
+            input_checksum_sha256,
+            n_target_positions,
+            n_target_positions_covered,
+            mean_target_depth_covered,
+            mean_target_depth_all,
+            median_target_depth_covered,
+            median_target_depth_all,
+            pct_fragment_bases_on_target,
+        }
+    }
+}
+
+fn median_sorted_i32(sorted: &[i32]) -> Option<f32> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let mid = sorted.len() / 2;
+    if sorted.len() % 2 == 1 {
+        Some(sorted[mid] as f32)
+    } else {
+        Some((sorted[mid - 1] as f32 + sorted[mid] as f32) / 2.0)
+    }
+}
+
+fn median_sorted_with_leading_zeros(sorted_positive: &[i32], zero_count: usize) -> Option<f32> {
+    let total = zero_count + sorted_positive.len();
+    if total == 0 {
+        return None;
+    }
+
+    fn value_at(sorted_positive: &[i32], zero_count: usize, idx: usize) -> f32 {
+        if idx < zero_count {
+            0.0
+        } else {
+            sorted_positive[idx - zero_count] as f32
+        }
+    }
+
+    let mid = total / 2;
+    if total % 2 == 1 {
+        Some(value_at(sorted_positive, zero_count, mid))
+    } else {
+        Some(
+            (value_at(sorted_positive, zero_count, mid - 1)
+                + value_at(sorted_positive, zero_count, mid))
+                / 2.0,
+        )
+    }
 }
 
 pub(super) fn compute_input_sha256(path: &Path) -> Result<String> {

@@ -23,24 +23,32 @@ pub struct RepeatMetrics {
 /// are subsumed: if `homopolymer_len >= 2`, `str_period` will be 1.
 pub fn compute_repeat_metrics(seq: &[u8], pos: usize, window: usize) -> RepeatMetrics {
     if pos >= seq.len() {
-        return RepeatMetrics { homopolymer_len: 1, str_period: 0, str_len: 0 };
+        return RepeatMetrics {
+            homopolymer_len: 1,
+            str_period: 0,
+            str_len: 0,
+        };
     }
 
-    let start    = pos.saturating_sub(window);
-    let end      = (pos + window + 1).min(seq.len());
-    let w        = &seq[start..end];
+    let start = pos.saturating_sub(window);
+    let end = (pos + window + 1).min(seq.len());
+    let w = &seq[start..end];
     let pos_in_w = pos - start;
 
     // ── Homopolymer ───────────────────────────────────────────────────────────
     let base = w[pos_in_w];
     let mut left = 0usize;
     for i in (0..pos_in_w).rev() {
-        if w[i] != base { break; }
+        if w[i] != base {
+            break;
+        }
         left += 1;
     }
     let mut right = 0usize;
     for i in (pos_in_w + 1)..w.len() {
-        if w[i] != base { break; }
+        if w[i] != base {
+            break;
+        }
         right += 1;
     }
     let homopolymer_len = (left + right + 1) as i32;
@@ -51,7 +59,7 @@ pub fn compute_repeat_metrics(seq: &[u8], pos: usize, window: usize) -> RepeatMe
     // produces a tract of ≥ 2 copies covering pos_in_w wins.
     const MAX_PERIOD: usize = 6;
     let mut str_period = 0i32;
-    let mut str_len    = 0i32;
+    let mut str_len = 0i32;
 
     'outer: for k in 1..=MAX_PERIOD {
         let mut i = 0;
@@ -67,7 +75,7 @@ pub fn compute_repeat_metrics(seq: &[u8], pos: usize, window: usize) -> RepeatMe
                 let tract_end = i + copies * k;
                 if i <= pos_in_w && pos_in_w < tract_end {
                     str_period = k as i32;
-                    str_len    = (copies * k) as i32;
+                    str_len = (copies * k) as i32;
                     break 'outer;
                 }
             }
@@ -75,7 +83,11 @@ pub fn compute_repeat_metrics(seq: &[u8], pos: usize, window: usize) -> RepeatMe
         }
     }
 
-    RepeatMetrics { homopolymer_len, str_period, str_len }
+    RepeatMetrics {
+        homopolymer_len,
+        str_period,
+        str_len,
+    }
 }
 
 #[cfg(test)]

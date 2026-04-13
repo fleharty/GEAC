@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 
 // ── Single track ──────────────────────────────────────────────────────────────
 
@@ -25,13 +25,17 @@ use anyhow::{Context, Result, bail};
 struct ChromTrack {
     /// Parallel arrays: start positions (0-based), end positions (exclusive), scores.
     starts: Vec<i64>,
-    ends:   Vec<i64>,
+    ends: Vec<i64>,
     scores: Vec<f32>,
 }
 
 impl ChromTrack {
     fn new() -> Self {
-        Self { starts: Vec::new(), ends: Vec::new(), scores: Vec::new() }
+        Self {
+            starts: Vec::new(),
+            ends: Vec::new(),
+            scores: Vec::new(),
+        }
     }
 
     fn push(&mut self, start: i64, end: i64, score: f32) {
@@ -49,11 +53,11 @@ impl ChromTrack {
         let n = self.starts.len();
         let mut order: Vec<usize> = (0..n).collect();
         order.sort_unstable_by_key(|&i| self.starts[i]);
-        let starts  = order.iter().map(|&i| self.starts[i]).collect();
-        let ends    = order.iter().map(|&i| self.ends[i]).collect();
-        let scores  = order.iter().map(|&i| self.scores[i]).collect();
+        let starts = order.iter().map(|&i| self.starts[i]).collect();
+        let ends = order.iter().map(|&i| self.ends[i]).collect();
+        let scores = order.iter().map(|&i| self.scores[i]).collect();
         self.starts = starts;
-        self.ends   = ends;
+        self.ends = ends;
         self.scores = scores;
     }
 
@@ -95,34 +99,50 @@ impl AnnotationTrack {
             let line = line.trim();
 
             // Skip blank lines and BEDGraph header/browser/track directives.
-            if line.is_empty() || line.starts_with('#') || line.starts_with("browser")
+            if line.is_empty()
+                || line.starts_with('#')
+                || line.starts_with("browser")
                 || line.starts_with("track")
             {
                 continue;
             }
 
             let mut fields = line.splitn(4, '\t');
-            let chrom = fields.next()
+            let chrom = fields
+                .next()
                 .with_context(|| format!("missing chrom at line {}", lineno + 1))?;
-            let start_str = fields.next()
+            let start_str = fields
+                .next()
                 .with_context(|| format!("missing start at line {}", lineno + 1))?;
-            let end_str = fields.next()
+            let end_str = fields
+                .next()
                 .with_context(|| format!("missing end at line {}", lineno + 1))?;
-            let score_str = fields.next()
+            let score_str = fields
+                .next()
                 .with_context(|| format!("missing score at line {}", lineno + 1))?;
 
-            let start: i64 = start_str.parse()
+            let start: i64 = start_str
+                .parse()
                 .with_context(|| format!("invalid start '{}' at line {}", start_str, lineno + 1))?;
-            let end: i64 = end_str.parse()
+            let end: i64 = end_str
+                .parse()
                 .with_context(|| format!("invalid end '{}' at line {}", end_str, lineno + 1))?;
-            let score: f32 = score_str.trim().parse()
+            let score: f32 = score_str
+                .trim()
+                .parse()
                 .with_context(|| format!("invalid score '{}' at line {}", score_str, lineno + 1))?;
 
             if start >= end {
-                bail!("degenerate interval [{start}, {end}) at line {}", lineno + 1);
+                bail!(
+                    "degenerate interval [{start}, {end}) at line {}",
+                    lineno + 1
+                );
             }
 
-            chroms.entry(chrom.to_string()).or_insert_with(ChromTrack::new).push(start, end, score);
+            chroms
+                .entry(chrom.to_string())
+                .or_insert_with(ChromTrack::new)
+                .push(start, end, score);
         }
 
         // Sort each chromosome track so binary search is valid.
@@ -166,10 +186,11 @@ impl TrackSet {
         let mut tracks = Vec::with_capacity(specs.len());
 
         for spec in specs {
-            let (name, path_str) = spec.split_once(':')
-                .with_context(|| format!(
+            let (name, path_str) = spec.split_once(':').with_context(|| {
+                format!(
                     "invalid --track spec '{spec}': expected NAME:FILE (e.g. gem150:gem.bedgraph)"
-                ))?;
+                )
+            })?;
             if name.is_empty() {
                 bail!("--track spec '{spec}': track name must not be empty");
             }
@@ -213,8 +234,8 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let p = write_bedgraph(dir.path(), "chr1\t0\t100\t0.9\nchr1\t100\t200\t0.5\n");
         let track = AnnotationTrack::load(&p).unwrap();
-        assert_eq!(track.get("chr1", 0),   Some(0.9));
-        assert_eq!(track.get("chr1", 99),  Some(0.9));
+        assert_eq!(track.get("chr1", 0), Some(0.9));
+        assert_eq!(track.get("chr1", 99), Some(0.9));
         assert_eq!(track.get("chr1", 100), Some(0.5));
         assert_eq!(track.get("chr1", 199), Some(0.5));
         assert_eq!(track.get("chr1", 200), None);
@@ -247,7 +268,7 @@ mod tests {
         );
         let track = AnnotationTrack::load(&p).unwrap();
         assert_eq!(track.get("chr1", 15), Some(0.5));
-        assert_eq!(track.get("chr1", 9),  None);
+        assert_eq!(track.get("chr1", 9), None);
     }
 
     #[test]
@@ -255,7 +276,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let p = write_bedgraph(dir.path(), "chr1\t100\t200\t0.5\nchr1\t0\t100\t0.9\n");
         let track = AnnotationTrack::load(&p).unwrap();
-        assert_eq!(track.get("chr1", 50),  Some(0.9));
+        assert_eq!(track.get("chr1", 50), Some(0.9));
         assert_eq!(track.get("chr1", 150), Some(0.5));
     }
 

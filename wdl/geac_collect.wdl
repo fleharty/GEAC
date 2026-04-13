@@ -46,6 +46,8 @@ version 1.0
 ##   locus_parquet        - per-locus alt base Parquet ({stem}.locus.parquet or {stem}.parquet)
 ##   reads_parquets       - per-read detail Parquet array (one element when reads_output=true,
 ##                          empty array otherwise)
+##   sample_metrics_parquets - sample-level target-depth metrics Parquet array (one element when
+##                             targets are provided, empty array otherwise)
 
 workflow GeacCollect {
 
@@ -128,6 +130,7 @@ workflow GeacCollect {
     output {
         File        locus_parquet  = Collect.locus_parquet
         Array[File] reads_parquets = Collect.reads_parquets
+        Array[File] sample_metrics_parquets = Collect.sample_metrics_parquets
     }
 }
 
@@ -212,6 +215,7 @@ task Collect {
     output {
         File        locus_parquet  = locus_name
         Array[File] reads_parquets = glob("*.reads.parquet")
+        Array[File] sample_metrics_parquets = glob("*.sample_metrics.parquet")
     }
 
     runtime {

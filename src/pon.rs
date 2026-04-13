@@ -31,7 +31,9 @@ pub fn annotate_pon(args: &AnnotatePonArgs) -> Result<Vec<PonEvidence>> {
 
     // Verify the PoN database has an alt_bases table.
     conn.execute_batch("SELECT 1 FROM alt_bases LIMIT 0")
-        .context("PoN DuckDB does not contain an alt_bases table — was it built with `geac merge`?")?;
+        .context(
+            "PoN DuckDB does not contain an alt_bases table — was it built with `geac merge`?",
+        )?;
 
     let tumor_path = args.tumor_parquet.display().to_string().replace('\'', "''");
 
@@ -86,19 +88,21 @@ pub fn annotate_pon(args: &AnnotatePonArgs) -> Result<Vec<PonEvidence>> {
         "#
     );
 
-    let mut stmt = conn.prepare(&sql).context("failed to prepare PoN annotation query")?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .context("failed to prepare PoN annotation query")?;
 
     let rows = stmt
         .query_map([], |row| {
             Ok(PonEvidence {
-                tumor_sample_id:   row.get(0)?,
-                chrom:             row.get(1)?,
-                pos:               row.get(2)?,
-                tumor_alt_allele:  row.get(3)?,
-                n_pon_samples:     row.get(4)?,
+                tumor_sample_id: row.get(0)?,
+                chrom: row.get(1)?,
+                pos: row.get(2)?,
+                tumor_alt_allele: row.get(3)?,
+                n_pon_samples: row.get(4)?,
                 pon_total_samples: row.get(5)?,
-                max_pon_vaf:       row.get(6)?,
-                mean_pon_vaf:      row.get(7)?,
+                max_pon_vaf: row.get(6)?,
+                mean_pon_vaf: row.get(7)?,
             })
         })
         .context("failed to execute PoN annotation query")?;
