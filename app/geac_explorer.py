@@ -1430,6 +1430,158 @@ _active_main_tab = st.radio(
     label_visibility="collapsed",
 )
 
+
+def _append_provenance_row(
+    rows: list[dict[str, str]],
+    section: str,
+    name: str,
+    value,
+    *,
+    active: bool = True,
+) -> None:
+    if not active:
+        return
+    if isinstance(value, bool):
+        value_str = "true" if value else "false"
+    elif isinstance(value, (list, tuple)):
+        value_str = ", ".join(str(v) for v in value)
+    else:
+        value_str = str(value)
+    rows.append({"section": section, "name": name, "value": value_str})
+
+
+def _build_active_filter_provenance(
+    *,
+    discovery_mode: str,
+    discovery_items: list[tuple[str, object]] | None = None,
+) -> pd.DataFrame:
+    rows: list[dict[str, str]] = []
+    _append_provenance_row(rows, "data", "data_file", path)
+    _append_provenance_row(rows, "query", "where_sql", where)
+    _region_active = bool(chrom_sel and chrom_sel.strip() and chrom_sel.strip().lower() != "all")
+    _append_provenance_row(rows, "filters", "region_or_gene", chrom_sel.strip() or "All", active=_region_active)
+    _append_provenance_row(rows, "filters", "samples", sample_sel, active=bool(sample_sel))
+    _append_provenance_row(
+        rows,
+        "filters",
+        "sample_recurrence",
+        f"{_sr_lo}-{_sr_hi}",
+        active=_n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total),
+    )
+    _append_provenance_row(rows, "filters", "batch", batch_sel, active=bool(batch_sel))
+    _append_provenance_row(rows, "filters", "label1", label1_sel, active=bool(label1_sel))
+    _append_provenance_row(rows, "filters", "label2", label2_sel, active=bool(label2_sel))
+    _append_provenance_row(rows, "filters", "label3", label3_sel, active=bool(label3_sel))
+    _append_provenance_row(
+        rows,
+        "filters",
+        "variant_type",
+        variant_sel,
+        active=bool(variant_sel) and set(variant_sel) != {"SNV", "insertion", "deletion"},
+    )
+    _append_provenance_row(rows, "filters", "vaf_range", f"{vaf_range[0]}-{vaf_range[1]}", active=vaf_range != (0.0, 1.0))
+    _append_provenance_row(rows, "filters", "min_alt_count", min_alt, active=min_alt > 1)
+    _append_provenance_row(rows, "filters", "max_alt_count", max_alt, active=max_alt > 0)
+    _append_provenance_row(rows, "filters", "min_fwd_alt_count", min_fwd_alt, active=min_fwd_alt > 0)
+    _append_provenance_row(rows, "filters", "min_rev_alt_count", min_rev_alt, active=min_rev_alt > 0)
+    _append_provenance_row(rows, "filters", "min_overlap_alt_agree", min_overlap_agree, active=min_overlap_agree > 0)
+    _append_provenance_row(rows, "filters", "min_overlap_alt_disagree", min_overlap_disagree, active=min_overlap_disagree > 0)
+    _append_provenance_row(rows, "filters", "min_depth", min_depth, active=min_depth > 0)
+    _append_provenance_row(rows, "filters", "max_depth", max_depth, active=max_depth > 0)
+    _append_provenance_row(rows, "filters", "variant_called", variant_called_sel, active=variant_called_sel != "All")
+    _append_provenance_row(rows, "filters", "variant_filter", variant_filter_sel, active=bool(variant_filter_sel))
+    _append_provenance_row(rows, "filters", "target_bases", on_target_sel, active=on_target_sel != "All")
+    _append_provenance_row(
+        rows,
+        "filters",
+        "gnomad_af_range",
+        f"{gnomad_af_range[0]}-{gnomad_af_range[1]}",
+        active=("gnomad_af" in _schema_cols) and gnomad_af_range != ("0", "1.0"),
+    )
+    _append_provenance_row(
+        rows,
+        "filters",
+        "include_sites_absent_from_gnomad",
+        gnomad_include_null,
+        active=("gnomad_af" in _schema_cols) and (gnomad_af_range != ("0", "1.0") or not gnomad_include_null),
+    )
+    _append_provenance_row(
+        rows,
+        "filters",
+        "homopolymer_length_range",
+        f"{homopolymer_range[0]}-{homopolymer_range[1]}",
+        active=_repeat_cols_present and homopolymer_range != (0, 20),
+    )
+    _append_provenance_row(
+        rows,
+        "filters",
+        "str_length_range",
+        f"{str_len_range[0]}-{str_len_range[1]}",
+        active=_repeat_cols_present and str_len_range != (0, 50),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "application_mode",
+        "recompute alt count from filtered reads" if recompute_vaf else "hide loci with no passing reads",
+        active=_reads_active,
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "family_size",
+        f"{_fs_lo}-{_fs_hi}",
+        active=_has_alt_reads and _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "cycle_number",
+        f"{_cycle_lo}-{_cycle_hi}",
+        active=_has_alt_reads and (_cycle_lo > 1 or _cycle_hi < _cycle_max),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "mapping_quality",
+        f"{_mq_lo}-{_mq_hi}",
+        active=_has_alt_reads and (_mq_lo > 0 or _mq_hi < _mq_max),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "n_in_read",
+        f"{_n_total_lo}-{_n_total_hi}",
+        active=_has_alt_reads and _n_total_has_data and (_n_total_lo > 0 or _n_total_hi < _n_total_max),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "insert_size",
+        f"{_is_lo}-{_is_hi}",
+        active=_has_alt_reads and _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
+        "read",
+        read_strand_sel,
+        active=_has_alt_reads and read_strand_sel != "All",
+    )
+    _append_provenance_row(rows, "signature_discovery", "discovery_mode", discovery_mode)
+    if discovery_items:
+        for _name, _value in discovery_items:
+            _append_provenance_row(
+                rows,
+                "signature_discovery",
+                _name,
+                _value,
+                active=_value not in (None, "", [], ()),
+            )
+
+    return pd.DataFrame(rows, columns=["section", "name", "value"])
+
+
 if _active_main_tab == TAB_SUMMARY.LABEL:
     # ── Summary stats display ──────────────────────────────────────────────────────
     fstats = con.execute(f"""
@@ -1473,156 +1625,6 @@ if _active_main_tab == TAB_SUMMARY.LABEL:
             f"{per_read_warning_note(recompute_vaf)}"
         )
 
-
-    def _append_provenance_row(
-        rows: list[dict[str, str]],
-        section: str,
-        name: str,
-        value,
-        *,
-        active: bool = True,
-    ) -> None:
-        if not active:
-            return
-        if isinstance(value, bool):
-            value_str = "true" if value else "false"
-        elif isinstance(value, (list, tuple)):
-            value_str = ", ".join(str(v) for v in value)
-        else:
-            value_str = str(value)
-        rows.append({"section": section, "name": name, "value": value_str})
-
-
-    def _build_active_filter_provenance(
-        *,
-        discovery_mode: str,
-        discovery_items: list[tuple[str, object]] | None = None,
-    ) -> pd.DataFrame:
-        rows: list[dict[str, str]] = []
-        _append_provenance_row(rows, "data", "data_file", path)
-        _append_provenance_row(rows, "query", "where_sql", where)
-        _region_active = bool(chrom_sel and chrom_sel.strip() and chrom_sel.strip().lower() != "all")
-        _append_provenance_row(rows, "filters", "region_or_gene", chrom_sel.strip() or "All", active=_region_active)
-        _append_provenance_row(rows, "filters", "samples", sample_sel, active=bool(sample_sel))
-        _append_provenance_row(
-            rows,
-            "filters",
-            "sample_recurrence",
-            f"{_sr_lo}-{_sr_hi}",
-            active=_n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total),
-        )
-        _append_provenance_row(rows, "filters", "batch", batch_sel, active=bool(batch_sel))
-        _append_provenance_row(rows, "filters", "label1", label1_sel, active=bool(label1_sel))
-        _append_provenance_row(rows, "filters", "label2", label2_sel, active=bool(label2_sel))
-        _append_provenance_row(rows, "filters", "label3", label3_sel, active=bool(label3_sel))
-        _append_provenance_row(
-            rows,
-            "filters",
-            "variant_type",
-            variant_sel,
-            active=bool(variant_sel) and set(variant_sel) != {"SNV", "insertion", "deletion"},
-        )
-        _append_provenance_row(rows, "filters", "vaf_range", f"{vaf_range[0]}-{vaf_range[1]}", active=vaf_range != (0.0, 1.0))
-        _append_provenance_row(rows, "filters", "min_alt_count", min_alt, active=min_alt > 1)
-        _append_provenance_row(rows, "filters", "max_alt_count", max_alt, active=max_alt > 0)
-        _append_provenance_row(rows, "filters", "min_fwd_alt_count", min_fwd_alt, active=min_fwd_alt > 0)
-        _append_provenance_row(rows, "filters", "min_rev_alt_count", min_rev_alt, active=min_rev_alt > 0)
-        _append_provenance_row(rows, "filters", "min_overlap_alt_agree", min_overlap_agree, active=min_overlap_agree > 0)
-        _append_provenance_row(rows, "filters", "min_overlap_alt_disagree", min_overlap_disagree, active=min_overlap_disagree > 0)
-        _append_provenance_row(rows, "filters", "min_depth", min_depth, active=min_depth > 0)
-        _append_provenance_row(rows, "filters", "max_depth", max_depth, active=max_depth > 0)
-        _append_provenance_row(rows, "filters", "variant_called", variant_called_sel, active=variant_called_sel != "All")
-        _append_provenance_row(rows, "filters", "variant_filter", variant_filter_sel, active=bool(variant_filter_sel))
-        _append_provenance_row(rows, "filters", "target_bases", on_target_sel, active=on_target_sel != "All")
-        _append_provenance_row(
-            rows,
-            "filters",
-            "gnomad_af_range",
-            f"{gnomad_af_range[0]}-{gnomad_af_range[1]}",
-            active=("gnomad_af" in _schema_cols) and gnomad_af_range != ("0", "1.0"),
-        )
-        _append_provenance_row(
-            rows,
-            "filters",
-            "include_sites_absent_from_gnomad",
-            gnomad_include_null,
-            active=("gnomad_af" in _schema_cols) and (gnomad_af_range != ("0", "1.0") or not gnomad_include_null),
-        )
-        _append_provenance_row(
-            rows,
-            "filters",
-            "homopolymer_length_range",
-            f"{homopolymer_range[0]}-{homopolymer_range[1]}",
-            active=_repeat_cols_present and homopolymer_range != (0, 20),
-        )
-        _append_provenance_row(
-            rows,
-            "filters",
-            "str_length_range",
-            f"{str_len_range[0]}-{str_len_range[1]}",
-            active=_repeat_cols_present and str_len_range != (0, 50),
-        )
-        _append_provenance_row(
-            rows,
-            "per_read_filters",
-            "application_mode",
-            "recompute alt count from filtered reads" if recompute_vaf else "hide loci with no passing reads",
-            active=_reads_active,
-        )
-        _append_provenance_row(
-            rows,
-            "per_read_filters",
-            "family_size",
-            f"{_fs_lo}-{_fs_hi}",
-            active=_has_alt_reads and _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max),
-        )
-        _append_provenance_row(
-            rows,
-            "per_read_filters",
-            "cycle_number",
-            f"{_cycle_lo}-{_cycle_hi}",
-            active=_has_alt_reads and (_cycle_lo > 1 or _cycle_hi < _cycle_max),
-        )
-        _append_provenance_row(
-            rows,
-            "per_read_filters",
-            "mapping_quality",
-            f"{_mq_lo}-{_mq_hi}",
-            active=_has_alt_reads and (_mq_lo > 0 or _mq_hi < _mq_max),
-        )
-        _append_provenance_row(
-            rows,
-            "per_read_filters",
-            "n_in_read",
-            f"{_n_total_lo}-{_n_total_hi}",
-            active=_has_alt_reads and _n_total_has_data and (_n_total_lo > 0 or _n_total_hi < _n_total_max),
-        )
-        _append_provenance_row(
-            rows,
-            "per_read_filters",
-            "insert_size",
-            f"{_is_lo}-{_is_hi}",
-            active=_has_alt_reads and _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX),
-        )
-        _append_provenance_row(
-            rows,
-            "per_read_filters",
-            "read",
-            read_strand_sel,
-            active=_has_alt_reads and read_strand_sel != "All",
-        )
-        _append_provenance_row(rows, "signature_discovery", "discovery_mode", discovery_mode)
-        if discovery_items:
-            for _name, _value in discovery_items:
-                _append_provenance_row(
-                    rows,
-                    "signature_discovery",
-                    _name,
-                    _value,
-                    active=_value not in (None, "", [], ()),
-                )
-
-        return pd.DataFrame(rows, columns=["section", "name", "value"])
 
     # ── Data table ────────────────────────────────────────────────────────────────
     _tbl_limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
