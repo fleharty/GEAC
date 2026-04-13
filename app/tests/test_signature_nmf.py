@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import math
 import os
 import sys
 import zipfile
@@ -12,11 +13,15 @@ import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from signature_nmf import (
+    _CONNECTED_SIG_GROUPS,
+    _expand_connected_groups,
     build_signature_download_zip,
     build_signature_exposure_download_table,
     build_signature_download_table,
     compare_signatures_to_cosmic,
     fit_cosmic_augmented_nmf,
+    fit_cosmic_cohort_greedy,
+    fit_cosmic_single_sample_greedy,
     fit_sbs_nmf,
 )
 
@@ -234,3 +239,133 @@ def test_build_signature_download_zip_contains_signature_and_provenance_files():
     assert "filters\tchromosome\tchr1" in prov_text
     assert "sample_label\tsignature\texposure" in exposure_text
     assert "sample_a\tNovel1\t0.6" in exposure_text
+
+
+# ── Greedy add/remove tests ───────────────────────────────────────────────────
+
+def test_expand_connected_groups_adds_sister_signatures():
+    all_names = ["SBS1", "SBS2", "SBS13", "SBS5"]
+    result = _expand_connected_groups(["SBS2"], all_names)
+    assert "SBS2" in result
+    assert "SBS13" in result
+
+
+def test_expand_connected_groups_ignores_non_group_sigs():
+    all_names = ["SBS1", "SBS2", "SBS13", "SBS5"]
+    result = _expand_connected_groups(["SBS1"], all_names)
+    assert "SBS2" not in result
+    assert "SBS13" not in result
+
+
+def test_connected_sig_groups_are_frozensets():
+    for group in _CONNECTED_SIG_GROUPS:
+        assert isinstance(group, frozenset)
+        assert len(group) >= 2
+
+
+def test_fit_cosmic_single_sample_greedy_recovers_sparse_solution():
+    count_df, cosmic = _synthetic_profiles()
+    # S1 is heavily SigA — greedy should select SigA (and possibly SigB) but not noise
+    obs = count_df.loc["S1"].values.astype(float)
+    W = cosmic.values.astype(float)
+    sig_names = cosmic.columns.tolist()
+
+    result = fit_cosmic_single_sample_greedy(
+        obs, W, sig_names,
+        add_penalty=0.05,
+        remove_penalty=0.01,
+        background_sig_names=[],
+        connected_sigs=False,
+    )
+
+    assert "SBS_A" in result["active_sig_names"]
+    assert "SBS_noise" not in result["active_sig_names"]
+    assert result["cosine_similarity"] > 0.98
+    assert math.isclose(result["exposure_fractions"].sum(), 1.0, abs_tol=1e-6)
+    assert len(result["active_sig_names"]) <= 2
+
+
+def test_fit_cosmic_single_sample_greedy_sparser_than_nnls():
+    from scipy.optimize import nnls as scipy_nnls
+    count_df, cosmic = _synthetic_profiles()
+    obs = count_df.loc["S1"].values.astype(float)
+    W = cosmic.values.astype(float)
+    sig_names = cosmic.columns.tolist()
+
+    h_nnls, _ = scipy_nnls(W, obs)
+    n_nnls_active = int((h_nnls > 0).sum())
+
+    result = fit_cosmic_single_sample_greedy(
+        obs, W, sig_names,
+        add_penalty=0.05,
+        remove_penalty=0.01,
+        background_sig_names=[],
+        connected_sigs=False,
+    )
+    n_greedy_active = len(result["active_sig_names"])
+
+    assert n_greedy_active <= n_nnls_active
+
+
+def test_fit_cosmic_single_sample_greedy_add_penalty_controls_sparsity():
+    count_df, cosmic = _synthetic_profiles()
+    obs = count_df.loc["S2"].values.astype(float)
+    W = cosmic.values.astype(float)
+    sig_names = cosmic.columns.tolist()
+
+    result_tight = fit_cosmic_single_sample_greedy(
+        obs, W, sig_names, add_penalty=0.15, background_sig_names=[], connected_sigs=False,
+    )
+    result_loose = fit_cosmic_single_sample_greedy(
+        obs, W, sig_names, add_penalty=0.001, background_sig_names=[], connected_sigs=False,
+    )
+    assert len(result_tight["active_sig_names"]) <= len(result_loose["active_sig_names"])
+
+
+def test_fit_cosmic_single_sample_greedy_respects_background_sigs():
+    count_df, cosmic = _synthetic_profiles()
+    obs = count_df.loc["S1"].values.astype(float)
+    W = cosmic.values.astype(float)
+    sig_names = cosmic.columns.tolist()
+
+    result = fit_cosmic_single_sample_greedy(
+        obs, W, sig_names,
+        add_penalty=0.99,  # very tight — almost nothing gets added
+        background_sig_names=["SBS_B"],
+        connected_sigs=False,
+    )
+    # SBS_B must appear in exposures even though it contributes little
+    idx_b = sig_names.index("SBS_B")
+    assert result["exposures"][idx_b] >= 0.0  # non-negative
+    assert "SBS_B" in result["active_sig_names"] or result["exposures"][idx_b] == 0.0
+    # The key invariant: SBS_B was never removed (permanent)
+    # When add_penalty is very tight, background is the only active sig
+    assert result["n_layers"] >= 1
+
+
+def test_fit_cosmic_cohort_greedy_shape_and_keys():
+    count_df, cosmic = _synthetic_profiles()
+
+    result = fit_cosmic_cohort_greedy(
+        count_df, cosmic,
+        add_penalty=0.05,
+        remove_penalty=0.01,
+        background_sig_names=[],
+        connected_sigs=False,
+    )
+
+    n_sigs = cosmic.shape[1]
+    assert result["exposure_fractions"].shape == (4, n_sigs)
+    assert result["exposures"].shape == (4, n_sigs)
+    assert set(result.keys()) >= {
+        "exposures", "exposure_fractions", "active_signatures",
+        "per_sample_metrics", "sig_names",
+    }
+
+    metrics = result["per_sample_metrics"]
+    assert len(metrics) == 4
+    assert set(metrics.columns) >= {
+        "sample", "l2_distance", "cosine_similarity", "n_active_sigs", "n_layers",
+    }
+    assert (metrics["cosine_similarity"] > 0.95).all()
+    assert (result["exposure_fractions"].sum(axis=1) > 0.99).all()

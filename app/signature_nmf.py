@@ -63,6 +63,335 @@ def _fit_metrics(matrix: np.ndarray, reconstruction: np.ndarray) -> tuple[float,
     return matrix_cosine, relative_error_pct
 
 
+def _normalized_l2(observed: np.ndarray, reconstructed: np.ndarray) -> float:
+    """Normalized L2 distance: ‖obs − recon‖₂ / ‖obs‖₂."""
+    denom = np.linalg.norm(observed)
+    if denom < 1e-12:
+        return 0.0
+    return float(np.linalg.norm(observed - reconstructed) / denom)
+
+
+# Biologically linked signature groups: if any member is selected, all members
+# in the same group should be fitted together (mirrors SigProfilerAssignment).
+_CONNECTED_SIG_GROUPS: list[frozenset[str]] = [
+    frozenset(["SBS2", "SBS13"]),
+    frozenset(["SBS7a", "SBS7b", "SBS7c", "SBS7d"]),
+    frozenset(["SBS10a", "SBS10b"]),
+    frozenset(["SBS17a", "SBS17b"]),
+]
+
+
+def _expand_connected_groups(active_names: list[str], all_names: list[str]) -> list[str]:
+    """Add sister signatures for any active member of a connected group.
+
+    Expansion is applied once per call; callers should re-call each outer layer
+    so newly activated signatures can unlock further group members.
+    """
+    all_set = set(all_names)
+    expanded = set(active_names)
+    for group in _CONNECTED_SIG_GROUPS:
+        if group & expanded:
+            expanded |= group & all_set
+    return [n for n in all_names if n in expanded]
+
+
+def _greedy_add_phase(
+    profiles: np.ndarray,
+    sample: np.ndarray,
+    present_indices: list[int],
+    candidate_indices: list[int],
+    add_penalty: float,
+) -> tuple[list[int], np.ndarray, float]:
+    """Greedy forward selection: add one signature at a time while L2 improves.
+
+    Returns *(new_active_indices, full_exposure_vector, l2_distance)* where the
+    exposure vector has length ``profiles.shape[1]`` with zeros at inactive positions.
+    """
+    n_sigs = profiles.shape[1]
+    present = list(present_indices)
+    candidates = list(candidate_indices)
+
+    if present:
+        h0, _ = nnls(profiles[:, present], sample)
+        baseline_l2 = _normalized_l2(sample, profiles[:, present] @ h0)
+    else:
+        baseline_l2 = _normalized_l2(sample, np.zeros_like(sample))
+
+    improved = True
+    while improved and candidates:
+        improved = False
+        best_l2 = baseline_l2
+        best_idx = -1
+
+        for i in candidates:
+            trial = present + [i]
+            h_trial, _ = nnls(profiles[:, trial], sample)
+            l2_trial = _normalized_l2(sample, profiles[:, trial] @ h_trial)
+            if l2_trial < best_l2:
+                best_l2 = l2_trial
+                best_idx = i
+
+        if best_idx >= 0 and (baseline_l2 - best_l2) > add_penalty:
+            present.append(best_idx)
+            candidates.remove(best_idx)
+            baseline_l2 = best_l2
+            improved = True
+
+    exposures = np.zeros(n_sigs, dtype=float)
+    if present:
+        h_final, _ = nnls(profiles[:, present], sample)
+        for idx, val in zip(present, h_final):
+            exposures[idx] = val
+
+    return present, exposures, _normalized_l2(sample, profiles @ exposures)
+
+
+def _greedy_remove_phase(
+    profiles: np.ndarray,
+    sample: np.ndarray,
+    present_indices: list[int],
+    permanent_indices: list[int],
+    remove_penalty: float,
+) -> tuple[list[int], np.ndarray, float]:
+    """Greedy backward elimination: remove one signature at a time while L2 barely degrades.
+
+    Returns *(surviving_indices, full_exposure_vector, l2_distance)*.
+    """
+    n_sigs = profiles.shape[1]
+    present = list(present_indices)
+    permanent = set(permanent_indices)
+
+    if present:
+        h0, _ = nnls(profiles[:, present], sample)
+        baseline_l2 = _normalized_l2(sample, profiles[:, present] @ h0)
+    else:
+        return [], np.zeros(n_sigs, dtype=float), _normalized_l2(sample, np.zeros_like(sample))
+
+    improved = True
+    while improved:
+        improved = False
+        removable = [i for i in present if i not in permanent]
+        if not removable:
+            break
+
+        best_degradation = float("inf")
+        best_remove_idx = -1
+
+        for i in removable:
+            trial = [j for j in present if j != i]
+            if trial:
+                h_trial, _ = nnls(profiles[:, trial], sample)
+                l2_trial = _normalized_l2(sample, profiles[:, trial] @ h_trial)
+            else:
+                l2_trial = _normalized_l2(sample, np.zeros_like(sample))
+            degradation = l2_trial - baseline_l2
+            if degradation < best_degradation:
+                best_degradation = degradation
+                best_remove_idx = i
+
+        if best_remove_idx >= 0 and best_degradation < remove_penalty:
+            present.remove(best_remove_idx)
+            if present:
+                h_refit, _ = nnls(profiles[:, present], sample)
+                baseline_l2 = _normalized_l2(sample, profiles[:, present] @ h_refit)
+            else:
+                baseline_l2 = _normalized_l2(sample, np.zeros_like(sample))
+            improved = True
+
+    exposures = np.zeros(n_sigs, dtype=float)
+    if present:
+        h_final, _ = nnls(profiles[:, present], sample)
+        for idx, val in zip(present, h_final):
+            exposures[idx] = val
+
+    return present, exposures, _normalized_l2(sample, profiles @ exposures)
+
+
+def fit_cosmic_single_sample_greedy(
+    sample: np.ndarray,
+    cosmic_profiles: np.ndarray,
+    sig_names: list[str],
+    *,
+    add_penalty: float = 0.05,
+    remove_penalty: float = 0.01,
+    background_sig_names: list[str] | None = None,
+    connected_sigs: bool = True,
+) -> dict[str, object]:
+    """Single-sample greedy add/remove COSMIC signature fitting (SPA-style).
+
+    Mirrors the ``add_remove_signatures`` algorithm in SigProfilerAssignment:
+    an outer loop repeatedly proposes each candidate signature, applies a
+    greedy add phase followed by a greedy remove phase, and accepts the result
+    that most reduces normalized L2 distance.  Iteration stops when no candidate
+    improves the current fit.
+
+    Parameters
+    ----------
+    sample:
+        Observed mutation counts, shape ``(n_contexts,)``.
+    cosmic_profiles:
+        Signature profiles matrix, shape ``(n_contexts, n_sigs)``, columns normalized.
+    sig_names:
+        Signature names corresponding to columns of *cosmic_profiles*.
+    add_penalty:
+        Minimum fractional L2 improvement required to accept adding a signature
+        (SPA default 0.05).
+    remove_penalty:
+        Maximum fractional L2 degradation allowed when removing a signature
+        (SPA default 0.01).
+    background_sig_names:
+        Signatures always included and never removed.  ``None`` auto-detects
+        SBS1 and SBS5 when present (universal clock-like signatures).
+    connected_sigs:
+        When ``True``, activating any member of a biologically linked group
+        (e.g. SBS2 / SBS13) forces all group members into the active set.
+    """
+    n_sigs = cosmic_profiles.shape[1]
+
+    # Permanent (background) signatures — always included, never removed
+    if background_sig_names is not None:
+        perm_names = [n for n in background_sig_names if n in sig_names]
+    else:
+        perm_names = [n for n in ("SBS1", "SBS5") if n in sig_names]
+    perm_indices = [sig_names.index(n) for n in perm_names]
+    active_indices = list(perm_indices)
+
+    original_distance = float("inf")
+    final_activities: np.ndarray | None = None
+    n_layers = 0
+
+    while True:
+        n_layers += 1
+
+        if connected_sigs and active_indices:
+            expanded = _expand_connected_groups(
+                [sig_names[i] for i in active_indices], sig_names
+            )
+            active_indices = [sig_names.index(n) for n in expanded]
+
+        candidate_indices = [i for i in range(n_sigs) if i not in active_indices]
+
+        layer_best_distance = float("inf")
+        layer_best_activities: np.ndarray | None = None
+
+        for i in candidate_indices:
+            add_idx, add_exp, add_dist = _greedy_add_phase(
+                cosmic_profiles, sample, list(active_indices), [i], add_penalty
+            )
+            rem_idx, rem_exp, rem_dist = _greedy_remove_phase(
+                cosmic_profiles, sample, add_idx, perm_indices, remove_penalty
+            )
+
+            # When the two phases produce the same active set prefer the add result;
+            # otherwise the remove phase wins (sparser solution same quality).
+            if set(np.nonzero(add_exp)[0]) == set(np.nonzero(rem_exp)[0]):
+                dist, exp = add_dist, add_exp
+            else:
+                dist, exp = rem_dist, rem_exp
+
+            if dist < layer_best_distance:
+                layer_best_distance = dist
+                layer_best_activities = exp
+
+        if layer_best_activities is None or layer_best_distance >= original_distance:
+            break
+
+        original_distance = layer_best_distance
+        active_indices = list(np.nonzero(layer_best_activities)[0])
+        final_activities = layer_best_activities
+
+    # Fallback: if outer loop never improved, use background-only fit
+    if final_activities is None:
+        final_activities = np.zeros(n_sigs, dtype=float)
+        if perm_indices:
+            h, _ = nnls(cosmic_profiles[:, perm_indices], sample)
+            for idx, val in zip(perm_indices, h):
+                final_activities[idx] = val
+
+    total = final_activities.sum()
+    exposure_fractions = final_activities / total if total > 0 else final_activities.copy()
+
+    recon = cosmic_profiles @ final_activities
+    cos_sim = float(
+        np.dot(sample, recon) / (np.linalg.norm(sample) * np.linalg.norm(recon) + 1e-12)
+    )
+
+    return {
+        "active_sig_names": [sig_names[i] for i in np.nonzero(final_activities)[0]],
+        "exposures": final_activities,
+        "exposure_fractions": exposure_fractions,
+        "l2_distance": _normalized_l2(sample, recon),
+        "cosine_similarity": cos_sim,
+        "n_layers": n_layers,
+    }
+
+
+def fit_cosmic_cohort_greedy(
+    sample_counts: pd.DataFrame,
+    cosmic_matrix: pd.DataFrame,
+    *,
+    add_penalty: float = 0.05,
+    remove_penalty: float = 0.01,
+    background_sig_names: list[str] | None = None,
+    connected_sigs: bool = True,
+) -> dict[str, object]:
+    """Apply greedy add/remove COSMIC fitting independently to each sample.
+
+    ``sample_counts`` is samples-by-contexts; ``cosmic_matrix`` is contexts-by-signatures.
+    Returns per-sample exposure fractions, raw exposures, per-sample metrics, and
+    a map of which signatures were selected for each sample.
+    """
+    cosmic_aligned = cosmic_matrix.reindex(sample_counts.columns)
+    W = cosmic_aligned.values.astype(float)
+    sig_names = cosmic_aligned.columns.tolist()
+    n_sigs = W.shape[1]
+
+    exposure_rows: list[np.ndarray] = []
+    metric_rows: list[dict] = []
+    active_sigs_map: dict[str, list[str]] = {}
+
+    for sid, row in sample_counts.iterrows():
+        obs = row.values.astype(float)
+        if obs.sum() == 0:
+            exposure_rows.append(np.zeros(n_sigs))
+            metric_rows.append({
+                "sample": sid, "l2_distance": 0.0,
+                "cosine_similarity": 0.0, "n_active_sigs": 0, "n_layers": 0,
+            })
+            active_sigs_map[str(sid)] = []
+            continue
+
+        result = fit_cosmic_single_sample_greedy(
+            obs, W, sig_names,
+            add_penalty=add_penalty,
+            remove_penalty=remove_penalty,
+            background_sig_names=background_sig_names,
+            connected_sigs=connected_sigs,
+        )
+        exposure_rows.append(result["exposure_fractions"])
+        metric_rows.append({
+            "sample": sid,
+            "l2_distance": result["l2_distance"],
+            "cosine_similarity": result["cosine_similarity"],
+            "n_active_sigs": len(result["active_sig_names"]),
+            "n_layers": result["n_layers"],
+        })
+        active_sigs_map[str(sid)] = result["active_sig_names"]
+
+    exposure_frac_df = pd.DataFrame(
+        exposure_rows, index=sample_counts.index, columns=sig_names
+    )
+    exposure_df = exposure_frac_df.multiply(sample_counts.sum(axis=1), axis=0)
+
+    return {
+        "exposures": exposure_df,
+        "exposure_fractions": exposure_frac_df,
+        "active_signatures": active_sigs_map,
+        "per_sample_metrics": pd.DataFrame(metric_rows),
+        "sig_names": sig_names,
+    }
+
+
 def fit_sbs_nmf(
     sample_counts: pd.DataFrame,
     n_components: int,

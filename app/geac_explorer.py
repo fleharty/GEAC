@@ -26,6 +26,8 @@ from signature_nmf import (
     build_signature_download_table,
     compare_signatures_to_cosmic,
     fit_cosmic_augmented_nmf,
+    fit_cosmic_cohort_greedy,
+    fit_cosmic_single_sample_greedy,
     fit_sbs_nmf,
 )
 from pipeline_compare_helpers import (
@@ -2543,33 +2545,104 @@ if _active_main_tab == TAB_ERROR_SPECTRUM.LABEL:
                             .reindex(_SBS_ORDER).fillna(0).values.astype(float)
                         )
 
-                        h, _ = nnls(W, obs)
-                        total = h.sum()
-                        h_norm = h / total if total > 0 else h
-
-                        sig_df = pd.DataFrame({
-                            "signature": cosmic_aligned.columns.tolist(),
-                            "exposure":  h_norm,
-                        })
-                        sig_df["etiology"] = sig_df["signature"].map(
-                            lambda s: _SBS_ETIOLOGY.get(s, "")
+                        _fit_method = _cos_col.radio(
+                            "Fitting method",
+                            ["NNLS (top-N)", "Greedy add/remove (SPA-style)"],
+                            horizontal=False,
+                            key="cosmic_fit_method",
+                            help=(
+                                "**NNLS**: fit all signatures at once, then restrict to the top-N "
+                                "by exposure. Simple and fast.\n\n"
+                                "**Greedy add/remove**: iteratively add signatures that reduce "
+                                "normalized L2 by more than *add penalty*, then remove signatures "
+                                "whose removal degrades L2 by less than *remove penalty*. "
+                                "Mirrors SigProfilerAssignment and produces sparser, more "
+                                "interpretable results."
+                            ),
                         )
-                        sig_df = sig_df[sig_df["exposure"] > 0].sort_values(
-                            "exposure", ascending=False
-                        ).reset_index(drop=True)
 
-                        top_n_sig = _cos_col.slider(
-                            "Top signatures", 3, min(20, len(sig_df)), 4,
-                            key="top_n_sig",
-                            help="Number of top signatures used for the reconstruction overlay and exposure chart.",
-                        )
-                        top_df = sig_df.head(top_n_sig)
+                        if _fit_method == "NNLS (top-N)":
+                            h, _ = nnls(W, obs)
+                            total = h.sum()
+                            h_norm = h / total if total > 0 else h
 
-                        # Refit to top-N
-                        _top_sig_names = top_df["signature"].tolist()
-                        W_refit        = cosmic_aligned[_top_sig_names].values.astype(float)
-                        h_refit, _     = nnls(W_refit, obs)
-                        reconstructed  = W_refit @ h_refit
+                            sig_df = pd.DataFrame({
+                                "signature": cosmic_aligned.columns.tolist(),
+                                "exposure":  h_norm,
+                            })
+                            sig_df["etiology"] = sig_df["signature"].map(
+                                lambda s: _SBS_ETIOLOGY.get(s, "")
+                            )
+                            sig_df = sig_df[sig_df["exposure"] > 0].sort_values(
+                                "exposure", ascending=False
+                            ).reset_index(drop=True)
+
+                            top_n_sig = _cos_col.slider(
+                                "Top signatures", 3, min(20, len(sig_df)), 4,
+                                key="top_n_sig",
+                                help="Number of top signatures used for the reconstruction overlay and exposure chart.",
+                            )
+                            top_df = sig_df.head(top_n_sig)
+
+                            _top_sig_names = top_df["signature"].tolist()
+                            W_refit    = cosmic_aligned[_top_sig_names].values.astype(float)
+                            h_refit, _ = nnls(W_refit, obs)
+                            reconstructed = W_refit @ h_refit
+                        else:
+                            # Greedy add/remove (SPA-style)
+                            _add_penalty = _cos_col.slider(
+                                "Add penalty",
+                                min_value=0.001, max_value=0.20, value=0.05, step=0.005,
+                                key="cosmic_add_penalty",
+                                format="%.3f",
+                                help="Minimum fractional L2 improvement required to add a signature. "
+                                     "Higher = sparser. SPA default: 0.05.",
+                            )
+                            _remove_penalty = _cos_col.slider(
+                                "Remove penalty",
+                                min_value=0.001, max_value=0.10, value=0.01, step=0.002,
+                                key="cosmic_remove_penalty",
+                                format="%.3f",
+                                help="Maximum fractional L2 degradation allowed when removing a signature. "
+                                     "Higher = more aggressive pruning. SPA default: 0.01.",
+                            )
+                            _use_connected = _cos_col.checkbox(
+                                "Expand connected groups (SBS2/13, SBS7a–d, SBS10a/b, SBS17a/b)",
+                                value=True,
+                                key="cosmic_connected_sigs",
+                                help="If any member of a biologically linked group is selected, "
+                                     "all group members are fitted together.",
+                            )
+
+                            _greedy_result = fit_cosmic_single_sample_greedy(
+                                obs, W, cosmic_aligned.columns.tolist(),
+                                add_penalty=_add_penalty,
+                                remove_penalty=_remove_penalty,
+                                connected_sigs=_use_connected,
+                            )
+                            h_norm = _greedy_result["exposure_fractions"]
+                            sig_df = pd.DataFrame({
+                                "signature": cosmic_aligned.columns.tolist(),
+                                "exposure":  h_norm,
+                            })
+                            sig_df["etiology"] = sig_df["signature"].map(
+                                lambda s: _SBS_ETIOLOGY.get(s, "")
+                            )
+                            sig_df = sig_df[sig_df["exposure"] > 0].sort_values(
+                                "exposure", ascending=False
+                            ).reset_index(drop=True)
+                            top_df = sig_df
+                            top_n_sig = len(top_df)
+
+                            _top_sig_names = top_df["signature"].tolist()
+                            if _top_sig_names:
+                                W_refit    = cosmic_aligned[_top_sig_names].values.astype(float)
+                                h_refit    = _greedy_result["exposures"][
+                                    [cosmic_aligned.columns.tolist().index(n) for n in _top_sig_names]
+                                ]
+                                reconstructed = W_refit @ h_refit
+                            else:
+                                reconstructed = np.zeros_like(obs)
 
                         cos_sim = (
                             float(np.dot(obs, reconstructed))
@@ -2717,7 +2790,14 @@ if _active_main_tab == TAB_ERROR_SPECTRUM.LABEL:
                             alt.Tooltip("etiology:N", title="Etiology"),
                         ],
                     )
-                    .properties(title=f"Top {top_n_sig} COSMIC SBS Signatures (NNLS fit)", height=300)
+                    .properties(
+                        title=(
+                            f"Top {top_n_sig} COSMIC SBS Signatures (NNLS fit)"
+                            if _fit_method == "NNLS (top-N)" else
+                            f"COSMIC SBS Signatures — Greedy add/remove ({top_n_sig} active)"
+                        ),
+                        height=300,
+                    )
                 )
                 st.altair_chart(sig_chart, width="stretch")
 
@@ -2729,8 +2809,11 @@ if _active_main_tab == TAB_ERROR_SPECTRUM.LABEL:
                 if data_source.is_duckdb:
                     st.divider()
                     st.subheader("Per-sample Signature Exposures")
+                    _ps_method_label = (
+                        "NNLS" if _fit_method == "NNLS (top-N)" else "greedy add/remove (SPA-style)"
+                    )
                     st.caption(
-                        "Each sample fitted independently against the full COSMIC matrix (NNLS). "
+                        f"Each sample fitted independently against the full COSMIC matrix ({_ps_method_label}). "
                         "Signatures with no exposure in any sample are hidden."
                     )
 
@@ -2739,26 +2822,48 @@ if _active_main_tab == TAB_ERROR_SPECTRUM.LABEL:
                         st.info("No SNVs with trinucleotide context in current selection.")
                     else:
                         _ps_rows = []
-                        for _sid, _row in _sample_matrix.iterrows():
-                            _obs = _row.reindex(_SBS_ORDER).values.astype(float)
-                            _n_snvs = int(_row.sum())
-                            if _n_snvs == 0:
-                                continue
-                            _h, _ = nnls(_cosmic_W, _obs)
-                            _total = _h.sum()
-                            _h_norm = _h / _total if _total > 0 else _h
-                            for _sig, _exp in zip(_cosmic_aligned.columns, _h_norm):
-                                if _exp > 0:
-                                    _ps_rows.append({
-                                        "sample_label": _sid,
-                                        "signature": _sig,
-                                        "exposure":  float(_exp),
-                                        "n_snvs":    _n_snvs,
-                                        "etiology":  _SBS_ETIOLOGY.get(_sig, ""),
-                                    })
+                        if _fit_method == "Greedy add/remove (SPA-style)":
+                            _cohort_result = fit_cosmic_cohort_greedy(
+                                _sample_matrix,
+                                _cosmic_aligned,
+                                add_penalty=_add_penalty,
+                                remove_penalty=_remove_penalty,
+                                connected_sigs=_use_connected,
+                            )
+                            for _sid, _frac_row in _cohort_result["exposure_fractions"].iterrows():
+                                _n_snvs = int(_sample_matrix.loc[_sid].sum())
+                                if _n_snvs == 0:
+                                    continue
+                                for _sig, _exp in _frac_row.items():
+                                    if _exp > 0:
+                                        _ps_rows.append({
+                                            "sample_label": _sid,
+                                            "signature": _sig,
+                                            "exposure":  float(_exp),
+                                            "n_snvs":    _n_snvs,
+                                            "etiology":  _SBS_ETIOLOGY.get(_sig, ""),
+                                        })
+                        else:
+                            for _sid, _row in _sample_matrix.iterrows():
+                                _obs = _row.reindex(_SBS_ORDER).values.astype(float)
+                                _n_snvs = int(_row.sum())
+                                if _n_snvs == 0:
+                                    continue
+                                _h, _ = nnls(_cosmic_W, _obs)
+                                _total = _h.sum()
+                                _h_norm = _h / _total if _total > 0 else _h
+                                for _sig, _exp in zip(_cosmic_aligned.columns, _h_norm):
+                                    if _exp > 0:
+                                        _ps_rows.append({
+                                            "sample_label": _sid,
+                                            "signature": _sig,
+                                            "exposure":  float(_exp),
+                                            "n_snvs":    _n_snvs,
+                                            "etiology":  _SBS_ETIOLOGY.get(_sig, ""),
+                                        })
 
                         if not _ps_rows:
-                            st.info("NNLS returned no exposures for any sample.")
+                            st.info("No exposures returned for any sample.")
                         else:
                             _ps_df = pd.DataFrame(_ps_rows)
 
@@ -2799,7 +2904,11 @@ if _active_main_tab == TAB_ERROR_SPECTRUM.LABEL:
                                     ],
                                 )
                                 .properties(
-                                    title="Per-sample COSMIC SBS signature exposures (NNLS)",
+                                    title=(
+                                        "Per-sample COSMIC SBS signature exposures (NNLS)"
+                                        if _fit_method == "NNLS (top-N)" else
+                                        "Per-sample COSMIC SBS signature exposures (greedy add/remove)"
+                                    ),
                                     height=max(150, 22 * len(_ps_order)),
                                 )
                             )
@@ -2809,6 +2918,17 @@ if _active_main_tab == TAB_ERROR_SPECTRUM.LABEL:
                                 "Color intensity = exposure proportion. "
                                 "Signatures with no exposure in any sample are hidden."
                             )
+                            if _fit_method == "Greedy add/remove (SPA-style)":
+                                _metrics_df = _cohort_result["per_sample_metrics"]
+                                st.caption("**Per-sample fit quality**")
+                                st.dataframe(
+                                    _metrics_df.style.format({
+                                        "l2_distance": "{:.3f}",
+                                        "cosine_similarity": "{:.4f}",
+                                    }),
+                                    width="stretch",
+                                    hide_index=True,
+                                )
 
             # ── NMF signature discovery (cohort / DuckDB only) ────────────────
             if data_source.is_duckdb:

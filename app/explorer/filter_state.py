@@ -135,6 +135,10 @@ MAIN_TAB_UI_KEYS = (
     "fs_x_range",
     "sbs_y_mode",
     "top_n_sig",
+    "cosmic_fit_method",
+    "cosmic_add_penalty",
+    "cosmic_remove_penalty",
+    "cosmic_connected_sigs",
     "cmp_top_n",
 )
 
@@ -183,6 +187,10 @@ MAIN_FILTER_STATE = FilterState(
         "nctx_enabled": False,
         "nasym_enabled": False,
         "nrich_enabled": False,
+        "cosmic_fit_method": "NNLS (top-N)",
+        "cosmic_add_penalty": 0.05,
+        "cosmic_remove_penalty": 0.01,
+        "cosmic_connected_sigs": True,
     },
 )
 
