@@ -183,6 +183,7 @@ _has_normal_evidence = data_source.has_optional_table("normal_evidence")
 _has_pon_evidence = data_source.has_optional_table("pon_evidence")
 _has_ref_bases = data_source.has_optional_table("ref_bases")
 _has_ref_reads = data_source.has_optional_table("ref_reads")
+_has_sample_metrics = data_source.has_optional_table("sample_metrics")
 # Detect on_target columns per table — each table is checked independently
 # because ref_reads may not carry on_target even when ref_bases does.
 if _has_ref_bases:
@@ -1743,11 +1744,11 @@ if _active_main_tab == TAB_VAF_DISTRIBUTION.LABEL:
     # ── Carrier vs. non-carrier depth (bait-bias test) ─────────────────────────
     st.divider()
     st.subheader("Carrier vs. non-carrier depth (bait bias)")
-    if not _has_ref_bases:
+    if not (_has_ref_bases and _has_sample_metrics):
         st.info(
-            "This section requires reference-site data generated with "
-            "`geac collect --emit-ref-sites`. Run the cohort pipeline with "
-            "`emit_ref_sites = true` to produce the `ref_bases` and `ref_reads` tables, "
+            "This section requires reference-site data (`ref_bases`) and sample-level "
+            "depth metrics (`sample_metrics`). Run the cohort pipeline with "
+            "`emit_ref_sites = true` and `--targets` to produce these tables, "
             "then re-open the resulting database."
         )
     else:
@@ -1759,512 +1760,359 @@ if _active_main_tab == TAB_VAF_DISTRIBUTION.LABEL:
             " *(No `on_target` column detected in `ref_bases` — all positions included.)*"
         )
         st.caption(
-            "Compares sequencing depth at hom-alt positions (VAF > 90%) between "
-            "**carrier samples** (which carry the alt allele, from `alt_bases`) and "
-            "**non-carrier samples** (which have only reference reads at the same position, "
-            "from `ref_bases`). A depth deficit in carriers relative to non-carriers — "
-            "especially for indels — is direct evidence that hybrid-capture baits are less "
-            "efficient for indel-containing sequences." + _on_tgt_note
+            "Estimates depth bias at hom-alt positions (VAF > 90%) by comparing each "
+            "carrier sample's observed depth to the depth expected from "
+            "(1) the sample's median target depth (`sample_metrics.median_target_depth_all`) and "
+            "(2) the locus's typical relative depth across non-carrier samples in `ref_bases`. "
+            "A depth-retained value well below 1.0 — especially for indels — indicates "
+            "hybrid-capture baits are less efficient at capturing indel-containing sequences." + _on_tgt_note
         )
-        with _timed("carrier_noncarrier_depth"):
-            # ── Pre-aggregate: ECDF from per-group sample ─────────────────────
-            _bias_ecdf_df = con.execute(f"""
-                WITH carriers AS (
-                    SELECT total_depth, variant_type, 'Carrier' AS carrier_group
-                    FROM {table_expr}
-                    WHERE {where} AND total_depth > 0
-                      AND alt_count * 1.0 / total_depth > 0.9
-                      {_ab_on_tgt}
-                ),
-                noncarriers AS (
-                    SELECT rb.total_depth, pt.variant_type, 'Non-carrier' AS carrier_group
-                    FROM ref_bases rb
-                    INNER JOIN (
-                        SELECT DISTINCT chrom, pos, variant_type
-                        FROM {table_expr}
-                        WHERE {where} AND alt_count * 1.0 / total_depth > 0.9
-                    ) pt ON rb.chrom = pt.chrom AND rb.pos = pt.pos
-                    WHERE rb.total_depth > 0
-                      {_rb_on_tgt}
-                ),
-                combined AS (
-                    SELECT * FROM carriers
-                    UNION ALL
-                    SELECT * FROM noncarriers
-                ),
-                sampled AS (
-                    SELECT total_depth, variant_type, carrier_group,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY variant_type, carrier_group
-                               ORDER BY random()
-                           ) AS rn
-                    FROM combined
-                ),
-                ranked AS (
-                    SELECT total_depth, variant_type, carrier_group,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY variant_type, carrier_group
-                               ORDER BY total_depth
-                           ) AS rnk,
-                           COUNT(*) OVER (
-                               PARTITION BY variant_type, carrier_group
-                           ) AS grp_n
-                    FROM sampled
-                    WHERE rn <= 5000
-                )
-                SELECT variant_type, carrier_group, total_depth,
-                       rnk * 1.0 / grp_n AS ecdf
-                FROM ranked
-                ORDER BY variant_type, carrier_group, total_depth
-            """).df()
 
-            # ── Pre-aggregate: box stats ───────────────────────────────────────
-            _bias_box_df = con.execute(f"""
-                WITH carriers AS (
-                    SELECT total_depth, variant_type, 'Carrier' AS carrier_group
-                    FROM {table_expr}
-                    WHERE {where} AND total_depth > 0
-                      AND alt_count * 1.0 / total_depth > 0.9
-                      {_ab_on_tgt}
-                ),
-                noncarriers AS (
-                    SELECT rb.total_depth, pt.variant_type, 'Non-carrier' AS carrier_group
+        # Normalized depth: carrier depth / median non-carrier depth at same position
+        st.caption(
+            "**Normalized depth** — carrier total depth divided by the median "
+            "non-carrier depth at the same position. A value of 1.0 means the "
+            "carrier's depth matches non-carriers; values below 1.0 suggest "
+            "reduced coverage at that position in carriers, consistent with bait bias."
+        )
+        with _timed("normalized_depth_by_variant"):
+            _norm_depth_df = con.execute(f"""
+                WITH noncarrier_median AS (
+                    SELECT rb.chrom, rb.pos,
+                           MEDIAN(rb.total_depth) AS median_nc_depth
                     FROM ref_bases rb
                     INNER JOIN (
-                        SELECT DISTINCT chrom, pos, variant_type
+                        SELECT DISTINCT chrom, pos
                         FROM {table_expr}
-                        WHERE {where} AND alt_count * 1.0 / total_depth > 0.9
-                    ) pt ON rb.chrom = pt.chrom AND rb.pos = pt.pos
+                        WHERE {where}
+                          AND alt_count * 1.0 / total_depth > 0.9
+                    ) hom ON rb.chrom = hom.chrom AND rb.pos = hom.pos
                     WHERE rb.total_depth > 0
                       {_rb_on_tgt}
+                    GROUP BY rb.chrom, rb.pos
+                    HAVING MEDIAN(rb.total_depth) > 0
                 ),
-                combined AS (
-                    SELECT * FROM carriers
-                    UNION ALL
-                    SELECT * FROM noncarriers
+                carrier_norm AS (
+                    SELECT
+                        ab.variant_type,
+                        ab.total_depth * 1.0 / nc.median_nc_depth AS normalized_depth
+                    FROM (
+                        SELECT chrom, pos, variant_type, total_depth, alt_count
+                        FROM {table_expr}
+                        WHERE {where}
+                          AND alt_count * 1.0 / total_depth > 0.9
+                          AND total_depth > 0
+                          {_ab_on_tgt}
+                    ) ab
+                    INNER JOIN noncarrier_median nc
+                           ON ab.chrom = nc.chrom AND ab.pos = nc.pos
                 )
                 SELECT
                     variant_type,
-                    carrier_group,
-                    MIN(total_depth)                                            AS min_d,
-                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_depth)  AS q1,
-                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY total_depth)  AS median_d,
-                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_depth)  AS q3,
-                    MAX(total_depth)                                            AS max_d,
-                    COUNT(*)                                                    AS n
-                FROM combined
-                GROUP BY variant_type, carrier_group
+                    MIN(normalized_depth)                                            AS min_nd,
+                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY normalized_depth)  AS q1,
+                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY normalized_depth)  AS median_nd,
+                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY normalized_depth)  AS q3,
+                    MAX(normalized_depth)                                            AS max_nd,
+                    COUNT(*)                                                         AS n
+                FROM carrier_norm
+                GROUP BY variant_type
             """).df()
 
-        if _bias_ecdf_df.empty:
+        if _norm_depth_df.empty:
             st.info("No hom-alt records under current filters.")
         else:
-            _bias_color_scale = alt.Scale(
-                domain=["Carrier", "Non-carrier"],
-                range=["#4c78a8", "#e45756"],
-            )
-            _bias_dash_scale = alt.Scale(
-                domain=["Carrier", "Non-carrier"],
-                range=[[1, 0], [4, 2]],
+            # IQR-fenced whiskers (same convention as mark_boxplot "tukey")
+            _norm_depth_df["iqr"]   = _norm_depth_df["q3"] - _norm_depth_df["q1"]
+            _norm_depth_df["lower"] = (_norm_depth_df["q1"] - 1.5 * _norm_depth_df["iqr"]).clip(lower=_norm_depth_df["min_nd"])
+            _norm_depth_df["upper"] = (_norm_depth_df["q3"] + 1.5 * _norm_depth_df["iqr"]).clip(upper=_norm_depth_df["max_nd"])
+            _norm_depth_df["label"] = _norm_depth_df.apply(
+                lambda r: f"n={int(r['n']):,}  med={r['median_nd']:.3f}  IQR=[{r['q1']:.3f}, {r['q3']:.3f}]",
+                axis=1,
             )
 
-            _bias_ecdf_chart = (
-                alt.Chart(_bias_ecdf_df)
-                .mark_line(strokeWidth=2)
-                .encode(
-                    x=alt.X("total_depth:Q", title="Total depth"),
-                    y=alt.Y("ecdf:Q", title="Cumulative fraction",
-                            scale=alt.Scale(domain=[0, 1])),
-                    color=alt.Color("carrier_group:N", title="Group",
-                                    scale=_bias_color_scale),
-                    strokeDash=alt.StrokeDash("carrier_group:N", title="Group",
-                                              scale=_bias_dash_scale),
-                    row=alt.Row("variant_type:N", title="Variant type"),
-                    tooltip=[
-                        "carrier_group", "variant_type",
-                        alt.Tooltip("total_depth:Q", title="Depth"),
-                        alt.Tooltip("ecdf:Q", title="Cumulative fraction", format=".3f"),
-                    ],
-                )
-                .properties(height=220, title="Carrier vs. non-carrier depth ECDF at hom-alt sites")
-                .interactive()
-            )
-            st.altair_chart(_bias_ecdf_chart, use_container_width=True)
-
-            # Box plot from pre-aggregated stats
-            _bias_box_df["iqr"]   = _bias_box_df["q3"] - _bias_box_df["q1"]
-            _bias_box_df["lower"] = (_bias_box_df["q1"] - 1.5 * _bias_box_df["iqr"]).clip(lower=_bias_box_df["min_d"])
-            _bias_box_df["upper"] = (_bias_box_df["q3"] + 1.5 * _bias_box_df["iqr"]).clip(upper=_bias_box_df["max_d"])
-
-            _bb_base    = alt.Chart(_bias_box_df)
-            _bb_whisker = _bb_base.mark_rule().encode(
-                x=alt.X("carrier_group:N", title="Group", axis=alt.Axis(labelAngle=0)),
-                y=alt.Y("lower:Q", title="Total depth", scale=alt.Scale(zero=False)),
+            _nd_base   = alt.Chart(_norm_depth_df)
+            _nd_whisker = _nd_base.mark_rule().encode(
+                x=alt.X("variant_type:N", title="Variant type", axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("lower:Q", title="Normalized depth", scale=alt.Scale(zero=False)),
                 y2=alt.Y2("upper:Q"),
-                color=alt.Color("carrier_group:N", scale=_bias_color_scale, legend=None),
+                color=alt.Color("variant_type:N", legend=None),
             )
-            _bb_box = _bb_base.mark_bar(size=30).encode(
-                x=alt.X("carrier_group:N"),
+            _nd_box = _nd_base.mark_bar(size=40).encode(
+                x=alt.X("variant_type:N"),
                 y=alt.Y("q1:Q"),
                 y2=alt.Y2("q3:Q"),
-                color=alt.Color("carrier_group:N", scale=_bias_color_scale, legend=None),
+                color=alt.Color("variant_type:N", legend=None),
                 tooltip=[
-                    "variant_type", "carrier_group",
-                    alt.Tooltip("n:Q",        title="N",      format=","),
-                    alt.Tooltip("median_d:Q", title="Median", format=".1f"),
-                    alt.Tooltip("q1:Q",       title="Q1",     format=".1f"),
-                    alt.Tooltip("q3:Q",       title="Q3",     format=".1f"),
+                    "variant_type",
+                    alt.Tooltip("n:Q",         title="N",      format=","),
+                    alt.Tooltip("median_nd:Q", title="Median", format=".3f"),
+                    alt.Tooltip("q1:Q",        title="Q1",     format=".3f"),
+                    alt.Tooltip("q3:Q",        title="Q3",     format=".3f"),
+                    alt.Tooltip("lower:Q",     title="Whisker low",  format=".3f"),
+                    alt.Tooltip("upper:Q",     title="Whisker high", format=".3f"),
                 ],
             )
-            _bb_median = _bb_base.mark_tick(color="white", size=30, thickness=2).encode(
-                x=alt.X("carrier_group:N"),
-                y=alt.Y("median_d:Q"),
+            _nd_median = _nd_base.mark_tick(color="white", size=40, thickness=2).encode(
+                x=alt.X("variant_type:N"),
+                y=alt.Y("median_nd:Q"),
+            )
+            _norm_ref_line = (
+                alt.Chart(pd.DataFrame({"y": [1.0]}))
+                .mark_rule(color="gray", strokeDash=[4, 4])
+                .encode(y="y:Q")
             )
             st.altair_chart(
-                alt.layer(_bb_whisker, _bb_box, _bb_median)
-                .facet(column=alt.Column("variant_type:N", title="Variant type"))
-                .properties(title="Depth distribution: carrier vs. non-carrier"),
+                (_nd_whisker + _nd_box + _nd_median + _norm_ref_line)
+                .properties(
+                    height=300,
+                    title="Normalized depth by variant type (carrier / median non-carrier)",
+                )
+                .interactive(),
+                use_container_width=True,
             )
 
-            # Normalized depth: carrier depth / median non-carrier depth at same position
+        st.caption(
+            "**Site-specific bait-bias estimate** — for each carrier locus, GEAC estimates "
+            "the depth the site would likely have had if it were hom-ref by combining "
+            "(1) that carrier sample's median target depth (`sample_metrics.median_target_depth_all`) and "
+            "(2) the locus's typical relative depth across non-carrier samples from `ref_bases`. "
+            "The main score is **percent expected depth retained** "
+            "(observed depth / expected depth). Values near 1.0 suggest little depth loss; "
+            "lower values indicate stronger bait-bias-like depletion. "
+            "Use the non-carrier count as a confidence cue."
+        )
+
+        _bb_cache_key = ("bait_bias_candidates", where, _ab_on_tgt, _rb_on_tgt)
+        if st.session_state.get("_bb_cache_key") != _bb_cache_key:
+            st.session_state["_bb_cache_key"] = _bb_cache_key
+            st.session_state["_bb_detail_cache_key"] = None
+            with _timed("bait_bias_candidates [cache miss]"):
+                st.session_state["_bb_candidates_cache"] = compute_bait_bias_candidates(
+                    con,
+                    table_expr,
+                    where,
+                    ab_on_tgt=_ab_on_tgt,
+                    rb_on_tgt=_rb_on_tgt,
+                    gene_expr="gene" if _genes_available else "NULL",
+                )
+        else:
+            _TIMINGS.append(("bait_bias_candidates [cache hit]", 0.0))
+
+        _bb_candidates = st.session_state["_bb_candidates_cache"]
+        if _bb_candidates.empty:
+            st.info("No loci with enough data to estimate site-specific bait bias under current filters.")
+        else:
+            _bb_metric_cols = st.columns(4)
+            _bb_metric_cols[0].metric("Candidate loci", f"{len(_bb_candidates):,}")
+            _bb_metric_cols[1].metric(
+                "Median retained depth",
+                (
+                    f"{_bb_candidates['median_depth_retained'].median():.1%}"
+                    if _bb_candidates["median_depth_retained"].notna().any()
+                    else "NA"
+                ),
+            )
+            _bb_metric_cols[2].metric(
+                "Median observed depth",
+                (
+                    f"{_bb_candidates['median_observed_depth'].median():.1f}"
+                    if _bb_candidates["median_observed_depth"].notna().any()
+                    else "NA"
+                ),
+            )
+            _bb_metric_cols[3].metric(
+                "Median expected depth",
+                (
+                    f"{_bb_candidates['median_expected_depth'].median():.1f}"
+                    if _bb_candidates["median_expected_depth"].notna().any()
+                    else "NA"
+                ),
+            )
+
+            _bb_display = (
+                _bb_candidates.assign(pos_display=_bb_candidates["pos"] + 1)
+                .loc[:, [
+                    "chrom", "pos_display", "alt_allele", "variant_type", "gene",
+                    "n_carrier_samples", "n_noncarrier_samples",
+                    "median_observed_depth", "median_expected_depth",
+                    "median_depth_retained",
+                ]]
+            )
             st.caption(
-                "**Normalized depth** — carrier total depth divided by the median "
-                "non-carrier depth at the same position. A value of 1.0 means the "
-                "carrier's depth matches non-carriers; values below 1.0 suggest "
-                "reduced coverage at that position in carriers, consistent with bait bias."
+                "Ranked loci with the strongest inferred depth depletion in carriers. "
+                "Click a row to inspect the site-level model and launch IGV."
             )
-            with _timed("normalized_depth_by_variant"):
-                _norm_depth_df = con.execute(f"""
-                    WITH noncarrier_median AS (
-                        SELECT rb.chrom, rb.pos,
-                               MEDIAN(rb.total_depth) AS median_nc_depth
-                        FROM ref_bases rb
-                        INNER JOIN (
-                            SELECT DISTINCT chrom, pos
-                            FROM {table_expr}
-                            WHERE {where}
-                              AND alt_count * 1.0 / total_depth > 0.9
-                        ) hom ON rb.chrom = hom.chrom AND rb.pos = hom.pos
-                        WHERE rb.total_depth > 0
-                          {_rb_on_tgt}
-                        GROUP BY rb.chrom, rb.pos
-                        HAVING MEDIAN(rb.total_depth) > 0
-                    ),
-                    carrier_norm AS (
-                        SELECT
-                            ab.variant_type,
-                            ab.total_depth * 1.0 / nc.median_nc_depth AS normalized_depth
-                        FROM (
-                            SELECT chrom, pos, variant_type, total_depth, alt_count
-                            FROM {table_expr}
-                            WHERE {where}
-                              AND alt_count * 1.0 / total_depth > 0.9
-                              AND total_depth > 0
-                              {_ab_on_tgt}
-                        ) ab
-                        INNER JOIN noncarrier_median nc
-                               ON ab.chrom = nc.chrom AND ab.pos = nc.pos
-                    )
-                    SELECT
-                        variant_type,
-                        MIN(normalized_depth)                                            AS min_nd,
-                        PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY normalized_depth)  AS q1,
-                        PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY normalized_depth)  AS median_nd,
-                        PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY normalized_depth)  AS q3,
-                        MAX(normalized_depth)                                            AS max_nd,
-                        COUNT(*)                                                         AS n
-                    FROM carrier_norm
-                    GROUP BY variant_type
-                """).df()
-
-            if not _norm_depth_df.empty:
-                # IQR-fenced whiskers (same convention as mark_boxplot "tukey")
-                _norm_depth_df["iqr"]   = _norm_depth_df["q3"] - _norm_depth_df["q1"]
-                _norm_depth_df["lower"] = (_norm_depth_df["q1"] - 1.5 * _norm_depth_df["iqr"]).clip(lower=_norm_depth_df["min_nd"])
-                _norm_depth_df["upper"] = (_norm_depth_df["q3"] + 1.5 * _norm_depth_df["iqr"]).clip(upper=_norm_depth_df["max_nd"])
-                _norm_depth_df["label"] = _norm_depth_df.apply(
-                    lambda r: f"n={int(r['n']):,}  med={r['median_nd']:.3f}  IQR=[{r['q1']:.3f}, {r['q3']:.3f}]",
-                    axis=1,
-                )
-
-                _nd_base   = alt.Chart(_norm_depth_df)
-                _nd_whisker = _nd_base.mark_rule().encode(
-                    x=alt.X("variant_type:N", title="Variant type", axis=alt.Axis(labelAngle=0)),
-                    y=alt.Y("lower:Q", title="Normalized depth", scale=alt.Scale(zero=False)),
-                    y2=alt.Y2("upper:Q"),
-                    color=alt.Color("variant_type:N", legend=None),
-                )
-                _nd_box = _nd_base.mark_bar(size=40).encode(
-                    x=alt.X("variant_type:N"),
-                    y=alt.Y("q1:Q"),
-                    y2=alt.Y2("q3:Q"),
-                    color=alt.Color("variant_type:N", legend=None),
-                    tooltip=[
-                        "variant_type",
-                        alt.Tooltip("n:Q",         title="N",      format=","),
-                        alt.Tooltip("median_nd:Q", title="Median", format=".3f"),
-                        alt.Tooltip("q1:Q",        title="Q1",     format=".3f"),
-                        alt.Tooltip("q3:Q",        title="Q3",     format=".3f"),
-                        alt.Tooltip("lower:Q",     title="Whisker low",  format=".3f"),
-                        alt.Tooltip("upper:Q",     title="Whisker high", format=".3f"),
-                    ],
-                )
-                _nd_median = _nd_base.mark_tick(color="white", size=40, thickness=2).encode(
-                    x=alt.X("variant_type:N"),
-                    y=alt.Y("median_nd:Q"),
-                )
-                _norm_ref_line = (
-                    alt.Chart(pd.DataFrame({"y": [1.0]}))
-                    .mark_rule(color="gray", strokeDash=[4, 4])
-                    .encode(y="y:Q")
-                )
-                st.altair_chart(
-                    (_nd_whisker + _nd_box + _nd_median + _norm_ref_line)
-                    .properties(
-                        height=300,
-                        title="Normalized depth by variant type (carrier / median non-carrier)",
-                    )
-                    .interactive(),
-                    use_container_width=True,
-                )
-
-            st.caption(
-                "**Site-specific bait-bias estimate** — for each carrier locus, GEAC estimates "
-                "the depth the site would likely have had if it were hom-ref by combining "
-                "(1) that carrier sample's median on-target hom-ref depth and "
-                "(2) the locus's typical relative depth across non-carrier samples. "
-                "The main score is **percent expected depth retained** "
-                "(observed depth / expected depth). Values near 1.0 suggest little depth loss; "
-                "lower values indicate stronger bait-bias-like depletion. "
-                "Use the non-carrier count as a confidence cue."
+            _bb_event = st.dataframe(
+                _bb_display,
+                width="stretch",
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="bait_bias_candidates_table",
             )
 
-            _bb_cache_key = ("bait_bias_candidates", where, _ab_on_tgt, _rb_on_tgt)
-            if st.session_state.get("_bb_cache_key") != _bb_cache_key:
-                st.session_state["_bb_cache_key"] = _bb_cache_key
-                st.session_state["_bb_detail_cache_key"] = None
-                with _timed("bait_bias_candidates [cache miss]"):
-                    st.session_state["_bb_candidates_cache"] = compute_bait_bias_candidates(
-                        con,
-                        table_expr,
-                        where,
-                        ab_on_tgt=_ab_on_tgt,
-                        rb_on_tgt=_rb_on_tgt,
-                        gene_expr="gene" if _genes_available else "NULL",
-                    )
-            else:
-                _TIMINGS.append(("bait_bias_candidates [cache hit]", 0.0))
+            _bb_sel_rows = (_bb_event.selection or {}).get("rows", [])
+            if _bb_sel_rows:
+                _bb_row = _bb_candidates.iloc[_bb_sel_rows[0]]
+                _bb_detail_key = (
+                    "bait_bias_detail",
+                    where,
+                    _ab_on_tgt,
+                    _rb_on_tgt,
+                    str(_bb_row["chrom"]),
+                    int(_bb_row["pos"]),
+                    str(_bb_row["alt_allele"]),
+                )
+                if st.session_state.get("_bb_detail_cache_key") != _bb_detail_key:
+                    st.session_state["_bb_detail_cache_key"] = _bb_detail_key
+                    with _timed("bait_bias_locus_detail [cache miss]"):
+                        _bb_carriers, _bb_noncarriers = compute_bait_bias_locus_detail(
+                            con,
+                            table_expr,
+                            where,
+                            chrom=str(_bb_row["chrom"]),
+                            pos=int(_bb_row["pos"]),
+                            alt_allele=str(_bb_row["alt_allele"]),
+                            ab_on_tgt=_ab_on_tgt,
+                            rb_on_tgt=_rb_on_tgt,
+                            gene_expr="gene" if _genes_available else "NULL",
+                        )
+                        st.session_state["_bb_carrier_detail_cache"] = _bb_carriers
+                        st.session_state["_bb_noncarrier_detail_cache"] = _bb_noncarriers
+                else:
+                    _TIMINGS.append(("bait_bias_locus_detail [cache hit]", 0.0))
 
-            _bb_candidates = st.session_state["_bb_candidates_cache"]
-            if _bb_candidates.empty:
-                st.info("No loci with enough data to estimate site-specific bait bias under current filters.")
-            else:
-                _bb_metric_cols = st.columns(4)
-                _bb_metric_cols[0].metric("Candidate loci", f"{len(_bb_candidates):,}")
-                _bb_metric_cols[1].metric(
+                _bb_carriers = st.session_state["_bb_carrier_detail_cache"]
+                _bb_noncarriers = st.session_state["_bb_noncarrier_detail_cache"]
+                st.markdown(
+                    f"**Selected bait-bias locus:** {str(_bb_row['chrom'])}:{int(_bb_row['pos']) + 1} "
+                    f"{str(_bb_row['alt_allele'])} ({str(_bb_row['variant_type'])})"
+                )
+                _bb_detail_cols = st.columns(4)
+                _bb_detail_cols[0].metric(
                     "Median retained depth",
                     (
-                        f"{_bb_candidates['median_depth_retained'].median():.1%}"
-                        if _bb_candidates["median_depth_retained"].notna().any()
+                        f"{_bb_carriers['depth_retained'].median():.1%}"
+                        if not _bb_carriers.empty and _bb_carriers["depth_retained"].notna().any()
                         else "NA"
                     ),
                 )
-                _bb_metric_cols[2].metric(
-                    "Median observed depth",
-                    (
-                        f"{_bb_candidates['median_observed_depth'].median():.1f}"
-                        if _bb_candidates["median_observed_depth"].notna().any()
-                        else "NA"
-                    ),
-                )
-                _bb_metric_cols[3].metric(
+                _bb_detail_cols[1].metric(
                     "Median expected depth",
                     (
-                        f"{_bb_candidates['median_expected_depth'].median():.1f}"
-                        if _bb_candidates["median_expected_depth"].notna().any()
+                        f"{_bb_carriers['expected_depth'].median():.1f}"
+                        if not _bb_carriers.empty and _bb_carriers["expected_depth"].notna().any()
+                        else "NA"
+                    ),
+                )
+                _bb_detail_cols[2].metric(
+                    "Non-carrier samples",
+                    f"{len(_bb_noncarriers):,}",
+                )
+                _bb_detail_cols[3].metric(
+                    "Median relative depth",
+                    (
+                        f"{_bb_noncarriers['relative_depth'].median():.3f}"
+                        if not _bb_noncarriers.empty and _bb_noncarriers["relative_depth"].notna().any()
                         else "NA"
                     ),
                 )
 
-                _bb_display = (
-                    _bb_candidates.assign(pos_display=_bb_candidates["pos"] + 1)
-                    .loc[:, [
-                        "chrom", "pos_display", "alt_allele", "variant_type", "gene",
-                        "n_carrier_samples", "n_noncarrier_samples",
-                        "median_observed_depth", "median_expected_depth",
-                        "median_depth_retained",
-                    ]]
-                )
-                st.caption(
-                    "Ranked loci with the strongest inferred depth depletion in carriers. "
-                    "Click a row to inspect the site-level model and launch IGV."
-                )
-                _bb_event = st.dataframe(
-                    _bb_display,
-                    width="stretch",
-                    hide_index=True,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    key="bait_bias_candidates_table",
-                )
+                if not _bb_noncarriers.empty:
+                    _bb_spread = (
+                        f"Non-carrier relative depth: median "
+                        f"{_bb_noncarriers['relative_depth'].median():.3f}, "
+                        f"IQR [{_bb_noncarriers['relative_depth'].quantile(0.25):.3f}, "
+                        f"{_bb_noncarriers['relative_depth'].quantile(0.75):.3f}], "
+                        f"range [{_bb_noncarriers['relative_depth'].min():.3f}, "
+                        f"{_bb_noncarriers['relative_depth'].max():.3f}]."
+                    )
+                    st.caption(_bb_spread)
 
-                _bb_sel_rows = (_bb_event.selection or {}).get("rows", [])
-                if _bb_sel_rows:
-                    _bb_row = _bb_candidates.iloc[_bb_sel_rows[0]]
-                    _bb_detail_key = (
-                        "bait_bias_detail",
-                        where,
-                        _ab_on_tgt,
-                        _rb_on_tgt,
-                        str(_bb_row["chrom"]),
-                        int(_bb_row["pos"]),
-                        str(_bb_row["alt_allele"]),
-                    )
-                    if st.session_state.get("_bb_detail_cache_key") != _bb_detail_key:
-                        st.session_state["_bb_detail_cache_key"] = _bb_detail_key
-                        with _timed("bait_bias_locus_detail [cache miss]"):
-                            _bb_carriers, _bb_noncarriers = compute_bait_bias_locus_detail(
-                                con,
-                                table_expr,
-                                where,
-                                chrom=str(_bb_row["chrom"]),
-                                pos=int(_bb_row["pos"]),
-                                alt_allele=str(_bb_row["alt_allele"]),
-                                ab_on_tgt=_ab_on_tgt,
-                                rb_on_tgt=_rb_on_tgt,
-                                gene_expr="gene" if _genes_available else "NULL",
-                            )
-                            st.session_state["_bb_carrier_detail_cache"] = _bb_carriers
-                            st.session_state["_bb_noncarrier_detail_cache"] = _bb_noncarriers
-                    else:
-                        _TIMINGS.append(("bait_bias_locus_detail [cache hit]", 0.0))
-
-                    _bb_carriers = st.session_state["_bb_carrier_detail_cache"]
-                    _bb_noncarriers = st.session_state["_bb_noncarrier_detail_cache"]
-                    st.markdown(
-                        f"**Selected bait-bias locus:** {str(_bb_row['chrom'])}:{int(_bb_row['pos']) + 1} "
-                        f"{str(_bb_row['alt_allele'])} ({str(_bb_row['variant_type'])})"
-                    )
-                    _bb_detail_cols = st.columns(4)
-                    _bb_detail_cols[0].metric(
-                        "Median retained depth",
-                        (
-                            f"{_bb_carriers['depth_retained'].median():.1%}"
-                            if not _bb_carriers.empty and _bb_carriers["depth_retained"].notna().any()
-                            else "NA"
-                        ),
-                    )
-                    _bb_detail_cols[1].metric(
-                        "Median expected depth",
-                        (
-                            f"{_bb_carriers['expected_depth'].median():.1f}"
-                            if not _bb_carriers.empty and _bb_carriers["expected_depth"].notna().any()
-                            else "NA"
-                        ),
-                    )
-                    _bb_detail_cols[2].metric(
-                        "Non-carrier samples",
-                        f"{len(_bb_noncarriers):,}",
-                    )
-                    _bb_detail_cols[3].metric(
-                        "Median relative depth",
-                        (
-                            f"{_bb_noncarriers['relative_depth'].median():.3f}"
-                            if not _bb_noncarriers.empty and _bb_noncarriers["relative_depth"].notna().any()
-                            else "NA"
-                        ),
+                if not _bb_carriers.empty:
+                    _bb_show = _bb_carriers.copy()
+                    _bb_show["pos_display"] = _bb_show["pos"] + 1
+                    st.caption("Carrier sample estimates at this locus")
+                    st.dataframe(
+                        _bb_show[[
+                            "sample_id", "chrom", "pos_display", "alt_allele",
+                            "observed_depth", "sample_baseline_depth",
+                            "expected_depth", "depth_retained",
+                        ]],
+                        width="stretch",
+                        hide_index=True,
                     )
 
-                    if not _bb_noncarriers.empty:
-                        _bb_spread = (
-                            f"Non-carrier relative depth: median "
-                            f"{_bb_noncarriers['relative_depth'].median():.3f}, "
-                            f"IQR [{_bb_noncarriers['relative_depth'].quantile(0.25):.3f}, "
-                            f"{_bb_noncarriers['relative_depth'].quantile(0.75):.3f}], "
-                            f"range [{_bb_noncarriers['relative_depth'].min():.3f}, "
-                            f"{_bb_noncarriers['relative_depth'].max():.3f}]."
+                _bb_locus_cond = (
+                    f"chrom = '{_sql_str(str(_bb_row['chrom']))}' "
+                    f"AND pos = {int(_bb_row['pos'])} "
+                    f"AND alt_allele = '{_sql_str(str(_bb_row['alt_allele']))}'"
+                )
+                _bb_locus_df = con.execute(f"""
+                    SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
+                           pos + 1 AS pos_display
+                    FROM {table_expr}
+                    WHERE {_bb_locus_cond} AND {where}
+                    ORDER BY sample_id, chrom, pos
+                """).df()
+                igv_buttons(
+                    [_bb_locus_cond],
+                    _bb_locus_df,
+                    key=f"bait_bias_locus_{_sql_str(str(_bb_row['chrom']))}_{int(_bb_row['pos'])}_{_sql_str(str(_bb_row['alt_allele']))}",
+                    use_global_filters=False,
+                )
+
+                if _has_ref_reads and _has_alt_reads and _has_alt_reads_cols("family_size"):
+                    _bb_fs_detail = con.execute(f"""
+                        WITH carrier_fs AS (
+                            SELECT
+                                ar.sample_id,
+                                MEDIAN(ar.family_size) AS median_family_size,
+                                COUNT(*) AS n_reads
+                            FROM alt_reads ar
+                            WHERE ar.chrom = '{_sql_str(str(_bb_row['chrom']))}'
+                              AND ar.pos = {int(_bb_row['pos'])}
+                              AND ar.alt_allele = '{_sql_str(str(_bb_row['alt_allele']))}'
+                              AND ar.family_size IS NOT NULL
+                            GROUP BY ar.sample_id
+                        ),
+                        noncarrier_fs AS (
+                            SELECT
+                                rr.sample_id,
+                                MEDIAN(rr.family_size) AS median_family_size,
+                                COUNT(*) AS n_reads
+                            FROM ref_reads rr
+                            WHERE rr.chrom = '{_sql_str(str(_bb_row['chrom']))}'
+                              AND rr.pos = {int(_bb_row['pos'])}
+                              AND rr.family_size IS NOT NULL
+                              {_rr_on_tgt}
+                            GROUP BY rr.sample_id
                         )
-                        st.caption(_bb_spread)
-
-                    if not _bb_carriers.empty:
-                        _bb_show = _bb_carriers.copy()
-                        _bb_show["pos_display"] = _bb_show["pos"] + 1
-                        st.caption("Carrier sample estimates at this locus")
-                        st.dataframe(
-                            _bb_show[[
-                                "sample_id", "chrom", "pos_display", "alt_allele",
-                                "observed_depth", "sample_baseline_depth",
-                                "expected_depth", "depth_retained",
-                            ]],
-                            width="stretch",
-                            hide_index=True,
-                        )
-
-                    _bb_locus_cond = (
-                        f"chrom = '{_sql_str(str(_bb_row['chrom']))}' "
-                        f"AND pos = {int(_bb_row['pos'])} "
-                        f"AND alt_allele = '{_sql_str(str(_bb_row['alt_allele']))}'"
-                    )
-                    _bb_locus_df = con.execute(f"""
-                        SELECT *, ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
-                               pos + 1 AS pos_display
-                        FROM {table_expr}
-                        WHERE {_bb_locus_cond} AND {where}
-                        ORDER BY sample_id, chrom, pos
+                        SELECT 'Carrier' AS carrier_group, * FROM carrier_fs
+                        UNION ALL
+                        SELECT 'Non-carrier' AS carrier_group, * FROM noncarrier_fs
                     """).df()
-                    igv_buttons(
-                        [_bb_locus_cond],
-                        _bb_locus_df,
-                        key=f"bait_bias_locus_{_sql_str(str(_bb_row['chrom']))}_{int(_bb_row['pos'])}_{_sql_str(str(_bb_row['alt_allele']))}",
-                        use_global_filters=False,
-                    )
-
-                    if _has_ref_reads and _has_alt_reads and _has_alt_reads_cols("family_size"):
-                        _bb_fs_detail = con.execute(f"""
-                            WITH carrier_fs AS (
-                                SELECT
-                                    ar.sample_id,
-                                    MEDIAN(ar.family_size) AS median_family_size,
-                                    COUNT(*) AS n_reads
-                                FROM alt_reads ar
-                                WHERE ar.chrom = '{_sql_str(str(_bb_row['chrom']))}'
-                                  AND ar.pos = {int(_bb_row['pos'])}
-                                  AND ar.alt_allele = '{_sql_str(str(_bb_row['alt_allele']))}'
-                                  AND ar.family_size IS NOT NULL
-                                GROUP BY ar.sample_id
-                            ),
-                            noncarrier_fs AS (
-                                SELECT
-                                    rr.sample_id,
-                                    MEDIAN(rr.family_size) AS median_family_size,
-                                    COUNT(*) AS n_reads
-                                FROM ref_reads rr
-                                WHERE rr.chrom = '{_sql_str(str(_bb_row['chrom']))}'
-                                  AND rr.pos = {int(_bb_row['pos'])}
-                                  AND rr.family_size IS NOT NULL
-                                  {_rr_on_tgt}
-                                GROUP BY rr.sample_id
+                    if not _bb_fs_detail.empty:
+                        st.caption("Consensus family size at the selected locus")
+                        _bb_fs_summary = (
+                            _bb_fs_detail.groupby("carrier_group")
+                            .agg(
+                                n_samples=("sample_id", "nunique"),
+                                median_family_size=("median_family_size", "median"),
+                                median_reads=("n_reads", "median"),
                             )
-                            SELECT 'Carrier' AS carrier_group, * FROM carrier_fs
-                            UNION ALL
-                            SELECT 'Non-carrier' AS carrier_group, * FROM noncarrier_fs
-                        """).df()
-                        if not _bb_fs_detail.empty:
-                            st.caption("Consensus family size at the selected locus")
-                            _bb_fs_summary = (
-                                _bb_fs_detail.groupby("carrier_group")
-                                .agg(
-                                    n_samples=("sample_id", "nunique"),
-                                    median_family_size=("median_family_size", "median"),
-                                    median_reads=("n_reads", "median"),
-                                )
-                                .reset_index()
-                            )
-                            st.dataframe(_bb_fs_summary, width="stretch", hide_index=True)
-                else:
-                    st.caption("Click a bait-bias candidate row to inspect the site-level estimate.")
+                            .reset_index()
+                        )
+                        st.dataframe(_bb_fs_summary, width="stretch", hide_index=True)
+            else:
+                st.caption("Click a bait-bias candidate row to inspect the site-level estimate.")
 
         # Family size comparison (only if ref_reads and alt_reads with family_size are present)
+        _bias_color_scale = alt.Scale(
+            domain=["Carrier", "Non-carrier"],
+            range=["#4c78a8", "#e45756"],
+        )
         if _has_ref_reads and _has_alt_reads and _has_alt_reads_cols("family_size"):
             _bias_fs_available = con.execute(
                 "SELECT COUNT(*) FROM ref_reads WHERE family_size IS NOT NULL LIMIT 1"

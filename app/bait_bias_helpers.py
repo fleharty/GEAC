@@ -28,12 +28,11 @@ def _bait_bias_common_ctes(
         ),
         sample_baseline AS (
             SELECT
-                rb.sample_id,
-                MEDIAN(rb.total_depth) AS sample_baseline_depth
-            FROM ref_bases rb
-            WHERE rb.total_depth > 0
-              {rb_on_tgt}
-            GROUP BY rb.sample_id
+                sample_id,
+                MEDIAN(median_target_depth_all) AS sample_baseline_depth
+            FROM sample_metrics
+            WHERE median_target_depth_all IS NOT NULL
+            GROUP BY sample_id
         ),
         noncarrier_rel AS (
             SELECT
