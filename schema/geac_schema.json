@@ -5,7 +5,8 @@
     "pon_evidence",
     "coverage",
     "ref_bases",
-    "ref_reads"
+    "ref_reads",
+    "sample_metrics"
   ],
   "tables": {
     "alt_bases": {
