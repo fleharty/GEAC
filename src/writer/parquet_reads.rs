@@ -42,6 +42,10 @@ fn alt_read_schema() -> Arc<Schema> {
         Field::new("alt_allele", DataType::Utf8, false),
         Field::new("read_type", DataType::Utf8, false),
         Field::new("pipeline", DataType::Utf8, false),
+        Field::new("batch", DataType::Utf8, true),
+        Field::new("label1", DataType::Utf8, true),
+        Field::new("label2", DataType::Utf8, true),
+        Field::new("label3", DataType::Utf8, true),
         Field::new("cycle", DataType::Int32, false),
         Field::new("read_length", DataType::Int32, false),
         Field::new("is_read1", DataType::Boolean, false),
@@ -77,6 +81,18 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
     ));
     let pipeline: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.pipeline.to_string()),
+    ));
+    let batch: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.batch.as_deref()).collect::<Vec<_>>(),
+    ));
+    let label1: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.label1.as_deref()).collect::<Vec<_>>(),
+    ));
+    let label2: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.label2.as_deref()).collect::<Vec<_>>(),
+    ));
+    let label3: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.label3.as_deref()).collect::<Vec<_>>(),
     ));
     let cycle: ArrayRef = Arc::new(Int32Array::from_iter_values(
         records.iter().map(|r| r.cycle),
@@ -139,6 +155,10 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
             alt_allele,
             read_type,
             pipeline,
+            batch,
+            label1,
+            label2,
+            label3,
             cycle,
             read_length,
             is_read1,

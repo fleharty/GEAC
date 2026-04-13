@@ -69,6 +69,10 @@
       "optional_columns": [
         "read_type",
         "pipeline",
+        "batch",
+        "label1",
+        "label2",
+        "label3",
         "ab_count",
         "ba_count",
         "family_size",

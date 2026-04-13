@@ -388,6 +388,10 @@ pub struct AltRead {
     pub alt_allele: String,
     pub read_type: ReadType,
     pub pipeline: Pipeline,
+    pub batch: Option<String>,
+    pub label1: Option<String>,
+    pub label2: Option<String>,
+    pub label3: Option<String>,
     /// 1-based sequencing cycle (= query position + 1)
     pub cycle: i32,
     pub read_length: i32,

@@ -165,6 +165,10 @@ impl LocusContext {
             alt_allele: alt_allele.to_string(),
             read_type: self.read_type,
             pipeline: self.pipeline,
+            batch: self.batch.clone(),
+            label1: self.label1.clone(),
+            label2: self.label2.clone(),
+            label3: self.label3.clone(),
             cycle: true_cycle(
                 detail.qpos,
                 detail.read_len,

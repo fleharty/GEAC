@@ -11,17 +11,32 @@ from . import summary
 from . import tumor_normal
 from . import vaf_distribution
 
+# Named aliases — use these instead of TAB_MODULES[N] so that reordering the
+# tuple below does not silently break tab dispatch in geac_explorer.py.
+TAB_SUMMARY = summary
+TAB_VAF_DISTRIBUTION = vaf_distribution
+TAB_ERROR_SPECTRUM = error_spectrum
+TAB_STRAND_BIAS = strand_bias
+TAB_COHORT = cohort
+TAB_READS = reads
+TAB_DUPLEX_SIMPLEX = duplex_simplex
+TAB_TUMOR_NORMAL = tumor_normal
+TAB_PANEL_OF_NORMALS = panel_of_normals
+TAB_PIPELINE_COMPARISON = pipeline_comparison
+TAB_READ_TYPE_COMPARISON = read_type_comparison
+TAB_AI_PLOT_BUILDER = ai_plot_builder
+
 TAB_MODULES = (
-    summary,
-    vaf_distribution,
-    error_spectrum,
-    strand_bias,
-    cohort,
-    reads,
-    duplex_simplex,
-    tumor_normal,
-    panel_of_normals,
-    pipeline_comparison,
-    read_type_comparison,
-    ai_plot_builder,
+    TAB_SUMMARY,
+    TAB_VAF_DISTRIBUTION,
+    TAB_ERROR_SPECTRUM,
+    TAB_STRAND_BIAS,
+    TAB_COHORT,
+    TAB_READS,
+    TAB_DUPLEX_SIMPLEX,
+    TAB_TUMOR_NORMAL,
+    TAB_PANEL_OF_NORMALS,
+    TAB_PIPELINE_COMPARISON,
+    TAB_READ_TYPE_COMPARISON,
+    TAB_AI_PLOT_BUILDER,
 )

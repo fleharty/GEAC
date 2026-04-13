@@ -779,6 +779,10 @@ fragment at a locus. Linked to the locus table by `(sample_id, chrom, pos, alt_a
 | `alt_allele` | string | Alt allele (links to locus table) |
 | `read_type` | string | `raw` / `simplex` / `duplex` |
 | `pipeline` | string | `fgbio` / `dragen` / `raw` |
+| `batch` | string? | Batch/processing-group label (null if `--batch` not provided) |
+| `label1` | string? | Free-text sample label 1 (null if `--label1` not provided) |
+| `label2` | string? | Free-text sample label 2 (null if `--label2` not provided) |
+| `label3` | string? | Free-text sample label 3 (null if `--label3` not provided) |
 | `cycle` | int32 | 1-based sequencing cycle at the alt position. Forward reads: `hard_clips_5prime + qpos + 1`; reverse reads: `hard_clips_5prime + read_length − qpos`. Hard-clipped bases at the 5′ end of synthesis are included so cycle reflects true polymerase position. |
 | `read_length` | int32 | Stored sequence length in bases (hard-clipped bases excluded, soft-clipped bases included) |
 | `is_read1` | bool | `true` if R1 (BAM flag `0x40`), `false` if R2 or unpaired |
@@ -794,6 +798,7 @@ fragment at a locus. Linked to the locus table by `(sample_id, chrom, pos, alt_a
 | `n_n_after_alt` | int32 | Number of `N` bases after the alt position |
 | `leading_n_run_len` | int32 | Contiguous run of `N` bases immediately before the alt |
 | `trailing_n_run_len` | int32 | Contiguous run of `N` bases immediately after the alt |
+| `input_checksum_sha256` | string? | SHA-256 of the input BAM/CRAM (null if `--input-checksum-sha256` not provided) |
 
 The read-context fields are intended for statistical investigation of patterns such as
 alt-supporting reads followed by runs of `N`. “Before” and “after” are defined in read

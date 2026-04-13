@@ -64,7 +64,21 @@ from explorer.main_table import (
     render_records_table,
     render_summary_metrics,
 )
-from explorer.tabs import TAB_MODULES
+from explorer.tabs import (
+    TAB_MODULES,
+    TAB_SUMMARY,
+    TAB_VAF_DISTRIBUTION,
+    TAB_ERROR_SPECTRUM,
+    TAB_STRAND_BIAS,
+    TAB_COHORT,
+    TAB_READS,
+    TAB_DUPLEX_SIMPLEX,
+    TAB_TUMOR_NORMAL,
+    TAB_PANEL_OF_NORMALS,
+    TAB_PIPELINE_COMPARISON,
+    TAB_READ_TYPE_COMPARISON,
+    TAB_AI_PLOT_BUILDER,
+)
 
 _IS_MIN, _IS_MAX = 20, 500  # insert size slider bounds
 
@@ -199,8 +213,12 @@ def _has_alt_reads_cols(*cols: str) -> bool:
     return all(col in _alt_reads_cols for col in cols)
 
 
-_alt_reads_has_pipeline = _has_alt_reads_cols("pipeline")
+_alt_reads_has_pipeline  = _has_alt_reads_cols("pipeline")
 _alt_reads_has_read_type = _has_alt_reads_cols("read_type")
+_alt_reads_has_batch     = _has_alt_reads_cols("batch")
+_alt_reads_has_label1    = _has_alt_reads_cols("label1")
+_alt_reads_has_label2    = _has_alt_reads_cols("label2")
+_alt_reads_has_label3    = _has_alt_reads_cols("label3")
 
 
 def _alt_reads_meta_join(alias: str) -> str:
@@ -1409,7 +1427,7 @@ _active_main_tab = st.radio(
     label_visibility="collapsed",
 )
 
-if _active_main_tab == TAB_MODULES[0].LABEL:
+if _active_main_tab == TAB_SUMMARY.LABEL:
     # ── Summary stats display ──────────────────────────────────────────────────────
     fstats = con.execute(f"""
         SELECT
@@ -1647,7 +1665,7 @@ if _active_main_tab == TAB_MODULES[0].LABEL:
             igv_buttons=igv_buttons,
         )
 
-if _active_main_tab == TAB_MODULES[1].LABEL:
+if _active_main_tab == TAB_VAF_DISTRIBUTION.LABEL:
     for vtype, color in [
         ("SNV",       "#4c78a8"),
         ("insertion", "#f58518"),
@@ -2497,7 +2515,7 @@ def _strat_sbs96_chart(spec_df, title, y_max=None, sel_name=None):
     return chart
 
 
-if _active_main_tab == TAB_MODULES[2].LABEL:
+if _active_main_tab == TAB_ERROR_SPECTRUM.LABEL:
 
     def _load_sample_sbs96_matrix():
         _has_batch = _has_data("batch")
@@ -3827,7 +3845,7 @@ if _active_main_tab == TAB_MODULES[2].LABEL:
                     "Contexts ordered by mutation type (C>A, C>G, C>T, T>A, T>C, T>G) then flanking bases."
                 )
 
-if _active_main_tab == TAB_MODULES[3].LABEL:
+if _active_main_tab == TAB_STRAND_BIAS.LABEL:
     _sb_col1, _sb_col2 = st.columns(2)
     _sb_scale = _sb_col1.radio(
         "Axis scale", ["Linear", "log1p"], horizontal=True, key="sb_scale",
@@ -4063,7 +4081,7 @@ if _active_main_tab == TAB_MODULES[3].LABEL:
     else:
         st.caption("Click a point to select it; shift-click to select multiple.")
 
-if _active_main_tab == TAB_MODULES[4].LABEL:
+if _active_main_tab == TAB_COHORT.LABEL:
     if not path.endswith(".duckdb"):
         st.info("Cohort view is available when loading a merged DuckDB file (`geac merge` output).")
     else:
@@ -4314,7 +4332,7 @@ if _active_main_tab == TAB_MODULES[4].LABEL:
                     "is typical of background noise."
                 )
 
-if _active_main_tab == TAB_MODULES[5].LABEL:
+if _active_main_tab == TAB_READS.LABEL:
     if not _has_alt_reads:
         st.info(
             "Per-read detail table not available. "
@@ -4330,15 +4348,15 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
         st.subheader("Read position bias")
         _dfe_ctrl1, _dfe_ctrl2, _dfe_ctrl3 = st.columns([3, 2, 1])
         _dfe_color_options = ["All samples (aggregate)", "Sample"]
-        if _has_data("batch"):
+        if _alt_reads_has_batch:
             _dfe_color_options.append("Batch")
-        if _has_alt_reads_cols("pipeline"):
+        if _alt_reads_has_pipeline:
             _dfe_color_options.append("Pipeline")
-        if _has_data("label1"):
+        if _alt_reads_has_label1:
             _dfe_color_options.append("Label 1")
-        if _has_data("label2"):
+        if _alt_reads_has_label2:
             _dfe_color_options.append("Label 2")
-        if _has_data("label3"):
+        if _alt_reads_has_label3:
             _dfe_color_options.append("Label 3")
         _dfe_color_by = _dfe_ctrl1.radio(
             "Color by", _dfe_color_options,
@@ -4356,21 +4374,9 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
         _dfe_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_dfe_color_by)
         _dfe_normalize = _dfe_y_mode == "Fraction"
         _DFE_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
-        _dfe_batch_src = (
-            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id"
-            f"{', pipeline' if _alt_reads_has_pipeline else ''}"
-            f"{', read_type' if _alt_reads_has_read_type else ''}, batch FROM {table_expr}"
-            f" WHERE batch IS NOT NULL) ab ON {_alt_reads_meta_join('ab')}"
-        )
-        _dfe_label_src = (
-            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id"
-            f"{', pipeline' if _alt_reads_has_pipeline else ''}"
-            f"{', read_type' if _alt_reads_has_read_type else ''}, {_dfe_lbl_col} FROM {table_expr}"
-            f" WHERE {_dfe_lbl_col} IS NOT NULL) _lbl ON {_alt_reads_meta_join('_lbl')}"
-        ) if _dfe_by_label else _r_join
         if _dfe_by_batch and _dfe_by_read:
-            _dfe_source      = _dfe_batch_src
-            _dfe_select_expr = f"ab.batch || ' ' || {_DFE_READ_EXPR} AS label, "
+            _dfe_source      = _r_join
+            _dfe_select_expr = f"ar.batch || ' ' || {_DFE_READ_EXPR} AS label, "
             _dfe_group_expr  = "label, "
             _dfe_label_col   = "label"
         elif _dfe_by_pipeline and _dfe_by_read:
@@ -4379,8 +4385,8 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
             _dfe_group_expr  = "label, "
             _dfe_label_col   = "label"
         elif _dfe_by_label and _dfe_by_read:
-            _dfe_source      = _dfe_label_src
-            _dfe_select_expr = f"_lbl.{_dfe_lbl_col} || ' ' || {_DFE_READ_EXPR} AS label, "
+            _dfe_source      = _r_join
+            _dfe_select_expr = f"ar.{_dfe_lbl_col} || ' ' || {_DFE_READ_EXPR} AS label, "
             _dfe_group_expr  = "label, "
             _dfe_label_col   = "label"
         elif _dfe_by_sample and _dfe_by_read:
@@ -4394,19 +4400,19 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
             _dfe_group_expr  = "read, "
             _dfe_label_col   = "read"
         elif _dfe_by_batch:
-            _dfe_source      = _dfe_batch_src
-            _dfe_select_expr = "ab.batch AS batch, "
-            _dfe_group_expr  = "ab.batch, "
+            _dfe_source      = _r_join
+            _dfe_select_expr = "ar.batch, "
+            _dfe_group_expr  = "ar.batch, "
             _dfe_label_col   = "batch"
         elif _dfe_by_pipeline:
             _dfe_source      = _r_join
-            _dfe_select_expr = "ar.pipeline AS pipeline, "
+            _dfe_select_expr = "ar.pipeline, "
             _dfe_group_expr  = "ar.pipeline, "
             _dfe_label_col   = "pipeline"
         elif _dfe_by_label:
-            _dfe_source      = _dfe_label_src
-            _dfe_select_expr = f"_lbl.{_dfe_lbl_col} AS {_dfe_lbl_col}, "
-            _dfe_group_expr  = f"_lbl.{_dfe_lbl_col}, "
+            _dfe_source      = _r_join
+            _dfe_select_expr = f"ar.{_dfe_lbl_col}, "
+            _dfe_group_expr  = f"ar.{_dfe_lbl_col}, "
             _dfe_label_col   = _dfe_lbl_col
         elif _dfe_by_sample:
             _dfe_source      = _r_join
@@ -4479,13 +4485,13 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
         st.subheader("Mean base quality by cycle")
         _bq_ctrl1, _bq_ctrl2 = st.columns([4, 1])
         _bq_color_options = ["All samples (aggregate)", "Sample"]
-        if _has_data("batch"):
+        if _alt_reads_has_batch:
             _bq_color_options.append("Batch")
-        if _has_data("label1"):
+        if _alt_reads_has_label1:
             _bq_color_options.append("Label 1")
-        if _has_data("label2"):
+        if _alt_reads_has_label2:
             _bq_color_options.append("Label 2")
-        if _has_data("label3"):
+        if _alt_reads_has_label3:
             _bq_color_options.append("Label 3")
         _bq_color_by = _bq_ctrl1.radio(
             "Color by", _bq_color_options,
@@ -4497,22 +4503,14 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
         _bq_by_label  = _bq_color_by in ("Label 1", "Label 2", "Label 3")
         _bq_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_bq_color_by)
         _BQ_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
-        _bq_batch_src = (
-            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr}"
-            f" WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
-        )
-        _bq_label_src = (
-            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, {_bq_lbl_col} FROM {table_expr}"
-            f" WHERE {_bq_lbl_col} IS NOT NULL) _lbl ON ar.sample_id = _lbl.sample_id"
-        ) if _bq_by_label else _r_join
         if _bq_by_batch and _bq_by_read:
-            _bq_source      = _bq_batch_src
-            _bq_select_expr = f"ab.batch || ' ' || {_BQ_READ_EXPR} AS label, "
+            _bq_source      = _r_join
+            _bq_select_expr = f"ar.batch || ' ' || {_BQ_READ_EXPR} AS label, "
             _bq_group_expr  = "label, "
             _bq_label_col   = "label"
         elif _bq_by_label and _bq_by_read:
-            _bq_source      = _bq_label_src
-            _bq_select_expr = f"_lbl.{_bq_lbl_col} || ' ' || {_BQ_READ_EXPR} AS label, "
+            _bq_source      = _r_join
+            _bq_select_expr = f"ar.{_bq_lbl_col} || ' ' || {_BQ_READ_EXPR} AS label, "
             _bq_group_expr  = "label, "
             _bq_label_col   = "label"
         elif _bq_by_sample and _bq_by_read:
@@ -4526,14 +4524,14 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
             _bq_group_expr  = "read, "
             _bq_label_col   = "read"
         elif _bq_by_batch:
-            _bq_source      = _bq_batch_src
-            _bq_select_expr = "ab.batch AS batch, "
-            _bq_group_expr  = "ab.batch, "
+            _bq_source      = _r_join
+            _bq_select_expr = "ar.batch, "
+            _bq_group_expr  = "ar.batch, "
             _bq_label_col   = "batch"
         elif _bq_by_label:
-            _bq_source      = _bq_label_src
-            _bq_select_expr = f"_lbl.{_bq_lbl_col} AS {_bq_lbl_col}, "
-            _bq_group_expr  = f"_lbl.{_bq_lbl_col}, "
+            _bq_source      = _r_join
+            _bq_select_expr = f"ar.{_bq_lbl_col}, "
+            _bq_group_expr  = f"ar.{_bq_lbl_col}, "
             _bq_label_col   = _bq_lbl_col
         elif _bq_by_sample:
             _bq_source      = _r_join
@@ -5202,13 +5200,13 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
 
             st.subheader("Insert size distribution")
             _ins_color_options = ["All samples (aggregate)", "Sample"]
-            if _has_data("batch"):
+            if _alt_reads_has_batch:
                 _ins_color_options.append("Batch")
-            if _has_data("label1"):
+            if _alt_reads_has_label1:
                 _ins_color_options.append("Label 1")
-            if _has_data("label2"):
+            if _alt_reads_has_label2:
                 _ins_color_options.append("Label 2")
-            if _has_data("label3"):
+            if _alt_reads_has_label3:
                 _ins_color_options.append("Label 3")
             _ins_color_by = st.radio(
                 "Color by", _ins_color_options,
@@ -5224,20 +5222,15 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
                 _ins_lbl_col  if _ins_by_label  else
                 None
             )
-            _ins_source = (
-                f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
-                if _ins_by_batch else
-                f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, {_ins_lbl_col} FROM {table_expr} WHERE {_ins_lbl_col} IS NOT NULL) _lbl ON ar.sample_id = _lbl.sample_id"
-                if _ins_by_label else _r_join
-            )
+            _ins_source = _r_join
             _ins_select_expr = (
-                "ab.batch AS batch, "                        if _ins_by_batch  else
-                f"_lbl.{_ins_lbl_col} AS {_ins_lbl_col}, "  if _ins_by_label  else
-                f"ar.{_ins_label_col}, "                     if _ins_label_col else ""
+                "ar.batch, "                  if _ins_by_batch  else
+                f"ar.{_ins_lbl_col}, "        if _ins_by_label  else
+                f"ar.{_ins_label_col}, "      if _ins_label_col else ""
             )
             _ins_group_expr = (
-                "ab.batch, "                  if _ins_by_batch  else
-                f"_lbl.{_ins_lbl_col}, "      if _ins_by_label  else
+                "ar.batch, "                  if _ins_by_batch  else
+                f"ar.{_ins_lbl_col}, "        if _ins_by_label  else
                 f"ar.{_ins_label_col}, "      if _ins_label_col else ""
             )
 
@@ -5323,13 +5316,13 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
         if st.session_state.get("_cached_has_insert_size", False):
             st.subheader("Insert size by allele frequency class")
             _af_ins_color_options = ["All samples (aggregate)", "Sample"]
-            if _has_data("batch"):
+            if _alt_reads_has_batch:
                 _af_ins_color_options.append("Batch")
-            if _has_data("label1"):
+            if _alt_reads_has_label1:
                 _af_ins_color_options.append("Label 1")
-            if _has_data("label2"):
+            if _alt_reads_has_label2:
                 _af_ins_color_options.append("Label 2")
-            if _has_data("label3"):
+            if _alt_reads_has_label3:
                 _af_ins_color_options.append("Label 3")
             _af_ins_ctrl1, _af_ins_ctrl2 = st.columns(2)
             _af_ins_color_by = _af_ins_ctrl1.radio(
@@ -5351,20 +5344,15 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
                 None
             )
             _af_ins_extra_select = (
-                "ar.sample_id, "                           if _af_ins_by_sample else
-                "_locus.batch, "                           if _af_ins_by_batch  else
-                f"_locus.{_af_ins_lbl_col}, "              if _af_ins_by_label  else
+                "ar.sample_id, "              if _af_ins_by_sample else
+                "ar.batch, "                  if _af_ins_by_batch  else
+                f"ar.{_af_ins_lbl_col}, "     if _af_ins_by_label  else
                 ""
             )
             _af_ins_extra_group = (
-                "ar.sample_id, "                           if _af_ins_by_sample else
-                "_locus.batch, "                           if _af_ins_by_batch  else
-                f"_locus.{_af_ins_lbl_col}, "              if _af_ins_by_label  else
-                ""
-            )
-            _af_ins_locus_extra = (
-                ", batch"                   if _af_ins_by_batch else
-                f", {_af_ins_lbl_col}"      if _af_ins_by_label else
+                "ar.sample_id, "              if _af_ins_by_sample else
+                "ar.batch, "                  if _af_ins_by_batch  else
+                f"ar.{_af_ins_lbl_col}, "     if _af_ins_by_label  else
                 ""
             )
 
@@ -5379,7 +5367,7 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
                     COUNT(*) AS n_reads
                 FROM {_r_join}
                 INNER JOIN (
-                    SELECT DISTINCT sample_id, chrom, pos, alt_allele, alt_count, total_depth{_af_ins_locus_extra}
+                    SELECT DISTINCT sample_id, chrom, pos, alt_allele, alt_count, total_depth
                     FROM {table_expr}
                     WHERE {where}
                 ) _locus ON  ar.sample_id  = _locus.sample_id
@@ -5517,7 +5505,7 @@ if _active_main_tab == TAB_MODULES[5].LABEL:
                 "Low MAPQ at repetitive loci indicates multi-mapping artefacts."
             )
 
-if _active_main_tab == TAB_MODULES[6].LABEL:
+if _active_main_tab == TAB_DUPLEX_SIMPLEX.LABEL:
     if not _has_alt_reads:
         st.info(
             "Per-read detail table not available. "
@@ -5533,13 +5521,13 @@ if _active_main_tab == TAB_MODULES[6].LABEL:
         st.subheader("Family size distribution")
         _fs_ctrl_col1, _fs_ctrl_col2 = st.columns(2)
         _fs_color_options = ["All samples (aggregate)", "Sample"]
-        if _has_data("batch"):
+        if _alt_reads_has_batch:
             _fs_color_options.append("Batch")
-        if _has_data("label1"):
+        if _alt_reads_has_label1:
             _fs_color_options.append("Label 1")
-        if _has_data("label2"):
+        if _alt_reads_has_label2:
             _fs_color_options.append("Label 2")
-        if _has_data("label3"):
+        if _alt_reads_has_label3:
             _fs_color_options.append("Label 3")
         _fs_color_by = _fs_ctrl_col1.radio(
             "Color by", _fs_color_options,
@@ -5556,20 +5544,14 @@ if _active_main_tab == TAB_MODULES[6].LABEL:
         _fs_normalize = _fs_y_mode == "Fraction"
 
         _fs_group_col = (
-            "ar.sample_id"          if _fs_by_sample else
-            "ab.batch"              if _fs_by_batch  else
-            f"_lbl.{_fs_lbl_col}"   if _fs_by_label  else
+            "ar.sample_id"        if _fs_by_sample else
+            "ar.batch"            if _fs_by_batch  else
+            f"ar.{_fs_lbl_col}"   if _fs_by_label  else
             None
         )
         _fs_select = f"{_fs_group_col}, " if _fs_group_col else ""
         _fs_group  = f"{_fs_group_col}, " if _fs_group_col else ""
-
-        _fs_source = (
-            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, batch FROM {table_expr} WHERE batch IS NOT NULL) ab ON ar.sample_id = ab.sample_id"
-            if _fs_by_batch else
-            f"{_r_join} INNER JOIN (SELECT DISTINCT sample_id, {_fs_lbl_col} FROM {table_expr} WHERE {_fs_lbl_col} IS NOT NULL) _lbl ON ar.sample_id = _lbl.sample_id"
-            if _fs_by_label else _r_join
-        )
+        _fs_source = _r_join
 
         _fs_df = con.execute(f"""
             SELECT {_fs_select}ar.family_size, COUNT(*) AS n_reads
@@ -6007,7 +5989,7 @@ if _active_main_tab == TAB_MODULES[6].LABEL:
                     igv_buttons([_ab_cond], _ab_sel_df, key=_ab_key)
 
 # ── Tumor/Normal tab ──────────────────────────────────────────────────────────
-if _active_main_tab == TAB_MODULES[7].LABEL:
+if _active_main_tab == TAB_TUMOR_NORMAL.LABEL:
     if not _has_normal_evidence:
         st.info(
             "No `normal_evidence` table found in this database. "
@@ -6225,7 +6207,7 @@ if _active_main_tab == TAB_MODULES[7].LABEL:
                 )
 
 # ── Panel of Normals tab ──────────────────────────────────────────────────────
-if _active_main_tab == TAB_MODULES[8].LABEL:
+if _active_main_tab == TAB_PANEL_OF_NORMALS.LABEL:
     if not _has_pon_evidence:
         st.info(
             "No `pon_evidence` table found in this database. "
@@ -6432,7 +6414,7 @@ if _active_main_tab == TAB_MODULES[8].LABEL:
 # ──────────────────────────────────────────────────────────────────────────────
 # Tab 10 — Pipeline comparison
 # ──────────────────────────────────────────────────────────────────────────────
-if _active_main_tab == TAB_MODULES[9].LABEL:
+if _active_main_tab == TAB_PIPELINE_COMPARISON.LABEL:
     if not data_source.is_duckdb:
         st.info(
             "Pipeline comparison requires a merged DuckDB file. "
@@ -7027,7 +7009,7 @@ if _active_main_tab == TAB_MODULES[9].LABEL:
                         "Systematic offset suggests different duplicate-collapsing or overlap behaviour."
                     )
 
-if _active_main_tab == TAB_MODULES[10].LABEL:
+if _active_main_tab == TAB_READ_TYPE_COMPARISON.LABEL:
     if not data_source.is_duckdb:
         st.info(
             "Read-type comparison requires a merged DuckDB file. "
@@ -7404,7 +7386,7 @@ if _active_main_tab == TAB_MODULES[10].LABEL:
                     )
 
 # ── AI Plot Builder ────────────────────────────────────────────────────────────
-if _active_main_tab == TAB_MODULES[11].LABEL:
+if _active_main_tab == TAB_AI_PLOT_BUILDER.LABEL:
     st.header("AI Plot Builder")
     st.caption(
         "Describe a plot in plain English and Claude will write the code to render it. "
