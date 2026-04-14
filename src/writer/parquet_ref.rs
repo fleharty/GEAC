@@ -53,6 +53,7 @@ fn ref_base_schema() -> Arc<Schema> {
         Field::new("label1", DataType::Utf8, true),
         Field::new("label2", DataType::Utf8, true),
         Field::new("label3", DataType::Utf8, true),
+        Field::new("timepoint", DataType::Utf8, true),
         Field::new("on_target", DataType::Boolean, true),
         Field::new("gene", DataType::Utf8, true),
         Field::new("homopolymer_len", DataType::Int32, true),
@@ -128,6 +129,12 @@ fn records_to_batch(records: &[RefBase], schema: Arc<Schema>) -> Result<RecordBa
             .map(|r| r.label3.as_deref())
             .collect::<Vec<_>>(),
     ));
+    let timepoint: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.timepoint.as_deref())
+            .collect::<Vec<_>>(),
+    ));
     let on_target: ArrayRef = Arc::new(BooleanArray::from(
         records.iter().map(|r| r.on_target).collect::<Vec<_>>(),
     ));
@@ -180,6 +187,7 @@ fn records_to_batch(records: &[RefBase], schema: Arc<Schema>) -> Result<RecordBa
             label1,
             label2,
             label3,
+            timepoint,
             on_target,
             gene,
             homopolymer_len,

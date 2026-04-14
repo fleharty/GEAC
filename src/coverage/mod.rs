@@ -419,6 +419,7 @@ struct BinAccumulator {
     label1: Option<String>,
     label2: Option<String>,
     label3: Option<String>,
+    timepoint: Option<String>,
 }
 
 impl BinAccumulator {
@@ -463,6 +464,7 @@ impl BinAccumulator {
             label1: None,
             label2: None,
             label3: None,
+            timepoint: None,
         }
     }
 
@@ -527,6 +529,7 @@ impl BinAccumulator {
         self.label1 = r.label1.clone();
         self.label2 = r.label2.clone();
         self.label3 = r.label3.clone();
+        self.timepoint = r.timepoint.clone();
     }
 
     fn accumulate(&mut self, r: &CoverageRecord) {
@@ -647,6 +650,7 @@ impl BinAccumulator {
             label1: self.label1.clone(),
             label2: self.label2.clone(),
             label3: self.label3.clone(),
+            timepoint: self.timepoint.clone(),
         }
     }
 }
@@ -777,6 +781,7 @@ impl IntervalAccumulator {
             label1: args.label1.clone(),
             label2: args.label2.clone(),
             label3: args.label3.clone(),
+            timepoint: args.timepoint.clone(),
         }
     }
 }
@@ -1035,6 +1040,7 @@ fn build_record(
         label1: args.label1.clone(),
         label2: args.label2.clone(),
         label3: args.label3.clone(),
+        timepoint: args.timepoint.clone(),
     }
 }
 
@@ -1088,6 +1094,7 @@ fn build_zero_record(
         label1: args.label1.clone(),
         label2: args.label2.clone(),
         label3: args.label3.clone(),
+        timepoint: args.timepoint.clone(),
     }
 }
 

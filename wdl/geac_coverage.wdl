@@ -52,6 +52,7 @@ workflow GeacCoverage {
         Array[String]? labels1       # optional; per-sample free-text label 1
         Array[String]? labels2       # optional; per-sample free-text label 2
         Array[String]? labels3       # optional; per-sample free-text label 3
+        Array[String]? timepoints    # optional; per-sample timepoint label for longitudinal studies
 
         # Shared inputs
         File   reference_fasta
@@ -99,6 +100,9 @@ workflow GeacCoverage {
         if (defined(labels3)) {
             String this_label3 = select_first([labels3])[i]
         }
+        if (defined(timepoints)) {
+            String this_timepoint = select_first([timepoints])[i]
+        }
         String this_read_type = if defined(read_types) then select_first([read_types])[i] else "duplex"
         String this_pipeline  = if defined(pipelines)  then select_first([pipelines])[i]  else "fgbio"
 
@@ -115,6 +119,7 @@ workflow GeacCoverage {
                 label1                = this_label1,
                 label2                = this_label2,
                 label3                = this_label3,
+                timepoint             = this_timepoint,
                 targets               = targets,
                 emit_intervals        = emit_intervals,
                 gene_annotations      = gene_annotations,
@@ -171,6 +176,7 @@ task Coverage {
         String? label1
         String? label2
         String? label3
+        String? timepoint
         File?   targets
         Boolean emit_intervals
         File?   gene_annotations
@@ -217,6 +223,7 @@ task Coverage {
             ~{"--label1 "           + label1} \
             ~{"--label2 "           + label2} \
             ~{"--label3 "           + label3} \
+            ~{"--timepoint "        + timepoint} \
             ~{"--targets "          + targets} \
             ~{"--gene-annotations " + gene_annotations} \
             ~{"--region "           + region} \

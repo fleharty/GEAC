@@ -91,6 +91,7 @@ MAIN_FILTER_KEYS = (
     "label1_sel",
     "label2_sel",
     "label3_sel",
+    "timepoint_sel",
     "variant_sel",
     "vaf_range",
     "min_alt",
@@ -163,6 +164,7 @@ MAIN_FILTER_STATE = FilterState(
         "label1_sel": [],
         "label2_sel": [],
         "label3_sel": [],
+        "timepoint_sel": [],
         "variant_sel": ["SNV", "insertion", "deletion"],
         "vaf_range": (0.0, 1.0),
         "min_alt": 1,
@@ -202,6 +204,7 @@ COVERAGE_FILTER_KEYS = (
     "cov_label1_sel",
     "cov_label2_sel",
     "cov_label3_sel",
+    "cov_timepoint_sel",
 )
 
 COVERAGE_FILTER_STATE = FilterState(keys=COVERAGE_FILTER_KEYS)

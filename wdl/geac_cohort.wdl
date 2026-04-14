@@ -25,6 +25,7 @@ version 1.0
 ##   labels1                 - (optional) per-sample free-text label 1 (e.g. tissue type)
 ##   labels2                 - (optional) per-sample free-text label 2 (e.g. library prep method)
 ##   labels3                 - (optional) per-sample free-text label 3 (e.g. sequencer type)
+##   timepoints              - (optional) per-sample timepoint label for longitudinal studies (e.g. "T0", "week12")
 ##   gnomad                  - (optional) bgzip+tabix-indexed gnomAD VCF/BCF for AF annotation
 ##   gnomad_index            - (optional) Corresponding .tbi / .csi index
 ##   gnomad_af_field         - INFO field to use as allele frequency (default "AF")
@@ -80,6 +81,7 @@ workflow GeacCohort {
         Array[String]? labels1         # optional; per-sample free-text label 1
         Array[String]? labels2         # optional; per-sample free-text label 2
         Array[String]? labels3         # optional; per-sample free-text label 3
+        Array[String]? timepoints      # optional; per-sample timepoint label for longitudinal studies
 
         File?   gnomad
         File?   gnomad_index
@@ -153,6 +155,9 @@ workflow GeacCohort {
         if (defined(labels3)) {
             String this_label3 = select_first([labels3])[i]
         }
+        if (defined(timepoints)) {
+            String this_timepoint = select_first([timepoints])[i]
+        }
 
         call Collect {
             input:
@@ -166,6 +171,7 @@ workflow GeacCohort {
                 label1                = this_label1,
                 label2                = this_label2,
                 label3                = this_label3,
+                timepoint             = this_timepoint,
                 sample_id             = this_sample_id,
                 variants_tsv          = this_variants_tsv,
                 vcf                   = this_vcf,
@@ -258,6 +264,9 @@ workflow GeacCohort {
                 if (defined(labels3)) {
                     String this_rs_label3 = select_first([labels3])[i]
                 }
+                if (defined(timepoints)) {
+                    String this_rs_timepoint = select_first([timepoints])[i]
+                }
 
                 call CollectRefSites {
                     input:
@@ -272,6 +281,7 @@ workflow GeacCohort {
                         label1                = this_rs_label1,
                         label2                = this_rs_label2,
                         label3                = this_rs_label3,
+                        timepoint             = this_rs_timepoint,
                         sample_id             = this_rs_sample_id,
                         gnomad                = gnomad,
                         gnomad_index          = gnomad_index,
@@ -380,6 +390,7 @@ task Collect {
         String? label1
         String? label2
         String? label3
+        String? timepoint
         File?   variants_tsv
         File?   vcf
         File?   vcf_index
@@ -426,6 +437,7 @@ task Collect {
             ~{"--label1 "           + label1} \
             ~{"--label2 "           + label2} \
             ~{"--label3 "           + label3} \
+            ~{"--timepoint "        + timepoint} \
             ~{"--vcf "              + vcf} \
             ~{"--variants-tsv "     + variants_tsv} \
             ~{"--gnomad "           + gnomad} \
@@ -584,6 +596,7 @@ task CollectRefSites {
         String? label1
         String? label2
         String? label3
+        String? timepoint
         File?   gnomad
         File?   gnomad_index
         String  gnomad_af_field
@@ -627,6 +640,7 @@ task CollectRefSites {
             ~{"--label1 "           + label1} \
             ~{"--label2 "           + label2} \
             ~{"--label3 "           + label3} \
+            ~{"--timepoint "        + timepoint} \
             ~{"--gnomad "           + gnomad} \
             ~{if defined(gnomad) then "--gnomad-af-field " + gnomad_af_field else ""} \
             ~{"--gene-annotations " + gene_annotations} \

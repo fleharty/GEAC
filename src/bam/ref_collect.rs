@@ -181,6 +181,7 @@ pub fn collect_ref_bases(
                 label1: args.label1.clone(),
                 label2: args.label2.clone(),
                 label3: args.label3.clone(),
+                timepoint: args.timepoint.clone(),
                 on_target,
                 gene,
                 homopolymer_len,

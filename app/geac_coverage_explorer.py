@@ -77,10 +77,11 @@ _has_gene      = "gene" in _cols
 _has_on_target = "on_target" in _cols
 _has_bin_n     = "bin_n" in _cols
 _has_intervals = data_source.is_duckdb and "coverage_intervals" in data_source.available_tables
-_has_batch     = "batch"  in _cols
-_has_label1    = "label1" in _cols
-_has_label2    = "label2" in _cols
-_has_label3    = "label3" in _cols
+_has_batch     = "batch"     in _cols
+_has_label1    = "label1"    in _cols
+_has_label2    = "label2"    in _cols
+_has_label3    = "label3"    in _cols
+_has_timepoint = "timepoint" in _cols
 
 # ── Sidebar filters ────────────────────────────────────────────────────────────
 _hdr_col, _btn_col = st.sidebar.columns([2, 1])
@@ -133,6 +134,11 @@ if _has_label3:
     cov_label3_sel = _label_multiselect("label3", "Label 3 (blank = all)", "cov_label3_sel")
 else:
     cov_label3_sel = []
+
+if _has_timepoint:
+    cov_timepoint_sel = _label_multiselect("timepoint", "Timepoint (blank = all)", "cov_timepoint_sel")
+else:
+    cov_timepoint_sel = []
 
 # ── Manifest (IGV) ─────────────────────────────────────────────────────────────
 st.sidebar.divider()
@@ -205,10 +211,11 @@ def _filter_clauses(extra: list[str] | None = None) -> list[str]:
         if sel:
             vals = ", ".join(f"'{v.replace(chr(39), chr(39)*2)}'" for v in sel)
             clauses.append(f"{col} IN ({vals})")
-    _in_clause("batch",  cov_batch_sel)
-    _in_clause("label1", cov_label1_sel)
-    _in_clause("label2", cov_label2_sel)
-    _in_clause("label3", cov_label3_sel)
+    _in_clause("batch",     cov_batch_sel)
+    _in_clause("label1",    cov_label1_sel)
+    _in_clause("label2",    cov_label2_sel)
+    _in_clause("label3",    cov_label3_sel)
+    _in_clause("timepoint", cov_timepoint_sel)
     if extra:
         clauses.extend(extra)
     return clauses

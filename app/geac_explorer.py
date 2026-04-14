@@ -222,6 +222,7 @@ _alt_reads_has_batch     = _has_alt_reads_cols("batch")
 _alt_reads_has_label1    = _has_alt_reads_cols("label1")
 _alt_reads_has_label2    = _has_alt_reads_cols("label2")
 _alt_reads_has_label3    = _has_alt_reads_cols("label3")
+_alt_reads_has_timepoint = _has_alt_reads_cols("timepoint")
 
 
 def _alt_reads_meta_join(alias: str) -> str:
@@ -365,7 +366,7 @@ _schema_cols = set(data_source.schema_cols)
 # Cache result — column presence doesn't change during a session.
 if "_cached_optional_cols" not in st.session_state:
     st.session_state["_cached_optional_cols"] = data_source.has_non_null_batch([
-        "batch", "label1", "label2", "label3", "gene",
+        "batch", "label1", "label2", "label3", "timepoint", "gene",
         "variant_filter", "gnomad_af", "homopolymer_len",
         "trinuc_context", "on_target", "variant_called",
         "overlap_alt_agree",
@@ -422,6 +423,16 @@ if _has_data("label3"):
     label3_sel = st.sidebar.multiselect("Label 3 (blank = all)", _label3_vals, key="label3_sel")
 else:
     label3_sel = []
+
+if _has_data("timepoint"):
+    if "_cached_timepoint_vals" not in st.session_state:
+        st.session_state["_cached_timepoint_vals"] = con.execute(f"SELECT DISTINCT timepoint FROM {table_expr} WHERE timepoint IS NOT NULL ORDER BY timepoint").df()["timepoint"].tolist()
+    _timepoint_vals = st.session_state["_cached_timepoint_vals"]
+    if "timepoint_sel" not in st.session_state:
+        st.session_state["timepoint_sel"] = []
+    timepoint_sel = st.sidebar.multiselect("Timepoint (blank = all)", _timepoint_vals, key="timepoint_sel")
+else:
+    timepoint_sel = []
 
 _genes_available = _has_data("gene")
 if "variant_sel" not in st.session_state:
@@ -1279,6 +1290,9 @@ if _n_samples_total > 1 and (_sr_lo > 1 or _sr_hi < _n_samples_total):
     if label3_sel:
         _scope_parts.append("label3 IN ({})".format(
             ", ".join(f"'{_sql_str(v)}'" for v in label3_sel)))
+    if timepoint_sel:
+        _scope_parts.append("timepoint IN ({})".format(
+            ", ".join(f"'{_sql_str(v)}'" for v in timepoint_sel)))
     if "on_target" in _schema_cols:
         if on_target_sel == "On target":
             _scope_parts.append("on_target = true")
@@ -1306,6 +1320,9 @@ if label2_sel:
 if label3_sel:
     l_list = ", ".join(f"'{_sql_str(v)}'" for v in label3_sel)
     conditions.append(f"label3 IN ({l_list})")
+if timepoint_sel:
+    t_list = ", ".join(f"'{_sql_str(v)}'" for v in timepoint_sel)
+    conditions.append(f"timepoint IN ({t_list})")
 if variant_sel:
     t_list = ", ".join(f"'{_sql_str(t)}'" for t in variant_sel)
     conditions.append(f"variant_type IN ({t_list})")
@@ -1472,6 +1489,7 @@ def _build_active_filter_provenance(
     _append_provenance_row(rows, "filters", "label1", label1_sel, active=bool(label1_sel))
     _append_provenance_row(rows, "filters", "label2", label2_sel, active=bool(label2_sel))
     _append_provenance_row(rows, "filters", "label3", label3_sel, active=bool(label3_sel))
+    _append_provenance_row(rows, "filters", "timepoint", timepoint_sel, active=bool(timepoint_sel))
     _append_provenance_row(
         rows,
         "filters",
@@ -3832,6 +3850,8 @@ if _active_main_tab == TAB_STRAND_BIAS.LABEL:
         _color_options.append("Label 2")
     if _has_data("label3"):
         _color_options.append("Label 3")
+    if _has_data("timepoint"):
+        _color_options.append("Timepoint")
     if _has_data("on_target"):
         _color_options.append("On target")
     if _has_data("variant_called"):
@@ -3845,6 +3865,7 @@ if _active_main_tab == TAB_STRAND_BIAS.LABEL:
         "label1"         if _has_data("label1")         else None,
         "label2"         if _has_data("label2")         else None,
         "label3"         if _has_data("label3")         else None,
+        "timepoint"      if _has_data("timepoint")      else None,
         "on_target"      if _has_data("on_target")      else None,
         "variant_called" if _has_data("variant_called") else None,
         "gene"           if _genes_available             else None,
@@ -3976,6 +3997,7 @@ if _active_main_tab == TAB_STRAND_BIAS.LABEL:
         "Label 1":        ("label1:N",         "Label 1",        alt.Scale()),
         "Label 2":        ("label2:N",         "Label 2",        alt.Scale()),
         "Label 3":        ("label3:N",         "Label 3",        alt.Scale()),
+        "Timepoint":      ("timepoint:N",      "Timepoint",      alt.Scale()),
         "On target":      ("on_target:N",      "On target",
                            alt.Scale(domain=[True, False], range=["#2ca02c", "#d62728"])),
         "Called variant": ("variant_called:N", "Called variant",
@@ -4328,6 +4350,8 @@ if _active_main_tab == TAB_READS.LABEL:
             _dfe_color_options.append("Label 2")
         if _alt_reads_has_label3:
             _dfe_color_options.append("Label 3")
+        if _alt_reads_has_timepoint:
+            _dfe_color_options.append("Timepoint")
         _dfe_color_by = _dfe_ctrl1.radio(
             "Color by", _dfe_color_options,
             horizontal=True, key="dfe_color_by",
@@ -4340,8 +4364,8 @@ if _active_main_tab == TAB_READS.LABEL:
         _dfe_by_sample = _dfe_color_by == "Sample"
         _dfe_by_batch  = _dfe_color_by == "Batch"
         _dfe_by_pipeline = _dfe_color_by == "Pipeline"
-        _dfe_by_label  = _dfe_color_by in ("Label 1", "Label 2", "Label 3")
-        _dfe_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_dfe_color_by)
+        _dfe_by_label  = _dfe_color_by in ("Label 1", "Label 2", "Label 3", "Timepoint")
+        _dfe_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3", "Timepoint": "timepoint"}.get(_dfe_color_by)
         _dfe_normalize = _dfe_y_mode == "Fraction"
         _DFE_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
         if _dfe_by_batch and _dfe_by_read:
@@ -4463,6 +4487,8 @@ if _active_main_tab == TAB_READS.LABEL:
             _bq_color_options.append("Label 2")
         if _alt_reads_has_label3:
             _bq_color_options.append("Label 3")
+        if _alt_reads_has_timepoint:
+            _bq_color_options.append("Timepoint")
         _bq_color_by = _bq_ctrl1.radio(
             "Color by", _bq_color_options,
             horizontal=True, key="bq_color_by",
@@ -4470,8 +4496,8 @@ if _active_main_tab == TAB_READS.LABEL:
         _bq_by_read   = _bq_ctrl2.checkbox("Show R1/R2", value=False, key="bq_show_r1r2")
         _bq_by_sample = _bq_color_by == "Sample"
         _bq_by_batch  = _bq_color_by == "Batch"
-        _bq_by_label  = _bq_color_by in ("Label 1", "Label 2", "Label 3")
-        _bq_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_bq_color_by)
+        _bq_by_label  = _bq_color_by in ("Label 1", "Label 2", "Label 3", "Timepoint")
+        _bq_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3", "Timepoint": "timepoint"}.get(_bq_color_by)
         _BQ_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
         if _bq_by_batch and _bq_by_read:
             _bq_source      = _r_join
@@ -5178,14 +5204,16 @@ if _active_main_tab == TAB_READS.LABEL:
                 _ins_color_options.append("Label 2")
             if _alt_reads_has_label3:
                 _ins_color_options.append("Label 3")
+            if _alt_reads_has_timepoint:
+                _ins_color_options.append("Timepoint")
             _ins_color_by = st.radio(
                 "Color by", _ins_color_options,
                 horizontal=True, key="ins_color_by",
             )
             _ins_by_sample = _ins_color_by == "Sample"
             _ins_by_batch  = _ins_color_by == "Batch"
-            _ins_by_label  = _ins_color_by in ("Label 1", "Label 2", "Label 3")
-            _ins_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_ins_color_by)
+            _ins_by_label  = _ins_color_by in ("Label 1", "Label 2", "Label 3", "Timepoint")
+            _ins_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3", "Timepoint": "timepoint"}.get(_ins_color_by)
             _ins_label_col = (
                 "sample_id"   if _ins_by_sample else
                 "batch"       if _ins_by_batch  else
@@ -5294,6 +5322,8 @@ if _active_main_tab == TAB_READS.LABEL:
                 _af_ins_color_options.append("Label 2")
             if _alt_reads_has_label3:
                 _af_ins_color_options.append("Label 3")
+            if _alt_reads_has_timepoint:
+                _af_ins_color_options.append("Timepoint")
             _af_ins_ctrl1, _af_ins_ctrl2 = st.columns(2)
             _af_ins_color_by = _af_ins_ctrl1.radio(
                 "Color by", _af_ins_color_options,
@@ -5305,8 +5335,8 @@ if _active_main_tab == TAB_READS.LABEL:
             )
             _af_ins_by_sample = _af_ins_color_by == "Sample"
             _af_ins_by_batch  = _af_ins_color_by == "Batch"
-            _af_ins_by_label  = _af_ins_color_by in ("Label 1", "Label 2", "Label 3")
-            _af_ins_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_af_ins_color_by)
+            _af_ins_by_label  = _af_ins_color_by in ("Label 1", "Label 2", "Label 3", "Timepoint")
+            _af_ins_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3", "Timepoint": "timepoint"}.get(_af_ins_color_by)
             _af_ins_group_col = (
                 "sample_id"       if _af_ins_by_sample else
                 "batch"           if _af_ins_by_batch  else
@@ -5499,6 +5529,8 @@ if _active_main_tab == TAB_DUPLEX_SIMPLEX.LABEL:
             _fs_color_options.append("Label 2")
         if _alt_reads_has_label3:
             _fs_color_options.append("Label 3")
+        if _alt_reads_has_timepoint:
+            _fs_color_options.append("Timepoint")
         _fs_color_by = _fs_ctrl_col1.radio(
             "Color by", _fs_color_options,
             horizontal=True, key="fs_color_by",
@@ -5509,8 +5541,8 @@ if _active_main_tab == TAB_DUPLEX_SIMPLEX.LABEL:
         )
         _fs_by_sample = _fs_color_by == "Sample"
         _fs_by_batch  = _fs_color_by == "Batch"
-        _fs_by_label  = _fs_color_by in ("Label 1", "Label 2", "Label 3")
-        _fs_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3"}.get(_fs_color_by)
+        _fs_by_label  = _fs_color_by in ("Label 1", "Label 2", "Label 3", "Timepoint")
+        _fs_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3", "Timepoint": "timepoint"}.get(_fs_color_by)
         _fs_normalize = _fs_y_mode == "Fraction"
 
         _fs_group_col = (

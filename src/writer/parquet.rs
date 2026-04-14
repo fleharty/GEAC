@@ -61,6 +61,7 @@ fn alt_base_schema() -> Arc<Schema> {
         Field::new("label1", DataType::Utf8, true),
         Field::new("label2", DataType::Utf8, true),
         Field::new("label3", DataType::Utf8, true),
+        Field::new("timepoint", DataType::Utf8, true),
         Field::new("input_checksum_sha256", DataType::Utf8, true),
         Field::new("variant_called", DataType::Boolean, true),
         Field::new("variant_filter", DataType::Utf8, true),
@@ -165,6 +166,12 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
             .map(|r| r.label3.as_deref())
             .collect::<Vec<_>>(),
     ));
+    let timepoint: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.timepoint.as_deref())
+            .collect::<Vec<_>>(),
+    ));
     let input_checksum_sha256: ArrayRef = Arc::new(StringArray::from(
         records
             .iter()
@@ -266,6 +273,7 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
             label1,
             label2,
             label3,
+            timepoint,
             input_checksum_sha256,
             variant_called,
             variant_filter,

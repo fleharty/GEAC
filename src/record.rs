@@ -102,6 +102,8 @@ pub struct AltBase {
     pub label2: Option<String>,
     /// Generic sample label 3 (user-defined; e.g. sequencer type).
     pub label3: Option<String>,
+    /// Timepoint label for longitudinal / serial-sample studies (user-defined; e.g. "T0", "week12").
+    pub timepoint: Option<String>,
     /// SHA-256 of the input BAM/CRAM when collect was run with --input-checksum-sha256.
     pub input_checksum_sha256: Option<String>,
 
@@ -200,6 +202,7 @@ pub struct RefBase {
     pub label1: Option<String>,
     pub label2: Option<String>,
     pub label3: Option<String>,
+    pub timepoint: Option<String>,
     pub on_target: Option<bool>,
     pub gene: Option<String>,
     pub homopolymer_len: Option<i32>,
@@ -374,6 +377,8 @@ pub struct CoverageRecord {
     pub label2: Option<String>,
     /// Generic sample label 3 (user-defined; e.g. sequencer type).
     pub label3: Option<String>,
+    /// Timepoint label for longitudinal / serial-sample studies (user-defined; e.g. "T0", "week12").
+    pub timepoint: Option<String>,
 }
 
 /// One record per alt-supporting read at a locus.
@@ -392,6 +397,7 @@ pub struct AltRead {
     pub label1: Option<String>,
     pub label2: Option<String>,
     pub label3: Option<String>,
+    pub timepoint: Option<String>,
     /// 1-based sequencing cycle (= query position + 1)
     pub cycle: i32,
     pub read_length: i32,
@@ -474,4 +480,5 @@ pub struct IntervalRecord {
     pub label1: Option<String>,
     pub label2: Option<String>,
     pub label3: Option<String>,
+    pub timepoint: Option<String>,
 }

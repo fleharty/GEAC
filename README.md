@@ -78,6 +78,7 @@ Optional flags:
 | `--label1` | — | Free-text sample label 1 stored as `label1` column (e.g. tissue type) |
 | `--label2` | — | Free-text sample label 2 stored as `label2` column (e.g. library prep method) |
 | `--label3` | — | Free-text sample label 3 stored as `label3` column (e.g. sequencer type) |
+| `--timepoint` | — | Timepoint label for longitudinal / serial-sample studies stored as `timepoint` column (e.g. `T0`, `baseline`, `week12`). Values are compared alphabetically; use zero-padded numbers or ISO-8601 dates for correct sort order. |
 | `--vcf` | — | Annotate loci with variant calling status from a VCF/BCF. Mutually exclusive with `--variants-tsv` |
 | `--variants-tsv` | — | TSV variant list (columns: chrom, pos_start, pos_end, ref, var; 0-based). Alternative to `--vcf` |
 | `--gnomad` | — | bgzip+tabix-indexed gnomAD VCF/BCF; adds `gnomad_af` float column (null = not in gnomAD) |
@@ -231,8 +232,33 @@ geac collect \
 ```
 
 Labels are stored as nullable strings alongside the existing `batch` column. They are
-completely user-defined — use them for tissue type, library prep, sequencer, timepoint,
-or any other per-sample dimension you want to filter or group by in the Explorer.
+completely user-defined — use them for tissue type, library prep, sequencer, or any
+other per-sample dimension you want to filter or group by in the Explorer.
+
+#### Longitudinal / serial-sample studies
+
+For longitudinal studies (multiple timepoints per patient), use `--timepoint` to tag
+each sample with its collection point:
+
+```bash
+geac collect \
+  --input patient001_baseline.bam \
+  --reference hg38.fa \
+  --output patient001_T0.parquet \
+  --timepoint "T0"
+
+geac collect \
+  --input patient001_week12.bam \
+  --reference hg38.fa \
+  --output patient001_week12.parquet \
+  --timepoint "week12"
+```
+
+The `timepoint` column is stored as a nullable string. Values are compared
+alphabetically, so use zero-padded numbers (`T01`, `T02`, ...) or ISO-8601 dates
+(`2024-01-15`) if you need correct sort order. The Explorer sidebar lets you filter
+to one or more timepoints, making it easy to compare variant landscapes across
+serial samples from the same patient or cohort.
 
 #### Multi-nucleotide variants (MNVs)
 

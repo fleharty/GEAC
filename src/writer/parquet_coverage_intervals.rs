@@ -103,6 +103,7 @@ fn intervals_schema() -> Arc<Schema> {
         Field::new("label1", DataType::Utf8, true),
         Field::new("label2", DataType::Utf8, true),
         Field::new("label3", DataType::Utf8, true),
+        Field::new("timepoint", DataType::Utf8, true),
     ]))
 }
 
@@ -226,6 +227,12 @@ fn records_to_batch(records: &[IntervalRecord], schema: Arc<Schema>) -> Result<R
             .map(|r| r.label3.as_deref())
             .collect::<Vec<_>>(),
     ));
+    let timepoint: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.timepoint.as_deref())
+            .collect::<Vec<_>>(),
+    ));
 
     RecordBatch::try_new(
         schema,
@@ -262,6 +269,7 @@ fn records_to_batch(records: &[IntervalRecord], schema: Arc<Schema>) -> Result<R
             label1,
             label2,
             label3,
+            timepoint,
         ],
     )
     .context("failed to create Arrow record batch")

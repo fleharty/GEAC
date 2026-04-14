@@ -18,6 +18,7 @@ version 1.0
 ##   label1               - (optional) free-text sample label 1 (e.g. tissue type)
 ##   label2               - (optional) free-text sample label 2 (e.g. library prep method)
 ##   label3               - (optional) free-text sample label 3 (e.g. sequencer type)
+##   timepoint            - (optional) timepoint label for longitudinal studies (e.g. "T0", "week12")
 ##   vcf                  - (optional) VCF/BCF for variant call annotation
 ##   vcf_index            - (optional) Corresponding .tbi / .csi index
 ##   variants_tsv         - (optional) TSV variant list (chrom/pos_start/pos_end/ref/var, 0-based)
@@ -64,6 +65,7 @@ workflow GeacCollect {
         String? label1
         String? label2
         String? label3
+        String? timepoint
         File?   vcf
         File?   vcf_index
         File?   variants_tsv
@@ -103,6 +105,7 @@ workflow GeacCollect {
             label1                = label1,
             label2                = label2,
             label3                = label3,
+            timepoint             = timepoint,
             vcf                   = vcf,
             vcf_index             = vcf_index,
             variants_tsv          = variants_tsv,
@@ -149,6 +152,7 @@ task Collect {
         String? label1
         String? label2
         String? label3
+        String? timepoint
         File?   vcf
         File?   vcf_index
         File?   variants_tsv
@@ -197,6 +201,7 @@ task Collect {
             ~{"--label1 "           + label1} \
             ~{"--label2 "           + label2} \
             ~{"--label3 "           + label3} \
+            ~{"--timepoint "        + timepoint} \
             ~{"--vcf "              + vcf} \
             ~{"--variants-tsv "     + variants_tsv} \
             ~{"--gnomad "           + gnomad} \

@@ -46,6 +46,7 @@ fn alt_read_schema() -> Arc<Schema> {
         Field::new("label1", DataType::Utf8, true),
         Field::new("label2", DataType::Utf8, true),
         Field::new("label3", DataType::Utf8, true),
+        Field::new("timepoint", DataType::Utf8, true),
         Field::new("cycle", DataType::Int32, false),
         Field::new("read_length", DataType::Int32, false),
         Field::new("is_read1", DataType::Boolean, false),
@@ -93,6 +94,9 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
     ));
     let label3: ArrayRef = Arc::new(StringArray::from(
         records.iter().map(|r| r.label3.as_deref()).collect::<Vec<_>>(),
+    ));
+    let timepoint: ArrayRef = Arc::new(StringArray::from(
+        records.iter().map(|r| r.timepoint.as_deref()).collect::<Vec<_>>(),
     ));
     let cycle: ArrayRef = Arc::new(Int32Array::from_iter_values(
         records.iter().map(|r| r.cycle),
@@ -159,6 +163,7 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
             label1,
             label2,
             label3,
+            timepoint,
             cycle,
             read_length,
             is_read1,

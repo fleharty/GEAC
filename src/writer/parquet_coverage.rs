@@ -129,6 +129,7 @@ fn coverage_schema(track_names: &[String]) -> Arc<Schema> {
         Field::new("label1", DataType::Utf8, true),
         Field::new("label2", DataType::Utf8, true),
         Field::new("label3", DataType::Utf8, true),
+        Field::new("timepoint", DataType::Utf8, true),
     ]);
 
     Arc::new(Schema::new(fields))
@@ -270,6 +271,12 @@ fn records_to_batch(
             .map(|r| r.label3.as_deref())
             .collect::<Vec<_>>(),
     ));
+    let timepoint: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.timepoint.as_deref())
+            .collect::<Vec<_>>(),
+    ));
 
     // Build the column list in schema order.
     let mut columns: Vec<ArrayRef> = vec![
@@ -323,6 +330,7 @@ fn records_to_batch(
         label1,
         label2,
         label3,
+        timepoint,
     ]);
 
     RecordBatch::try_new(schema, columns).context("failed to create Arrow record batch")

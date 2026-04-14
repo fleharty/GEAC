@@ -82,6 +82,14 @@ pub struct CollectArgs {
     #[arg(long)]
     pub label3: Option<String>,
 
+    /// Optional timepoint label for longitudinal / serial-sample studies.
+    /// Stored as a nullable string column `timepoint` in the output Parquet.
+    /// Values are arbitrary strings (e.g. "T0", "baseline", "week12") and are
+    /// compared alphabetically in the Explorer; use zero-padded numbers or
+    /// ISO-8601 dates for correct sort order.
+    #[arg(long)]
+    pub timepoint: Option<String>,
+
     /// Output Parquet file path.
     /// When --reads-output is also set, this path is used as a stem:
     /// e.g. "sample.parquet" → "sample.locus.parquet" + "sample.reads.parquet".
@@ -425,6 +433,11 @@ pub struct CoverageArgs {
     /// Stored as a nullable string column `label3` in the output Parquet.
     #[arg(long)]
     pub label3: Option<String>,
+
+    /// Optional timepoint label for longitudinal / serial-sample studies.
+    /// Stored as a nullable string column `timepoint` in the output Parquet.
+    #[arg(long)]
+    pub timepoint: Option<String>,
 
     /// Output Parquet file path (should end in .coverage.parquet)
     #[arg(short, long)]
