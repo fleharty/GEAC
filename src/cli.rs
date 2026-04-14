@@ -154,15 +154,6 @@ pub struct CollectArgs {
     #[arg(long)]
     pub targets: Option<PathBuf>,
 
-    /// Emit reference-site records for target positions where this sample has no alt reads.
-    /// Requires --targets.  Produces two additional Parquet files alongside the locus output:
-    ///   {stem}.ref_bases.parquet  — one locus-level record per ref-only target position
-    ///   {stem}.ref_reads.parquet  — one record per read covering each ref-only position
-    /// These tables enable carrier vs non-carrier depth/family-size comparisons at the same
-    /// loci.  Use `geac merge` to load them into the `ref_bases` and `ref_reads` DuckDB tables.
-    #[arg(long)]
-    pub emit_ref_sites: bool,
-
     /// Minimum base quality to consider a base
     #[arg(long, default_value_t = 1)]
     pub min_base_qual: u8,

@@ -4,8 +4,6 @@
     "normal_evidence",
     "pon_evidence",
     "coverage",
-    "ref_bases",
-    "ref_reads",
     "sample_metrics"
   ],
   "tables": {
@@ -197,65 +195,6 @@
         "rev_depth"
       ],
       "optional_columns": []
-    },
-    "ref_bases": {
-      "required_columns": [
-        "sample_id",
-        "chrom",
-        "pos",
-        "ref_allele",
-        "total_depth",
-        "fwd_depth",
-        "rev_depth",
-        "ref_count",
-        "fwd_ref_count",
-        "rev_ref_count",
-        "overlap_depth",
-        "overlap_ref_agree",
-        "read_type",
-        "pipeline"
-      ],
-      "optional_columns": [
-        "batch",
-        "label1",
-        "label2",
-        "label3",
-        "timepoint",
-        "on_target",
-        "gene",
-        "homopolymer_len",
-        "str_period",
-        "str_len",
-        "gnomad_af",
-        "input_checksum_sha256"
-      ]
-    },
-    "ref_reads": {
-      "required_columns": [
-        "sample_id",
-        "chrom",
-        "pos",
-        "cycle",
-        "read_length",
-        "is_read1",
-        "base_qual",
-        "map_qual",
-        "n_before_alt",
-        "n_after_alt",
-        "n_n_before_alt",
-        "n_n_after_alt",
-        "leading_n_run_len",
-        "trailing_n_run_len"
-      ],
-      "optional_columns": [
-        "read_type",
-        "pipeline",
-        "ab_count",
-        "ba_count",
-        "family_size",
-        "insert_size",
-        "input_checksum_sha256"
-      ]
     },
     "sample_metrics": {
       "required_columns": [

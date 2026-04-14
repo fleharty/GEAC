@@ -42,8 +42,6 @@ version 1.0
 ##   docker_image            - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##
 ## Second-pass inputs (optional):
-##   emit_ref_sites          - Re-run geac collect with --emit-ref-sites at hom-alt loci to
-##                             produce ref_bases + ref_reads tables for bait-bias analysis (default false)
 ##   collect_locus_depth     - Lightweight depth-only second pass via geac locus-depth (default false)
 ##   second_pass_min_vaf     - Min VAF for loci exported in the second pass (default 0.9 = hom-alt)
 ##   second_pass_max_vaf     - (optional) Max VAF for loci to export
@@ -55,9 +53,7 @@ version 1.0
 ##   reads_parquets          - Per-sample reads Parquet files (empty when reads_output=false)
 ##   sample_metrics_parquets - Per-sample sample_metrics Parquet files (empty when targets absent)
 ##   cohort_db               - Merged cohort DuckDB from geac merge
-##   exported_loci_tsv       - TSV of exported loci (present when a second pass is enabled)
-##   ref_sites_parquets      - Per-sample ref_bases+ref_reads Parquets (present when emit_ref_sites=true)
-##   cohort_db_with_ref_sites - Final DuckDB with ref_bases/ref_reads tables (present when emit_ref_sites=true)
+##   exported_loci_tsv       - TSV of exported loci (present when collect_locus_depth is enabled)
 ##   locus_depth_parquets    - Per-sample locus-depth Parquets (present when collect_locus_depth=true)
 ##   cohort_db_with_locus_depth - DuckDB with locus_depth table (present when collect_locus_depth=true)
 
@@ -103,8 +99,7 @@ workflow GeacCohort {
 
         String cohort_name = "cohort"
 
-        # Second-pass options (both require input_bam_gs_paths)
-        Boolean emit_ref_sites               = false   # full-metric re-collect (ref_bases + ref_reads)
+        # Second-pass option
         Boolean collect_locus_depth          = false   # lightweight depth-only pass
         Float   second_pass_min_vaf          = 0.9
         Float?  second_pass_max_vaf
@@ -117,8 +112,6 @@ workflow GeacCohort {
         Int    collect_disk_gb         = 100
         Int    merge_memory_gb         = 16
         Int    merge_disk_gb           = 50
-        Int    ref_sites_memory_gb     = 8
-        Int    ref_sites_disk_gb       = 100
         Int    locus_depth_memory_gb   = 4
         Int    locus_depth_disk_gb     = 20
         Int    preemptible             = 2
@@ -213,11 +206,9 @@ workflow GeacCohort {
             preemptible  = preemptible,
     }
 
-    # ── Optional second passes ──────────────────────────────────────────────────
-    # A single ExportLoci call feeds both downstream paths when both are enabled.
-    if (emit_ref_sites || collect_locus_depth) {
+    # ── Optional second pass: lightweight locus-depth collection ──────────────
+    if (collect_locus_depth) {
 
-        # Export high-VAF loci from the cohort database (shared by both second-pass modes).
         call ExportLoci {
             input:
                 cohort_db     = Merge.cohort_db,
@@ -232,126 +223,40 @@ workflow GeacCohort {
                 preemptible   = preemptible,
         }
 
-        # ── emit_ref_sites: full-metric re-collect (ref_bases + ref_reads) ────────
-        if (emit_ref_sites) {
-
-            # Convert the loci TSV (chrom/pos 0-based) to a BED file for --targets.
-            call LociToBed {
-                input:
-                    loci_tsv     = ExportLoci.loci_tsv,
-                    cohort_name  = cohort_name,
-                    docker_image = docker_image,
-                    memory_gb    = 2,
-                    disk_gb      = 10,
-                    preemptible  = preemptible,
+        scatter (i in range(length(input_bams))) {
+            if (defined(sample_ids)) {
+                String this_ld_sample_id = select_first([sample_ids])[i]
             }
 
-            scatter (i in range(length(input_bams))) {
-                if (defined(sample_ids)) {
-                    String this_rs_sample_id = select_first([sample_ids])[i]
-                }
-                String this_rs_read_type = if defined(read_types) then select_first([read_types])[i] else "duplex"
-                String this_rs_pipeline  = if defined(pipelines)  then select_first([pipelines])[i]  else "fgbio"
-                if (defined(batches)) {
-                    String this_rs_batch  = select_first([batches])[i]
-                }
-                if (defined(labels1)) {
-                    String this_rs_label1 = select_first([labels1])[i]
-                }
-                if (defined(labels2)) {
-                    String this_rs_label2 = select_first([labels2])[i]
-                }
-                if (defined(labels3)) {
-                    String this_rs_label3 = select_first([labels3])[i]
-                }
-                if (defined(timepoints)) {
-                    String this_rs_timepoint = select_first([timepoints])[i]
-                }
-
-                call CollectRefSites {
-                    input:
-                        input_bam             = input_bams[i],
-                        input_bam_index       = input_bam_indices[i],
-                        reference_fasta       = reference_fasta,
-                        reference_fasta_index = reference_fasta_index,
-                        targets               = LociToBed.loci_bed,
-                        read_type             = this_rs_read_type,
-                        pipeline              = this_rs_pipeline,
-                        batch                 = this_rs_batch,
-                        label1                = this_rs_label1,
-                        label2                = this_rs_label2,
-                        label3                = this_rs_label3,
-                        timepoint             = this_rs_timepoint,
-                        sample_id             = this_rs_sample_id,
-                        gnomad                = gnomad,
-                        gnomad_index          = gnomad_index,
-                        gnomad_af_field       = gnomad_af_field,
-                        gene_annotations      = gene_annotations,
-                        repeat_window         = repeat_window,
-                        min_base_qual         = min_base_qual,
-                        min_map_qual          = min_map_qual,
-                        include_duplicates    = include_duplicates,
-                        include_secondary     = include_secondary,
-                        include_supplementary = include_supplementary,
-                        docker_image          = docker_image,
-                        memory_gb             = ref_sites_memory_gb,
-                        disk_gb               = ref_sites_disk_gb,
-                        preemptible           = preemptible,
-                }
-            }
-
-            # Merge ref_bases and ref_reads Parquets into the cohort DuckDB.
-            call MergeRefSites {
+            call LocusDepth {
                 input:
-                    cohort_db              = Merge.cohort_db,
-                    ref_bases_parquets     = flatten(CollectRefSites.ref_bases_parquets),
-                    ref_reads_parquets     = flatten(CollectRefSites.ref_reads_parquets),
-                    cohort_name            = cohort_name,
-                    docker_image           = docker_image,
-                    memory_gb              = merge_memory_gb,
-                    disk_gb                = merge_disk_gb,
-                    preemptible            = preemptible,
+                    input_bam             = input_bams[i],
+                    input_bam_index       = input_bam_indices[i],
+                    reference_fasta       = reference_fasta,
+                    reference_fasta_index = reference_fasta_index,
+                    loci_tsv              = ExportLoci.loci_tsv,
+                    sample_id             = this_ld_sample_id,
+                    min_map_qual          = min_map_qual,
+                    min_base_qual         = min_base_qual,
+                    include_duplicates    = include_duplicates,
+                    include_secondary     = include_secondary,
+                    include_supplementary = include_supplementary,
+                    docker_image          = docker_image,
+                    memory_gb             = locus_depth_memory_gb,
+                    disk_gb               = locus_depth_disk_gb,
+                    preemptible           = preemptible,
             }
         }
 
-        # ── collect_locus_depth: lightweight depth-only pass ──────────────────────
-        if (collect_locus_depth) {
-
-            scatter (i in range(length(input_bams))) {
-                if (defined(sample_ids)) {
-                    String this_ld_sample_id = select_first([sample_ids])[i]
-                }
-
-                call LocusDepth {
-                    input:
-                        input_bam             = input_bams[i],
-                        input_bam_index       = input_bam_indices[i],
-                        reference_fasta       = reference_fasta,
-                        reference_fasta_index = reference_fasta_index,
-                        loci_tsv              = ExportLoci.loci_tsv,
-                        sample_id             = this_ld_sample_id,
-                        min_map_qual          = min_map_qual,
-                        min_base_qual         = min_base_qual,
-                        include_duplicates    = include_duplicates,
-                        include_secondary     = include_secondary,
-                        include_supplementary = include_supplementary,
-                        docker_image          = docker_image,
-                        memory_gb             = locus_depth_memory_gb,
-                        disk_gb               = locus_depth_disk_gb,
-                        preemptible           = preemptible,
-                }
-            }
-
-            call MergeLocusDepth {
-                input:
-                    cohort_db            = Merge.cohort_db,
-                    locus_depth_parquets = LocusDepth.locus_depth_parquet,
-                    cohort_name          = cohort_name,
-                    docker_image         = docker_image,
-                    memory_gb            = merge_memory_gb,
-                    disk_gb              = merge_disk_gb,
-                    preemptible          = preemptible,
-            }
+        call MergeLocusDepth {
+            input:
+                cohort_db            = Merge.cohort_db,
+                locus_depth_parquets = LocusDepth.locus_depth_parquet,
+                cohort_name          = cohort_name,
+                docker_image         = docker_image,
+                memory_gb            = merge_memory_gb,
+                disk_gb              = merge_disk_gb,
+                preemptible          = preemptible,
         }
     }
 
@@ -361,13 +266,8 @@ workflow GeacCohort {
         Array[File] sample_metrics_parquets = all_sample_metrics_parquets
         File        cohort_db      = Merge.cohort_db
 
-        # Shared second-pass output (present when either second-pass mode is enabled)
-        File?        exported_loci_tsv             = ExportLoci.loci_tsv
-
-        # Ref-sites outputs (present only when emit_ref_sites = true)
-        File?        cohort_db_with_ref_sites      = MergeRefSites.merged_db
-
         # Locus-depth outputs (present only when collect_locus_depth = true)
+        File?        exported_loci_tsv             = ExportLoci.loci_tsv
         Array[File]? locus_depth_parquets          = LocusDepth.locus_depth_parquet
         File?        cohort_db_with_locus_depth    = MergeLocusDepth.merged_db
     }
@@ -541,164 +441,6 @@ task ExportLoci {
         docker:      docker_image
         memory:      memory_gb + " GB"
         cpu:         1
-        disks:       "local-disk " + disk_gb + " HDD"
-        preemptible: preemptible
-    }
-}
-
-task LociToBed {
-
-    input {
-        File   loci_tsv
-        String cohort_name
-
-        String docker_image
-        Int    memory_gb
-        Int    disk_gb
-        Int    preemptible
-    }
-
-    String output_bed = cohort_name + ".loci.bed"
-
-    command <<<
-        set -euo pipefail
-        # loci TSV has a header line (chrom\tpos, 0-based).
-        # BED format: chrom, start (0-based), end (exclusive) = pos + 1.
-        awk 'NR > 1 { print $1 "\t" $2 "\t" ($2 + 1) }' ~{loci_tsv} > ~{output_bed}
-    >>>
-
-    output {
-        File loci_bed = output_bed
-    }
-
-    runtime {
-        docker:      docker_image
-        memory:      memory_gb + " GB"
-        cpu:         1
-        disks:       "local-disk " + disk_gb + " HDD"
-        preemptible: preemptible
-    }
-}
-
-task CollectRefSites {
-
-    input {
-        File   input_bam
-        File   input_bam_index
-        File   reference_fasta
-        File   reference_fasta_index
-        File   targets              # BED of hom-alt loci from LociToBed
-        String read_type
-        String pipeline
-
-        String? sample_id
-        String? batch
-        String? label1
-        String? label2
-        String? label3
-        String? timepoint
-        File?   gnomad
-        File?   gnomad_index
-        String  gnomad_af_field
-        File?   gene_annotations
-        Int     repeat_window
-
-        Int     min_base_qual
-        Int     min_map_qual
-        Boolean include_duplicates
-        Boolean include_secondary
-        Boolean include_supplementary
-        # Note: input_checksum_sha256 is intentionally omitted — the BAM is accessed
-        # as a GCS URI via htslib HTTP range requests and cannot be read by Rust's
-        # File::open for SHA-256 computation.
-
-        String docker_image
-        Int    memory_gb
-        Int    disk_gb
-        Int    preemptible
-    }
-
-    # Derive a stable stem from the BAM path basename.
-    String bam_stem   = sub(basename(input_bam), "\\.(bam|cram)$", "")
-    String output_arg = bam_stem + ".parquet"
-
-    command <<<
-        set -euo pipefail
-
-        geac collect \
-            --input            ~{input_bam} \
-            --reference        ~{reference_fasta} \
-            --output           ~{output_arg} \
-            --targets          ~{targets} \
-            --emit-ref-sites \
-            --read-type        ~{read_type} \
-            --pipeline         ~{pipeline} \
-            --min-base-qual    ~{min_base_qual} \
-            --min-map-qual     ~{min_map_qual} \
-            ~{"--sample-id "        + sample_id} \
-            ~{"--batch "            + batch} \
-            ~{"--label1 "           + label1} \
-            ~{"--label2 "           + label2} \
-            ~{"--label3 "           + label3} \
-            ~{"--timepoint "        + timepoint} \
-            ~{"--gnomad "           + gnomad} \
-            ~{if defined(gnomad) then "--gnomad-af-field " + gnomad_af_field else ""} \
-            ~{"--gene-annotations " + gene_annotations} \
-            --repeat-window ~{repeat_window} \
-            ~{if include_duplicates    then "--include-duplicates"    else ""} \
-            ~{if include_secondary     then "--include-secondary"     else ""} \
-            ~{if include_supplementary then "--include-supplementary" else ""}
-    >>>
-
-    output {
-        # geac collect --emit-ref-sites always writes both files alongside the locus parquet.
-        Array[File] ref_bases_parquets = glob("*.ref_bases.parquet")
-        Array[File] ref_reads_parquets = glob("*.ref_reads.parquet")
-    }
-
-    runtime {
-        docker:      docker_image
-        memory:      memory_gb + " GB"
-        cpu:         1
-        disks:       "local-disk " + disk_gb + " HDD"
-        preemptible: preemptible
-    }
-}
-
-task MergeRefSites {
-
-    input {
-        File        cohort_db
-        Array[File] ref_bases_parquets
-        Array[File] ref_reads_parquets
-        String      cohort_name
-
-        String docker_image
-        Int    memory_gb
-        Int    disk_gb
-        Int    preemptible
-    }
-
-    String output_db = cohort_name + ".with_ref_sites.duckdb"
-
-    command <<<
-        set -euo pipefail
-
-        geac merge \
-            --output ~{output_db} \
-            ~{cohort_db} \
-            ~{sep=" " ref_bases_parquets} \
-            ~{sep=" " ref_reads_parquets}
-    >>>
-
-    output {
-        File merged_db = output_db
-    }
-
-    runtime {
-        docker:      docker_image
-        memory:      memory_gb + " GB"
-        cpu:         2
         disks:       "local-disk " + disk_gb + " HDD"
         preemptible: preemptible
     }

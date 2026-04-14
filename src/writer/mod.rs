@@ -5,6 +5,4 @@ pub mod parquet_locus_depth;
 pub mod parquet_normal;
 pub mod parquet_pon;
 pub mod parquet_reads;
-pub mod parquet_ref;
-pub mod parquet_ref_reads;
 pub mod parquet_sample_metrics;

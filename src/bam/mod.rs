@@ -1,7 +1,6 @@
 mod builders;
 mod indel;
 mod pileup;
-mod ref_collect;
 mod ref_utils;
 
 use std::sync::atomic::Ordering;
@@ -25,7 +24,6 @@ use builders::LocusContext;
 use indel::tally_indels;
 use pileup::{locus_n_context_summary, tally_pileup, PileupResult};
 
-pub use ref_collect::collect_ref_bases;
 pub(crate) use ref_utils::RefCache;
 pub(crate) use ref_utils::gc_frac;
 pub use ref_utils::{open_bam, read_group_sample_id};

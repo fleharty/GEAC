@@ -302,14 +302,7 @@ Audit document: `docs/per-read-filter-audit.md`.
   - [x] Step 3: Unique-to-pipeline loci table — loci called by one pipeline but absent in the other; radio filter by pipeline; columns include VAF and depth for the calling pipeline
   - [x] Step 4: SBS96 spectrum side-by-side — per-pipeline trinucleotide profiles in adjacent panels; disagreement in mutation context distribution signals systematic pipeline-specific artefacts
   - [x] Step 5: Depth comparison scatter — `total_depth` per locus for pipeline A vs B; systematic depth differences indicate different duplicate-collapsing or overlap behaviour between pipelines
-- [ ] Sample-level bait-bias normalization follow-up — generate a real cohort dataset with the new `sample_metrics` table (`mean_target_depth_covered`, `mean_target_depth_all`, `median_target_depth_covered`, `median_target_depth_all`, `pct_fragment_bases_on_target`), validate that the values look sensible, and then build/test Explorer bait-bias plots that use these sample-level normalization metrics in the expected-depth calculations. Compare the current `ref_bases`-derived baseline approach against `sample_metrics.mean_target_depth_all` as the likely default normalization.
-  - [ ] Restrict site-specific bait-bias non-carrier estimation to the current filtered cohort/sample universe, not the full `ref_bases` table.
-  - [ ] Revisit zero-depth handling in the bait-bias expected-depth model; decide whether hom-ref zero-depth observations should contribute to the sample baseline and locus relative-depth estimate.
-  - [ ] Update the Explorer bait-bias caption/help text so it accurately describes the current baseline source; do not call it a panel-wide “median on-target hom-ref depth” unless that is truly what is being computed.
-  - [ ] Decide whether `sample_metrics.mean_target_depth_all` should replace the current `ref_bases`-derived sample baseline for bait-bias normalization, or whether both should be shown as alternative models.
-  - [ ] Add provenance/scope fields or clear documentation for `sample_metrics` when collected with `--region`, so region-limited baselines are not mistaken for panel-wide sample metrics.
-  - [ ] Add edge-case tests for `sample_metrics` and bait-bias modeling:
-    region-restricted collect runs, full-zero target intervals, heterogeneous target coverage, sparse non-carrier loci, and mixed pipeline/read-type cohorts.
+- [x] Bait-bias analysis — replaced second-BAM-pass `--emit-ref-sites` / `ref_bases` approach with gnomAD ~50% AF het-site depth-retention analysis using `sample_metrics.median_target_depth_all` as per-sample baseline; IQR boxplot comparing SNVs, insertions, and deletions; no second pass required.
 
 ## Coverage Analysis
 
