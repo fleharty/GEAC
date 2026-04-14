@@ -47,8 +47,11 @@ impl GnomadIndex {
     /// Returns `Some(af)` when an exact-allele match is found and AF is available,
     /// `None` when the allele is absent from gnomAD or AF cannot be read.
     ///
-    /// For indels (alt_allele starts with `+` or `-`), a position+ref match is
-    /// attempted because GEAC and VCF use different indel representations.
+    /// For indels (alt_allele starts with `+` or `-`), GEAC's representation is
+    /// translated to VCF form (anchor + deleted/inserted bases) before matching.
+    ///
+    /// `ref_allele` must be the single anchor base at `pos` (not the deleted
+    /// bases). Callers pass the reference base from the pileup position.
     pub fn get(
         &mut self,
         chrom: &str,
@@ -75,7 +78,7 @@ impl GnomadIndex {
             return Ok(None);
         }
 
-        let is_indel = alt_allele.starts_with('+') || alt_allele.starts_with('-');
+        let (expected_ref, expected_alt) = geac_to_vcf_alleles(ref_allele, alt_allele);
 
         for result in self.reader.records() {
             let record = result.context("error reading gnomAD VCF record")?;
@@ -90,30 +93,13 @@ impl GnomadIndex {
             }
 
             let vcf_ref = std::str::from_utf8(alleles[0]).unwrap_or(".");
-
-            // GEAC deletions: alt_allele = "-TCG", ref_allele = "A" (anchor only).
-            // VCF REF for that deletion is "ATCG" (anchor + deleted bases).
-            // Reconstruct the expected VCF REF so the comparison works.
-            let is_deletion = alt_allele.starts_with('-');
-            let expected_ref = if is_deletion {
-                format!("{}{}", ref_allele, &alt_allele[1..])
-            } else {
-                ref_allele.to_string()
-            };
-
             if vcf_ref != expected_ref {
                 continue;
             }
 
-            // For indels, match on position+ref only; return AF of the first alt.
-            if is_indel {
-                return Ok(Self::extract_af(&record, &af_field, 0));
-            }
-
-            // For SNVs, find the exact alt allele and use its AF index.
             if let Some(alt_idx) = alleles[1..]
                 .iter()
-                .position(|a| std::str::from_utf8(a).unwrap_or(".") == alt_allele)
+                .position(|a| std::str::from_utf8(a).unwrap_or(".") == expected_alt)
             {
                 return Ok(Self::extract_af(&record, &af_field, alt_idx));
             }
@@ -142,5 +128,53 @@ impl GnomadIndex {
             Ok(Some(vals)) => vals.get(alt_idx).copied().filter(|v| !v.is_nan()),
             _ => None,
         }
+    }
+}
+
+/// Translate GEAC's `(ref_allele, alt_allele)` pair into the `(VCF REF, VCF ALT)`
+/// pair that should match the gnomAD record at the same anchor position.
+///
+/// `ref_allele` must be the single anchor base at the position (GEAC's
+/// convention for every AltBase row). GEAC indel alt alleles are prefixed:
+///
+///   SNV        ref="A",  alt="T"    -> vcf REF="A",    ALT="T"
+///   Insertion  ref="A",  alt="+AC"  -> vcf REF="A",    ALT="AAC"
+///   Deletion   ref="A",  alt="-TCG" -> vcf REF="ATCG", ALT="A"
+fn geac_to_vcf_alleles(ref_allele: &str, alt_allele: &str) -> (String, String) {
+    if let Some(inserted) = alt_allele.strip_prefix('+') {
+        (ref_allele.to_string(), format!("{ref_allele}{inserted}"))
+    } else if let Some(deleted) = alt_allele.strip_prefix('-') {
+        (format!("{ref_allele}{deleted}"), ref_allele.to_string())
+    } else {
+        (ref_allele.to_string(), alt_allele.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::geac_to_vcf_alleles;
+
+    #[test]
+    fn snv_passes_through_unchanged() {
+        assert_eq!(geac_to_vcf_alleles("A", "T"), ("A".into(), "T".into()));
+    }
+
+    #[test]
+    fn insertion_concatenates_anchor_with_inserted_bases() {
+        // GEAC "+AC" at anchor "A" -> VCF REF="A", ALT="AAC"
+        assert_eq!(geac_to_vcf_alleles("A", "+AC"), ("A".into(), "AAC".into()));
+    }
+
+    #[test]
+    fn deletion_concatenates_anchor_with_deleted_bases() {
+        // GEAC "-TCG" at anchor "A" -> VCF REF="ATCG", ALT="A"
+        // This is the case previously broken: the caller used to pass the
+        // deleted bases as ref_allele, producing "TCGTCG" for the VCF REF.
+        assert_eq!(geac_to_vcf_alleles("A", "-TCG"), ("ATCG".into(), "A".into()));
+    }
+
+    #[test]
+    fn single_base_deletion() {
+        assert_eq!(geac_to_vcf_alleles("A", "-T"), ("AT".into(), "A".into()));
     }
 }

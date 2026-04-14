@@ -243,7 +243,11 @@ pub fn collect_alt_bases(
             let (variant_called, variant_filter) =
                 vcf_annotation(annotator, &chrom, pos, &indel.alt_allele);
             let gnomad_af = if let Some(ref mut g) = gnomad {
-                g.get(&chrom, pos, &indel.ref_allele, &indel.alt_allele)?
+                // gnomAD lookup needs the anchor base (single char), not the
+                // deleted bases that IndelCount.ref_allele happens to store for
+                // deletions. Pass ref_base — matches the SNV call above and the
+                // AltBase.ref_allele contract downstream.
+                g.get(&chrom, pos, &ref_base.to_string(), &indel.alt_allele)?
             } else {
                 None
             };

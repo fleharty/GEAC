@@ -8,7 +8,6 @@ use super::pileup::{family_size_tags, hard_clip_counts, read_context_metrics, Re
 
 /// Per-indel-allele tally at a pileup position.
 pub(super) struct IndelCount {
-    pub(super) ref_allele: String,
     pub(super) alt_allele: String,
     pub(super) variant_type: VariantType,
     pub(super) total: i32,
@@ -21,7 +20,7 @@ pub(super) struct IndelCount {
 }
 
 /// Decoded indel allele for one read at the anchor position, or None if no indel.
-type IndelAllele = Option<(String, String, VariantType)>; // (alt_allele, ref_allele, variant_type)
+type IndelAllele = Option<(String, VariantType)>; // (alt_allele, variant_type)
 
 /// Compare two indel allele strings treating N (in either string) as a wildcard.
 /// Returns true if the alleles are compatible (same length, every position matches or is N).
@@ -110,11 +109,7 @@ pub(super) fn tally_indels(
                 let inserted: String = (1..=len)
                     .map(|i| seq[qpos + i].to_ascii_uppercase() as char)
                     .collect();
-                let ref_allele = chrom_seq
-                    .get(pos as usize)
-                    .map(|&b| (b as char).to_string())
-                    .unwrap_or_default();
-                Some((format!("+{inserted}"), ref_allele, VariantType::Insertion))
+                Some((format!("+{inserted}"), VariantType::Insertion))
             }
             Indel::Del(len) => {
                 let start = pos as usize + 1;
@@ -134,11 +129,7 @@ pub(super) fn tally_indels(
                     ));
                     continue;
                 }
-                Some((
-                    format!("-{deleted}"),
-                    deleted.clone(),
-                    VariantType::Deletion,
-                ))
+                Some((format!("-{deleted}"), VariantType::Deletion))
             }
             Indel::None => None,
         };
@@ -198,9 +189,8 @@ pub(super) fn tally_indels(
     for reads in by_qname.values() {
         match reads.as_slice() {
             [(allele, is_rev, _, detail)] => {
-                if let Some((alt, ref_a, vt)) = allele {
+                if let Some((alt, vt)) = allele {
                     let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
-                        ref_allele: ref_a.clone(),
                         alt_allele: alt.clone(),
                         variant_type: *vt,
                         total: 0,
@@ -228,9 +218,8 @@ pub(super) fn tally_indels(
 
                 match (allele1, allele2) {
                     (None, None) => {}
-                    (Some((alt, ref_a, vt)), None) => {
+                    (Some((alt, vt)), None) => {
                         let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
-                            ref_allele: ref_a.clone(),
                             alt_allele: alt.clone(),
                             variant_type: *vt,
                             total: 0,
@@ -253,9 +242,8 @@ pub(super) fn tally_indels(
                                 .push(d.clone());
                         }
                     }
-                    (None, Some((alt, ref_a, vt))) => {
+                    (None, Some((alt, vt))) => {
                         let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
-                            ref_allele: ref_a.clone(),
                             alt_allele: alt.clone(),
                             variant_type: *vt,
                             total: 0,
@@ -278,19 +266,18 @@ pub(super) fn tally_indels(
                                 .push(d.clone());
                         }
                     }
-                    (Some((alt1, ref_a1, vt1)), Some((alt2, ref_a2, vt2))) => {
+                    (Some((alt1, vt1)), Some((alt2, vt2))) => {
                         if indels_compatible(alt1, alt2) {
-                            let (canon_alt, canon_ref, canon_vt) =
+                            let (canon_alt, canon_vt) =
                                 if alt1.contains('N') && !alt2.contains('N') {
-                                    (&alt2, &ref_a2, vt2)
+                                    (&alt2, vt2)
                                 } else {
-                                    (&alt1, &ref_a1, vt1)
+                                    (&alt1, vt1)
                                 };
                             let e =
                                 indels
                                     .entry(canon_alt.to_string())
                                     .or_insert_with(|| IndelCount {
-                                        ref_allele: canon_ref.to_string(),
                                         alt_allele: canon_alt.to_string(),
                                         variant_type: *canon_vt,
                                         total: 0,
@@ -319,7 +306,6 @@ pub(super) fn tally_indels(
                             }
                         } else {
                             let e1 = indels.entry(alt1.clone()).or_insert_with(|| IndelCount {
-                                ref_allele: ref_a1.clone(),
                                 alt_allele: alt1.clone(),
                                 variant_type: *vt1,
                                 total: 0,
@@ -343,7 +329,6 @@ pub(super) fn tally_indels(
                             }
 
                             let e2 = indels.entry(alt2.clone()).or_insert_with(|| IndelCount {
-                                ref_allele: ref_a2.clone(),
                                 alt_allele: alt2.clone(),
                                 variant_type: *vt2,
                                 total: 0,
@@ -371,9 +356,8 @@ pub(super) fn tally_indels(
             }
             _ => {
                 for (allele, is_rev, _, detail) in reads {
-                    if let Some((alt, ref_a, vt)) = allele {
+                    if let Some((alt, vt)) = allele {
                         let e = indels.entry(alt.clone()).or_insert_with(|| IndelCount {
-                            ref_allele: ref_a.clone(),
                             alt_allele: alt.clone(),
                             variant_type: *vt,
                             total: 0,

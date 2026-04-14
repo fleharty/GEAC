@@ -953,3 +953,26 @@ read-level and grows with cohort size. Any chart driven by it must pre-aggregate
 DuckDB first. `transform_density` and `transform_bin` in Vega-Lite are convenient but
 they require the full row-level data to be sent to the browser — always pre-compute these
 transformations server-side for tables that scale with cohort size.
+
+### gnomAD AF lookup silently missed every deletion (second bug)
+**Symptom:** Even after an earlier fix for deletions, `gnomad_af` was still null for
+every deletion in the collect output on v0.4.11.
+**Root cause:** `IndelCount.ref_allele` stored **different things for different variant
+types**: for insertions it was the single anchor base ("A"), for deletions it was the
+deleted bases themselves ("TCG"). The gnomAD call site passed `indel.ref_allele`, and
+`GnomadIndex::get` reconstructed the VCF REF as `ref_allele + alt_allele[1..]`. For a
+deletion this produced `"TCG" + "TCG" = "TCGTCG"` instead of `"ATCG"`, so no record
+ever matched. Separately, insertions also silently returned the wrong allele's AF at
+multi-allelic sites because the indel path used `extract_af(record, field, 0)` — the
+first alt — rather than finding the specific insertion.
+**Fix:** (1) In `src/bam/mod.rs`, pass the reference anchor base (`ref_base.to_string()`)
+to `gnomad.get()` for indels, matching the SNV call site and the `AltBase.ref_allele`
+contract. (2) Remove the inconsistent `ref_allele` field from `IndelCount` entirely —
+it had no other readers. (3) In `src/gnomad.rs`, factor the GEAC→VCF allele translation
+into `geac_to_vcf_alleles()` (unit-tested) and use exact alt matching for indels as well
+as SNVs, so multi-allelic insertion sites resolve to the right AF.
+**Lesson:** A struct field named `ref_allele` with type-dependent semantics is a
+landmine. If a field's meaning changes based on another field, extract it into the
+discriminated type itself or delete it. Also: the GEAC↔VCF indel translation is the
+kind of pure function that belongs in a testable helper — the original inline logic in
+`get()` had been wrong for months with no unit test to catch it.
