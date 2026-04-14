@@ -5175,10 +5175,10 @@ if _active_main_tab == TAB_READS.LABEL:
                             alt.X("frag_gc_bin:Q", title="Fragment GC fraction",
                                   scale=alt.Scale(domain=[0.0, 1.0])),
                             alt.Y("n_reads:Q", title="Alt-supporting reads"),
-                            alt.Tooltip([
+                            tooltip=[
                                 alt.Tooltip("frag_gc_bin:Q", title="GC fraction", format=".2f"),
                                 alt.Tooltip("n_reads:Q", title="Reads"),
-                            ]),
+                            ],
                         )
                         .properties(height=250)
                     )
@@ -5187,6 +5187,55 @@ if _active_main_tab == TAB_READS.LABEL:
                         "GC fraction of the inferred fragment (reference bases from read start to read start + |TLEN|). "
                         "A bimodal or shifted distribution relative to the target panel GC may indicate GC bias."
                     )
+
+                    # GC by family size
+                    if _fs_has_data:
+                        _gc_fs_sizes = [2] + list(range(5, 81, 5))
+                        _gc_fs_in    = ", ".join(str(s) for s in _gc_fs_sizes)
+                        _gc_fs_df = con.execute(f"""
+                            SELECT
+                                ROUND(ar.frag_gc, 2)  AS frag_gc_bin,
+                                ar.family_size,
+                                COUNT(*)              AS n_reads
+                            FROM {_r_join}
+                            WHERE ar.frag_gc IS NOT NULL
+                              AND ar.family_size IN ({_gc_fs_in})
+                            GROUP BY frag_gc_bin, ar.family_size
+                            ORDER BY frag_gc_bin, ar.family_size
+                        """).df()
+
+                        if not _gc_fs_df.empty:
+                            # Normalise each family-size series independently
+                            _gc_fs_df["frac"] = _gc_fs_df.groupby("family_size")["n_reads"].transform(
+                                lambda x: x / x.sum()
+                            )
+                            _gc_fs_df["family_size"] = _gc_fs_df["family_size"].astype(str)
+
+                            _gc_fs_chart = (
+                                alt.Chart(_gc_fs_df)
+                                .mark_line(opacity=0.85)
+                                .encode(
+                                    alt.X("frag_gc_bin:Q", title="Fragment GC fraction",
+                                          scale=alt.Scale(domain=[0.0, 1.0])),
+                                    alt.Y("frac:Q", title="Fraction of reads"),
+                                    alt.Color("family_size:O",
+                                              title="Family size",
+                                              scale=alt.Scale(scheme="viridis"),
+                                              sort=[str(s) for s in _gc_fs_sizes]),
+                                    tooltip=[
+                                        alt.Tooltip("family_size:O", title="Family size"),
+                                        alt.Tooltip("frag_gc_bin:Q", title="GC fraction", format=".2f"),
+                                        alt.Tooltip("frac:Q", title="Fraction", format=".4f"),
+                                    ],
+                                )
+                                .properties(height=250)
+                            )
+                            st.altair_chart(_gc_fs_chart, width="stretch")
+                            st.caption(
+                                "Fragment GC distribution for family sizes 2, 5, 10, 15, … 80, "
+                                "each series normalised independently. A consistent GC shape "
+                                "across family sizes indicates GC bias is not driven by consensus depth."
+                            )
 
         # ── Row 4: Mapping quality distribution ───────────────────────────────
         st.subheader("Mapping quality distribution")
