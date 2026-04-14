@@ -1807,9 +1807,9 @@ if _active_main_tab == TAB_VAF_DISTRIBUTION.LABEL:
     st.divider()
     st.subheader("Depth retention at common het sites (bait-bias proxy)")
     st.caption(
-        "At sites with gnomAD AF 30–70%, most samples carrying the alt allele are "
-        "heterozygous — bait-bias would reduce total depth at indel sites relative "
-        "to the sample's median target coverage. "
+        "At gnomAD-annotated sites where the observed allele fraction is 25–75%, "
+        "the sample is likely heterozygous — bait-bias would reduce total depth at "
+        "indel sites relative to the sample's median target coverage. "
         "**depth_retained = total_depth / sample_median_target_depth.** "
         "Values near 1.0 are expected; a lower median for insertions or deletions vs. "
         "SNVs indicates reduced capture of indel-containing fragments. "
@@ -1840,7 +1840,7 @@ if _active_main_tab == TAB_VAF_DISTRIBUTION.LABEL:
                     FROM {table_expr} ab
                     JOIN sample_baseline sb ON ab.sample_id = sb.sample_id
                     WHERE {where}
-                      AND ab.gnomad_af BETWEEN 0.30 AND 0.70
+                      AND ab.gnomad_af IS NOT NULL
                       AND ab.total_depth > 0
                       AND ab.alt_count * 1.0 / ab.total_depth BETWEEN 0.25 AND 0.75
                 )
@@ -1858,7 +1858,7 @@ if _active_main_tab == TAB_VAF_DISTRIBUTION.LABEL:
 
         if _bb_df.empty:
             st.info(
-                "No gnomAD AF 30–70% het-confirmed records under current filters. "
+                "No gnomAD-annotated het-confirmed records under current filters. "
                 "Ensure `--gnomad` was provided during collection."
             )
         else:

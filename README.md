@@ -469,8 +469,8 @@ Features:
     session; depth ECDF by variant type, depth box plots, and median depth vs VAF bin;
     **depth retention at common het sites (bait-bias proxy)** — IQR boxplot comparing
     depth retention (total depth / per-sample median depth) across SNVs, insertions, and
-    deletions at gnomAD AF 30–70% confirmed-het sites; shows an info message when
-    `gnomad_af` or `sample_metrics` data are absent
+    deletions at gnomAD-annotated sites confirmed heterozygous by observed allele fraction
+    25–75%; shows an info message when `gnomad_af` or `sample_metrics` data are absent
   - *Error spectrum* — SNV trinucleotide spectrum (SBS96) as a 3×2 grid of per-mutation-type
     panels with shared y-axis and fraction/count toggle; shift-click to select multiple
     contexts; drill-down table and IGV session. Optional COSMIC decomposition: provide a

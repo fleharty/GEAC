@@ -324,5 +324,3 @@ task Merge {
         preemptible: preemptible
     }
 }
-
-}
