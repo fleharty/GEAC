@@ -80,6 +80,7 @@
         "ba_count",
         "family_size",
         "insert_size",
+        "frag_gc",
         "n_before_alt",
         "n_after_alt",
         "n_n_before_alt",

@@ -417,6 +417,10 @@ pub struct AltRead {
     /// SAM TLEN field (template length / insert size). None when TLEN is 0
     /// (unpaired reads or reads where the mate is unmapped).
     pub insert_size: Option<i32>,
+    /// GC fraction of the fragment inferred from the reference sequence.
+    /// Computed over the region [read_pos, read_pos + abs(TLEN)) on the reference.
+    /// None when insert size is unavailable (unpaired / mate unmapped).
+    pub frag_gc: Option<f32>,
     /// Number of stored read-sequence bases before the alt position.
     pub n_before_alt: i32,
     /// Number of stored read-sequence bases after the alt position.

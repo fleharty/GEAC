@@ -27,6 +27,7 @@ use pileup::{locus_n_context_summary, tally_pileup, PileupResult};
 
 pub use ref_collect::collect_ref_bases;
 pub(crate) use ref_utils::RefCache;
+pub(crate) use ref_utils::gc_frac;
 pub use ref_utils::{open_bam, read_group_sample_id};
 
 /// Process a BAM/CRAM file and return all alt base records (and optionally per-read detail records).
@@ -209,8 +210,12 @@ pub fn collect_alt_bases(
 
             if collect_reads {
                 if let Some(details) = read_details.get(base) {
+                    let seq = ref_cache.current_seq();
                     for detail in details {
-                        read_records.push(locus.build_alt_read(&alt_allele, detail));
+                        let frag_gc = detail.insert_size.and_then(|ins| {
+                            gc_frac(seq, detail.frag_start as usize, ins as usize)
+                        });
+                        read_records.push(locus.build_alt_read(&alt_allele, detail, frag_gc));
                     }
                 }
             }
@@ -263,8 +268,12 @@ pub fn collect_alt_bases(
 
         if collect_reads {
             for (alt_allele, details) in &indel_read_details {
+                let seq = ref_cache.current_seq();
                 for detail in details {
-                    read_records.push(locus.build_alt_read(alt_allele, detail));
+                    let frag_gc = detail.insert_size.and_then(|ins| {
+                        gc_frac(seq, detail.frag_start as usize, ins as usize)
+                    });
+                    read_records.push(locus.build_alt_read(alt_allele, detail, frag_gc));
                 }
             }
         }

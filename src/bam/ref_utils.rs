@@ -109,6 +109,22 @@ pub fn read_group_sample_id(header: &bam::HeaderView) -> Result<String> {
     anyhow::bail!("no SM tag found in any @RG line of the BAM/CRAM header")
 }
 
+/// Compute GC fraction over a reference region `[start, start+len)` (0-based, half-open).
+///
+/// Clamps to the sequence bounds. Returns `None` if the region is empty.
+pub(crate) fn gc_frac(seq: &[u8], start: usize, len: usize) -> Option<f32> {
+    if seq.is_empty() || len == 0 {
+        return None;
+    }
+    let end = (start + len).min(seq.len());
+    if end <= start {
+        return None;
+    }
+    let slice = &seq[start..end];
+    let gc = slice.iter().filter(|&&b| b == b'G' || b == b'C').count();
+    Some(gc as f32 / slice.len() as f32)
+}
+
 pub fn open_bam(input: &Path, reference: &Path) -> Result<bam::IndexedReader> {
     let mut reader = bam::IndexedReader::from_path(input)
         .with_context(|| format!("failed to open BAM/CRAM: {}", input.display()))?;

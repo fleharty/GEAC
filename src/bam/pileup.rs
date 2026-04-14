@@ -24,6 +24,12 @@ pub(super) struct ReadDetail {
     pub(super) ba_count: Option<i32>,
     pub(super) family_size: Option<i32>,
     pub(super) insert_size: Option<i32>,
+    /// 0-based reference position of the leftmost end of the fragment.
+    /// Computed as `min(record.pos(), record.mpos())` so it is symmetric across
+    /// R1 and R2; for unpaired reads or reads with an unmapped mate it falls back
+    /// to `record.pos()`. Combined with `insert_size` this gives the exact
+    /// reference span of the inferred template.
+    pub(super) frag_start: i64,
     pub(super) n_before_alt: usize,
     pub(super) n_after_alt: usize,
     pub(super) n_n_before_alt: usize,
@@ -76,6 +82,9 @@ struct LocusRead {
     family_size: Option<i32>,
     /// SAM TLEN (insert size); None when 0 (unpaired / mate unmapped)
     insert_size: Option<i32>,
+    /// 0-based reference position of the leftmost end of the fragment
+    /// (`min(pos, mpos)`); used for fragment-level reference computations like GC.
+    frag_start: i64,
     n_before_alt: usize,
     n_after_alt: usize,
     n_n_before_alt: usize,
@@ -286,6 +295,11 @@ pub(super) fn tally_pileup(
                 ba_count,
                 family_size,
                 insert_size,
+                frag_start: if record.mpos() >= 0 {
+                    record.pos().min(record.mpos())
+                } else {
+                    record.pos()
+                },
                 n_before_alt: context.n_before_alt,
                 n_after_alt: context.n_after_alt,
                 n_n_before_alt: context.n_n_before_alt,
@@ -318,6 +332,7 @@ pub(super) fn tally_pileup(
                     ba_count: $r.ba_count,
                     family_size: $r.family_size,
                     insert_size: $r.insert_size,
+                    frag_start: $r.frag_start,
                     n_before_alt: $r.n_before_alt,
                     n_after_alt: $r.n_after_alt,
                     n_n_before_alt: $r.n_n_before_alt,
@@ -661,6 +676,7 @@ mod tests {
             ba_count: None,
             family_size: None,
             insert_size: None,
+            frag_start: 0,
             n_before_alt: n_before as usize,
             n_after_alt: n_after as usize,
             n_n_before_alt: n_n_before as usize,

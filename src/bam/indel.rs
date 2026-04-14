@@ -170,6 +170,11 @@ pub(super) fn tally_indels(
                 } else {
                     Some(tlen.unsigned_abs() as i32)
                 },
+                frag_start: if record.mpos() >= 0 {
+                    record.pos().min(record.mpos())
+                } else {
+                    record.pos()
+                },
                 n_before_alt: context.n_before_alt,
                 n_after_alt: context.n_after_alt,
                 n_n_before_alt: context.n_n_before_alt,

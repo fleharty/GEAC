@@ -223,6 +223,7 @@ _alt_reads_has_label1    = _has_alt_reads_cols("label1")
 _alt_reads_has_label2    = _has_alt_reads_cols("label2")
 _alt_reads_has_label3    = _has_alt_reads_cols("label3")
 _alt_reads_has_timepoint = _has_alt_reads_cols("timepoint")
+_alt_reads_has_frag_gc   = _has_alt_reads_cols("frag_gc")
 
 
 def _alt_reads_meta_join(alias: str) -> str:
@@ -5455,6 +5456,47 @@ if _active_main_tab == TAB_READS.LABEL:
                         f" Select 'Frequency' to remove the coverage-gap bias near {int(_gap_threshold)} bp."
                     )
                 st.caption(_af_ins_caption)
+
+        # ── Fragment GC distribution ──────────────────────────────────────────
+        if _alt_reads_has_frag_gc:
+            if "_cached_has_frag_gc" not in st.session_state:
+                st.session_state["_cached_has_frag_gc"] = (
+                    con.execute("SELECT COUNT(*) FROM alt_reads WHERE frag_gc IS NOT NULL LIMIT 1").fetchone()[0] > 0
+                )
+            if st.session_state["_cached_has_frag_gc"]:
+                st.subheader("Fragment GC distribution")
+                _gc_df = con.execute(f"""
+                    SELECT
+                        ROUND(ar.frag_gc, 2) AS frag_gc_bin,
+                        COUNT(*) AS n_reads
+                    FROM {_r_join}
+                    WHERE ar.frag_gc IS NOT NULL
+                    GROUP BY frag_gc_bin
+                    ORDER BY frag_gc_bin
+                """).df()
+
+                if _gc_df.empty:
+                    st.info("No fragment GC data in current selection.")
+                else:
+                    _gc_chart = (
+                        alt.Chart(_gc_df)
+                        .mark_bar()
+                        .encode(
+                            alt.X("frag_gc_bin:Q", title="Fragment GC fraction",
+                                  scale=alt.Scale(domain=[0.0, 1.0])),
+                            alt.Y("n_reads:Q", title="Alt-supporting reads"),
+                            alt.Tooltip([
+                                alt.Tooltip("frag_gc_bin:Q", title="GC fraction", format=".2f"),
+                                alt.Tooltip("n_reads:Q", title="Reads"),
+                            ]),
+                        )
+                        .properties(height=250)
+                    )
+                    st.altair_chart(_gc_chart, width="stretch")
+                    st.caption(
+                        "GC fraction of the inferred fragment (reference bases from read start to read start + |TLEN|). "
+                        "A bimodal or shifted distribution relative to the target panel GC may indicate GC bias."
+                    )
 
         # ── Row 4: Mapping quality distribution ───────────────────────────────
         st.subheader("Mapping quality distribution")

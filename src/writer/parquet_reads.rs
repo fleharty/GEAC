@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use arrow::array::{ArrayRef, BooleanArray, Int32Array, Int64Array, StringArray};
+use arrow::array::{ArrayRef, BooleanArray, Float32Array, Int32Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
@@ -56,6 +56,7 @@ fn alt_read_schema() -> Arc<Schema> {
         Field::new("base_qual", DataType::Int32, false),
         Field::new("map_qual", DataType::Int32, false),
         Field::new("insert_size", DataType::Int32, true),
+        Field::new("frag_gc", DataType::Float32, true),
         Field::new("n_before_alt", DataType::Int32, false),
         Field::new("n_after_alt", DataType::Int32, false),
         Field::new("n_n_before_alt", DataType::Int32, false),
@@ -125,6 +126,9 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
     let insert_size: ArrayRef = Arc::new(Int32Array::from(
         records.iter().map(|r| r.insert_size).collect::<Vec<_>>(),
     ));
+    let frag_gc: ArrayRef = Arc::new(Float32Array::from(
+        records.iter().map(|r| r.frag_gc).collect::<Vec<_>>(),
+    ));
     let n_before_alt: ArrayRef = Arc::new(Int32Array::from_iter_values(
         records.iter().map(|r| r.n_before_alt),
     ));
@@ -173,6 +177,7 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
             base_qual,
             map_qual,
             insert_size,
+            frag_gc,
             n_before_alt,
             n_after_alt,
             n_n_before_alt,

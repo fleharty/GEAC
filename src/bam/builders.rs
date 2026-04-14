@@ -160,7 +160,12 @@ impl LocusContext {
         }
     }
 
-    pub(super) fn build_alt_read(&self, alt_allele: &str, detail: &ReadDetail) -> AltRead {
+    pub(super) fn build_alt_read(
+        &self,
+        alt_allele: &str,
+        detail: &ReadDetail,
+        frag_gc: Option<f32>,
+    ) -> AltRead {
         AltRead {
             sample_id: self.sample_id.clone(),
             chrom: self.chrom.clone(),
@@ -187,6 +192,7 @@ impl LocusContext {
             base_qual: detail.base_qual as i32,
             map_qual: detail.map_qual as i32,
             insert_size: detail.insert_size,
+            frag_gc,
             n_before_alt: detail.n_before_alt as i32,
             n_after_alt: detail.n_after_alt as i32,
             n_n_before_alt: detail.n_n_before_alt as i32,
