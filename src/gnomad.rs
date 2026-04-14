@@ -90,7 +90,18 @@ impl GnomadIndex {
             }
 
             let vcf_ref = std::str::from_utf8(alleles[0]).unwrap_or(".");
-            if vcf_ref != ref_allele {
+
+            // GEAC deletions: alt_allele = "-TCG", ref_allele = "A" (anchor only).
+            // VCF REF for that deletion is "ATCG" (anchor + deleted bases).
+            // Reconstruct the expected VCF REF so the comparison works.
+            let is_deletion = alt_allele.starts_with('-');
+            let expected_ref = if is_deletion {
+                format!("{}{}", ref_allele, &alt_allele[1..])
+            } else {
+                ref_allele.to_string()
+            };
+
+            if vcf_ref != expected_ref {
                 continue;
             }
 
