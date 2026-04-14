@@ -273,14 +273,13 @@ Creates a DuckDB database with:
 | `.pon_evidence.parquet` | `pon_evidence` — per-locus PoN hit counts and VAFs (from `geac annotate-pon`) |
 | `.coverage.parquet` | `coverage` — per-position coverage records (from `geac coverage`) |
 | `.coverage.intervals.parquet` | `coverage_intervals` — per-interval summary records (from `geac coverage --intervals-output`) |
-| `.locus_depth.parquet` | `locus_depth` — per-locus total depth from targeted re-pileup (from `geac locus-depth`) |
 | anything else | `alt_bases` — standard locus records |
 
 Indices are created on each optional table for efficient joins back to `alt_bases`.
 
 **DuckDB files** (`.duckdb`) can be passed directly alongside or instead of Parquet files.
 Each known data table (`alt_bases`, `alt_reads`, `normal_evidence`, `pon_evidence`,
-`coverage`, `coverage_intervals`, `locus_depth`) is copied from the source database into the output.  Inputs can be freely mixed:
+`coverage`, `coverage_intervals`) is copied from the source database into the output.  Inputs can be freely mixed:
 
 ```bash
 # Combine two existing cohort databases
@@ -408,90 +407,6 @@ Key options:
 
 The output Parquet is routed to the `coverage` table by `geac merge` when its filename
 ends in `.coverage.parquet`.
-
-### Export Loci — extract a site list from a cohort DuckDB
-
-`geac export-loci` queries a cohort DuckDB (or single-sample Parquet) for distinct
-`(chrom, pos)` positions passing a VAF filter and writes them to a two-column TSV.
-The primary use case is generating the input for `geac locus-depth` (targeted depth
-re-pileup), but the same site list is useful for any workflow that needs a compact
-representation of recurrent alt positions.
-
-```bash
-geac export-loci \
-  --input  cohort.duckdb \
-  --output hom_alt_sites.tsv \
-  --min-vaf 0.9
-```
-
-| Flag | Default | Description |
-|---|---|---|
-| `--min-vaf` | `0.9` | Minimum VAF for a locus to be exported. The default captures homozygous-alt sites useful for bait-bias and contamination analysis. Other useful ranges: `0.01–0.1` for PoN normalization / error models; `0.4–0.6` for heterozygous / CNV / allelic-imbalance sites; `0.0` for all sites (position-specific error models) |
-| `--max-vaf` | — | Upper VAF bound (inclusive). Omit for no upper bound |
-| `--variant-types` | all | Comma-separated filter: `snv`, `insertion`, `deletion`. Example: `--variant-types insertion,deletion` |
-| `--min-samples` | `1` | Locus must appear in at least this many samples (useful for recurrent artefact sites) |
-
-Output format: two-column TSV (`chrom`, `pos`; 0-based positions), with a header row.
-
-### Locus Depth — targeted depth re-pileup at a fixed site list
-
-`geac locus-depth` takes the TSV from `geac export-loci` and pileups a BAM/CRAM at
-exactly those positions, recording total depth and strand breakdown per sample.
-This enables proper carrier vs. non-carrier depth comparison at the same loci —
-something that cannot be done from the `alt_bases` table alone (which only records
-samples that have alt reads at a given position).
-
-```bash
-geac locus-depth \
-  --input     SAMPLE.bam \
-  --reference hg38.fa \
-  --loci      hom_alt_sites.tsv \
-  --output    SAMPLE.locus_depth.parquet
-```
-
-| Flag | Default | Description |
-|---|---|---|
-| `--loci` | required | TSV of loci to query, produced by `geac export-loci` |
-| `--sample-id` | SM tag | Override the sample identifier |
-| `--min-map-qual` | `0` | Minimum mapping quality to count a read |
-| `--min-base-qual` | `1` | Minimum base quality to count a base |
-| `--include-duplicates` | off | Count PCR/optical duplicate reads (FLAG 0x400) |
-| `--include-secondary` | off | Count secondary alignments (FLAG 0x100) |
-| `--include-supplementary` | off | Count supplementary alignments (FLAG 0x800) |
-| `--progress-interval` | `30` | Seconds between progress reports to stderr |
-
-Output naming convention: use `.locus_depth.parquet` so `geac merge` routes the file
-to the `locus_depth` table automatically.
-
-**Typical workflow:**
-
-```bash
-# 1. Build the cohort DuckDB as usual
-geac merge --output cohort.duckdb samples/*.parquet
-
-# 2. Export homozygous-alt loci (≥2 samples, VAF ≥ 0.9)
-geac export-loci \
-  --input cohort.duckdb \
-  --output hom_alt_sites.tsv \
-  --min-vaf 0.9 \
-  --min-samples 2
-
-# 3. Re-pileup every sample at those loci (scatter over samples)
-for bam in samples/*.bam; do
-  stem=$(basename "$bam" .bam)
-  geac locus-depth \
-    --input     "$bam" \
-    --reference hg38.fa \
-    --loci      hom_alt_sites.tsv \
-    --output    "${stem}.locus_depth.parquet"
-done
-
-# 4. Merge locus-depth Parquets into the existing DuckDB
-geac merge --output cohort.duckdb cohort.duckdb *.locus_depth.parquet
-```
-
-The resulting `locus_depth` table can then be joined to `alt_bases` in the Explorer to
-compare depth between carrier and non-carrier samples at specific loci.
 
 ### Query the cohort (DuckDB)
 
@@ -803,22 +718,6 @@ For SNV positions, one NULL anchor row is always written (capturing `normal_dept
 one additional row for each non-reference base observed in the normal pileup.  For indel
 positions, only the NULL anchor row is written.
 
-### Locus depth table (`*.locus_depth.parquet`)
-
-Produced by `geac locus-depth`. One row per sample per queried locus.
-
-| Column | Type | Description |
-|---|---|---|
-| `sample_id` | string | Sample identifier |
-| `chrom` | string | Chromosome |
-| `pos` | int64 | 0-based position |
-| `total_depth` | int32 | Total fragment depth passing quality filters |
-| `fwd_depth` | int32 | Fragments on the forward strand |
-| `rev_depth` | int32 | Fragments on the reverse strand |
-
-Loci with zero coverage (e.g. chromosome absent from the BAM index) are still emitted with
-`total_depth = 0` so the output set is exhaustive over the input loci TSV.
-
 ### PoN evidence table (`*.pon_evidence.parquet`)
 
 Produced by `geac annotate-pon`. One row per (tumor alt locus) with Panel of Normals hit
@@ -889,7 +788,7 @@ WDL 1.0 workflows are provided in `wdl/`:
 
 | Workflow | Status | Purpose |
 |---|---|---|
-| `geac_cohort.wdl` | **Tested** | Full cohort workflow: scatters `geac collect` then gathers with `geac merge`; optional `collect_locus_depth = true` second pass for targeted depth re-pileup |
+| `geac_cohort.wdl` | **Tested** | Full cohort workflow: scatters `geac collect` then gathers with `geac merge` |
 | `geac_coverage.wdl` | **Tested** | Full coverage workflow: scatters `geac coverage` then gathers with `geac merge` |
 | `geac_cohort_loci.wdl` | Untested | Runs `geac cohort` on a set of per-sample Parquets to identify recurrent alt-base loci |
 | `geac_collect.wdl` | Untested | Single-sample wrapper around `geac collect`; use this to scatter across a sample table |
@@ -946,19 +845,7 @@ Shared inputs applied to all samples: `reference_fasta`, `targets`, `gene_annota
 `include_duplicates`, `include_secondary`, `include_supplementary`,
 `gnomad`, `gnomad_index`, `gnomad_af_field` (optional gnomAD AF annotation), `threads`.
 
-**Optional second pass** (BAMs are localized by Cromwell the same way as the first pass):
-
-| Input | Type | Default | Description |
-|---|---|---|---|
-| `collect_locus_depth` | Boolean | `false` | Lightweight depth-only re-pileup via `geac locus-depth` |
-| `second_pass_min_vaf` | Float | `0.9` | Minimum VAF for `export-loci` |
-| `second_pass_max_vaf` | Float? | — | Maximum VAF for `export-loci` |
-| `second_pass_variant_types` | String? | — | Comma-separated variant types, e.g. `insertion,deletion` |
-| `second_pass_min_samples` | Int | `1` | Minimum samples a locus must appear in |
-| `locus_depth_memory_gb` | Int | `4` | Memory per `LocusDepth` task |
-| `locus_depth_disk_gb` | Int | `20` | Disk per `LocusDepth` task |
-
-Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty when `reads_output=false`), `sample_metrics_parquets` (Array[File], empty when `targets` is absent), `cohort_db` (File, the merged DuckDB). When `collect_locus_depth = true`: `exported_loci_tsv` (File?), `locus_depth_parquets` (Array[File]?), `cohort_db_with_locus_depth` (File?).
+Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty when `reads_output=false`), `sample_metrics_parquets` (Array[File], empty when `targets` is absent), `cohort_db` (File, the merged DuckDB).
 
 ### `geac_merge.wdl` inputs
 
@@ -1038,12 +925,7 @@ geac merge  →  cohort .duckdb
     pon_evidence        (.pon_evidence.parquet files, optional)
     coverage            (.coverage.parquet files, optional)
     coverage_intervals  (.coverage.intervals.parquet files, optional)
-    locus_depth         (.locus_depth.parquet files, optional)
-
     # inputs can be mixed: Parquet files, .duckdb files, or both
-
-geac export-loci  →  site list TSV  (from cohort .duckdb or single-sample Parquet)
-geac locus-depth  →  .locus_depth.parquet  (targeted re-pileup at exported loci)
 
 geac-cohort  →  interactive alt base / cohort browser
 geac-coverage-explorer  →  interactive coverage browser

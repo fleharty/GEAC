@@ -185,17 +185,6 @@
       ],
       "optional_columns": []
     },
-    "locus_depth": {
-      "required_columns": [
-        "sample_id",
-        "chrom",
-        "pos",
-        "total_depth",
-        "fwd_depth",
-        "rev_depth"
-      ],
-      "optional_columns": []
-    },
     "sample_metrics": {
       "required_columns": [
         "sample_id",

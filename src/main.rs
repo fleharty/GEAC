@@ -4,10 +4,8 @@ mod bam;
 mod cli;
 mod cohort;
 mod coverage;
-mod export_loci;
 mod gene_annotations;
 mod gnomad;
-mod locus_depth;
 mod merge;
 mod normal;
 mod pon;
@@ -196,31 +194,6 @@ fn main() -> Result<()> {
             info!(n_records = records.len(), output = %args.output.display(), "writing normal evidence Parquet");
             writer::parquet_normal::write_parquet(&records, &args.output)?;
 
-            info!("done");
-        }
-
-        Command::ExportLoci(args) => {
-            info!(
-                input  = %args.input.display(),
-                output = %args.output.display(),
-                min_vaf = args.min_vaf,
-                "exporting loci"
-            );
-            export_loci::export_loci(&args)?;
-            info!("done");
-        }
-
-        Command::LocusDepth(args) => {
-            info!(
-                input  = %args.input.display(),
-                loci   = %args.loci.display(),
-                output = %args.output.display(),
-                sample_id = %args.sample_id.as_deref().unwrap_or("<from SM tag>"),
-                "collecting locus depth"
-            );
-            let records = locus_depth::collect_locus_depth(&args)?;
-            info!(n_records = records.len(), output = %args.output.display(), "writing locus depth Parquet");
-            writer::parquet_locus_depth::write_parquet(&records, &args.output)?;
             info!("done");
         }
 

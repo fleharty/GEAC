@@ -84,15 +84,6 @@ const TABLE_SPECS: &[TableSpec] = &[
         rebuild_samples_summary: false,
     },
     TableSpec {
-        table: "locus_depth",
-        suffix: Some(".locus_depth.parquet"),
-        index_sql: Some(
-            "CREATE INDEX IF NOT EXISTS idx_locus_depth_locus \
-             ON locus_depth (sample_id, chrom, pos);",
-        ),
-        rebuild_samples_summary: false,
-    },
-    TableSpec {
         table: "sample_metrics",
         suffix: Some(".sample_metrics.parquet"),
         index_sql: Some(

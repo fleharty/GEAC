@@ -193,21 +193,6 @@ pub struct SampleMetricsRecord {
     pub pct_fragment_bases_on_target: Option<f32>,
 }
 
-/// Total depth at a single locus for one sample, produced by `geac locus-depth`.
-/// Positions are 0-based.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LocusDepthRecord {
-    pub sample_id: String,
-    pub chrom: String,
-    /// 0-based position
-    pub pos: i64,
-    /// Total fragment depth passing quality filters
-    pub total_depth: i32,
-    /// Fragments on the forward strand
-    pub fwd_depth: i32,
-    /// Fragments on the reverse strand
-    pub rev_depth: i32,
-}
 
 /// PoN cross-annotation for a tumor alt locus.
 /// One row per (tumor_sample_id, chrom, pos, tumor_alt_allele).
