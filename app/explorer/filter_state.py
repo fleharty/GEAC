@@ -114,6 +114,7 @@ MAIN_FILTER_KEYS = (
     "cycle_range",
     "map_qual_range",
     "insert_size_range",
+    "frag_gc_range",
     "read_strand_sel",
     "min_delta_n_frac",
 )
@@ -155,6 +156,7 @@ MAIN_FILTER_STATE = FilterState(
         "cycle_range",
         "map_qual_range",
         "insert_size_range",
+        "frag_gc_range",
     }),
     defaults={
         "chrom_sel": "",

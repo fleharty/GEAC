@@ -521,13 +521,17 @@ if _has_alt_reads:
             if _has_alt_reads_cols("n_n_before_alt", "n_n_after_alt")
             else "0"
         )
+        _gc_has_data_expr = (
+            "COUNT(frag_gc) > 0" if _alt_reads_has_frag_gc else "false"
+        )
         _reads_maxes = con.execute(f"""
             SELECT
                 MAX(family_size),
                 COALESCE(MAX(cycle), 300),
                 COALESCE(MAX(map_qual), 60),
                 COUNT(insert_size) > 0,
-                {_n_total_expr}
+                {_n_total_expr},
+                {_gc_has_data_expr}
             FROM alt_reads
         """).fetchone()
         st.session_state["_cached_fs_max"]     = _reads_maxes[0]   # None if all NULL
@@ -535,11 +539,13 @@ if _has_alt_reads:
         st.session_state["_cached_mq_max"]     = int(_reads_maxes[2])
         st.session_state["_cached_is_has_data"] = bool(_reads_maxes[3])
         st.session_state["_cached_n_total_max"] = int(_reads_maxes[4])
+        st.session_state["_cached_gc_has_data"] = bool(_reads_maxes[5])
     _fs_max_raw  = st.session_state["_cached_fs_max"]
     _cycle_max   = st.session_state["_cached_cycle_max"]
     _mq_max      = st.session_state["_cached_mq_max"]
     _is_has_data = st.session_state["_cached_is_has_data"]
     _n_total_max = st.session_state.get("_cached_n_total_max", 0)
+    _gc_has_data = st.session_state.get("_cached_gc_has_data", False)
     _fs_has_data = _fs_max_raw is not None
     _n_total_has_data = _has_alt_reads_cols("n_n_before_alt", "n_n_after_alt")
     _fs_max = int(_fs_max_raw) if _fs_has_data else 0
@@ -618,6 +624,29 @@ if _has_alt_reads:
     else:
         insert_size_range = (_IS_MIN, _IS_MAX)
 
+    if _gc_has_data:
+        frag_gc_range = st.sidebar.slider(
+            "Fragment GC range",
+            min_value=0.0, max_value=1.0,
+            value=(0.0, 1.0), step=0.01,
+            key="frag_gc_range",
+            help="Filter alt-supporting reads by fragment GC fraction "
+                 "(GC of the reference span from fragment start to fragment start + |TLEN|).",
+        )
+        _gc_lo, _gc_hi = frag_gc_range
+        if _gc_lo == 0.0 and _gc_hi == 1.0:
+            st.sidebar.caption(
+                "Fragment GC: no filter active — reads with any GC (including those "
+                "with no fragment GC available) are accepted."
+            )
+        else:
+            st.sidebar.caption(
+                f"Fragment GC: keeping only reads with GC between {_gc_lo:.2f} and {_gc_hi:.2f}. "
+                "Reads with no fragment GC (unpaired) are excluded."
+            )
+    else:
+        frag_gc_range = (0.0, 1.0)
+
     read_strand_sel = st.sidebar.radio(
         "Read",
         ["All", "R1 only", "R2 only"],
@@ -645,6 +674,7 @@ if _has_alt_reads:
     _mq_lo, _mq_hi = map_qual_range
     _n_total_lo, _n_total_hi = n_in_read_range
     _is_lo, _is_hi = insert_size_range
+    _gc_lo, _gc_hi = frag_gc_range
 
     if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
         _reads_conditions.append(f"family_size BETWEEN {_fs_lo} AND {_fs_hi}")
@@ -663,6 +693,10 @@ if _has_alt_reads:
     if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
         # Unpaired reads (insert_size IS NULL) are excluded when a range is active
         _reads_conditions.append(f"insert_size BETWEEN {_is_lo} AND {_is_hi}")
+
+    if _gc_has_data and (_gc_lo > 0.0 or _gc_hi < 1.0):
+        # Reads with no fragment GC (frag_gc IS NULL) are excluded when a range is active
+        _reads_conditions.append(f"frag_gc BETWEEN {_gc_lo} AND {_gc_hi}")
 
     if read_strand_sel == "R1 only":
         _reads_conditions.append("is_read1 = true")
@@ -686,15 +720,18 @@ else:
     map_qual_range = (0, 0)
     n_in_read_range = (0, 0)
     insert_size_range = (0, 0)
+    frag_gc_range = (0.0, 1.0)
     read_strand_sel = "All"
     _fs_has_data = False
     _is_has_data = False
+    _gc_has_data = False
     _n_total_has_data = False
     _fs_max = 0
     _cycle_max = 1
     _mq_max = 0
     _n_total_max = 0
     _fs_lo = _fs_hi = _cycle_lo = _cycle_hi = _mq_lo = _mq_hi = _n_total_lo = _n_total_hi = _is_lo = _is_hi = 0
+    _gc_lo, _gc_hi = 0.0, 1.0
 
 _base_table_expr = table_expr  # pre-reads-filter; used for sample-recurrence counts
 
@@ -1583,6 +1620,13 @@ def _build_active_filter_provenance(
     _append_provenance_row(
         rows,
         "per_read_filters",
+        "frag_gc",
+        f"{_gc_lo:.2f}-{_gc_hi:.2f}",
+        active=_has_alt_reads and _gc_has_data and (_gc_lo > 0.0 or _gc_hi < 1.0),
+    )
+    _append_provenance_row(
+        rows,
+        "per_read_filters",
         "read",
         read_strand_sel,
         active=_has_alt_reads and read_strand_sel != "All",
@@ -1637,6 +1681,8 @@ if _active_main_tab == TAB_SUMMARY.LABEL:
             _active_parts.append(f"N in read: {_n_total_lo}–{_n_total_hi}")
         if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
             _active_parts.append(f"insert size: {_is_lo}–{_is_hi}")
+        if _gc_has_data and (_gc_lo > 0.0 or _gc_hi < 1.0):
+            _active_parts.append(f"frag GC: {_gc_lo:.2f}–{_gc_hi:.2f}")
         if read_strand_sel != "All":
             _active_parts.append(read_strand_sel.lower())
         _reads_banner.warning(
