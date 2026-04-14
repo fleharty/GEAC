@@ -5306,9 +5306,9 @@ if _active_main_tab == TAB_READS.LABEL:
                                     alt.Chart(_gc_mean_df)
                                     .mark_bar()
                                     .encode(
-                                        alt.X("mean_family_size:Q", title="Mean family size"),
-                                        alt.Y("gc_bin:O", title="GC bin",
+                                        alt.X("gc_bin:O", title="GC bin",
                                               sort=[f"{b:.1f}" for b in _gc_bins]),
+                                        alt.Y("mean_family_size:Q", title="Mean family size"),
                                         alt.Color("gc_bin:O",
                                                   title="GC bin",
                                                   scale=alt.Scale(scheme="spectral"),
