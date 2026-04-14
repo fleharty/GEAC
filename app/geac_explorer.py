@@ -5237,6 +5237,55 @@ if _active_main_tab == TAB_READS.LABEL:
                                 "across family sizes indicates GC bias is not driven by consensus depth."
                             )
 
+                            # GC bin vs family size (transpose view)
+                            _gc_bins = [round(v * 0.1, 1) for v in range(1, 9)]  # 0.1 … 0.8
+                            _gc_bin_in = ", ".join(str(b) for b in _gc_bins)
+                            _gc_bin_df = con.execute(f"""
+                                SELECT
+                                    ar.family_size,
+                                    ROUND(FLOOR(ar.frag_gc * 10) / 10, 1) AS gc_bin,
+                                    COUNT(*) AS n_reads
+                                FROM {_r_join}
+                                WHERE ar.frag_gc IS NOT NULL
+                                  AND ar.family_size IN ({_gc_fs_in})
+                                  AND ROUND(FLOOR(ar.frag_gc * 10) / 10, 1) IN ({_gc_bin_in})
+                                GROUP BY ar.family_size, gc_bin
+                                ORDER BY ar.family_size, gc_bin
+                            """).df()
+
+                            if not _gc_bin_df.empty:
+                                _gc_bin_df["frac"] = _gc_bin_df.groupby("gc_bin")["n_reads"].transform(
+                                    lambda x: x / x.sum()
+                                )
+                                _gc_bin_df["gc_bin"] = _gc_bin_df["gc_bin"].apply(lambda v: f"{v:.1f}")
+
+                                _gc_bin_chart = (
+                                    alt.Chart(_gc_bin_df)
+                                    .mark_line(point=True, opacity=0.85)
+                                    .encode(
+                                        alt.X("family_size:O", title="Family size",
+                                              sort=[str(s) for s in _gc_fs_sizes]),
+                                        alt.Y("frac:Q", title="Fraction of reads"),
+                                        alt.Color("gc_bin:O",
+                                                  title="GC bin",
+                                                  scale=alt.Scale(scheme="spectral"),
+                                                  sort=[f"{b:.1f}" for b in _gc_bins]),
+                                        tooltip=[
+                                            alt.Tooltip("gc_bin:O",       title="GC bin"),
+                                            alt.Tooltip("family_size:O",  title="Family size"),
+                                            alt.Tooltip("frac:Q",         title="Fraction", format=".4f"),
+                                        ],
+                                    )
+                                    .properties(height=250)
+                                )
+                                st.altair_chart(_gc_bin_chart, width="stretch")
+                                st.caption(
+                                    "Each line is a GC bin (0.1–0.9 in steps of 0.1), normalised "
+                                    "independently across family sizes. A line that rises or falls "
+                                    "with family size indicates that GC content is associated with "
+                                    "consensus depth."
+                                )
+
         # ── Row 4: Mapping quality distribution ───────────────────────────────
         st.subheader("Mapping quality distribution")
         _mq_df = con.execute(f"""
