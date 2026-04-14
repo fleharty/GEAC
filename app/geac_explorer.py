@@ -5286,6 +5286,49 @@ if _active_main_tab == TAB_READS.LABEL:
                                     "consensus depth."
                                 )
 
+                            # Mean family size per GC bin
+                            _gc_mean_df = con.execute(f"""
+                                SELECT
+                                    ROUND(FLOOR(ar.frag_gc * 10) / 10, 1) AS gc_bin,
+                                    AVG(ar.family_size)                    AS mean_family_size,
+                                    COUNT(*)                               AS n_reads
+                                FROM {_r_join}
+                                WHERE ar.frag_gc IS NOT NULL
+                                  AND ar.family_size IS NOT NULL
+                                  AND ROUND(FLOOR(ar.frag_gc * 10) / 10, 1) IN ({_gc_bin_in})
+                                GROUP BY gc_bin
+                                ORDER BY gc_bin
+                            """).df()
+
+                            if not _gc_mean_df.empty:
+                                _gc_mean_df["gc_bin"] = _gc_mean_df["gc_bin"].apply(lambda v: f"{v:.1f}")
+                                _gc_mean_chart = (
+                                    alt.Chart(_gc_mean_df)
+                                    .mark_bar()
+                                    .encode(
+                                        alt.X("mean_family_size:Q", title="Mean family size"),
+                                        alt.Y("gc_bin:O", title="GC bin",
+                                              sort=[f"{b:.1f}" for b in _gc_bins]),
+                                        alt.Color("gc_bin:O",
+                                                  title="GC bin",
+                                                  scale=alt.Scale(scheme="spectral"),
+                                                  sort=[f"{b:.1f}" for b in _gc_bins],
+                                                  legend=None),
+                                        tooltip=[
+                                            alt.Tooltip("gc_bin:O",            title="GC bin"),
+                                            alt.Tooltip("mean_family_size:Q",  title="Mean family size", format=".2f"),
+                                            alt.Tooltip("n_reads:Q",           title="Reads"),
+                                        ],
+                                    )
+                                    .properties(height=250)
+                                )
+                                st.altair_chart(_gc_mean_chart, width="stretch")
+                                st.caption(
+                                    "Mean family size for each GC bin. A systematic difference "
+                                    "across bins suggests GC-dependent capture efficiency affecting "
+                                    "consensus depth."
+                                )
+
         # ── Row 4: Mapping quality distribution ───────────────────────────────
         st.subheader("Mapping quality distribution")
         _mq_df = con.execute(f"""
