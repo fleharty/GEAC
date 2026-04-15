@@ -24,6 +24,7 @@ struct InputProvenance {
     source_kind: &'static str,
     file_size_bytes: Option<i64>,
     modified_at_epoch_seconds: Option<f64>,
+    checksum_sha256: Option<String>,
     sample_count: Option<i64>,
     row_count: Option<i64>,
 }
@@ -302,12 +303,32 @@ fn collect_parquet_input_provenance(
         None
     };
 
+    // The checksum column is only present in alt_bases Parquets.
+    let checksum_sha256: Option<String> = if spec.table == "alt_bases" {
+        conn.query_row(
+            &format!(
+                "SELECT input_checksum_sha256 \
+                 FROM read_parquet('{escaped}') \
+                 WHERE input_checksum_sha256 IS NOT NULL \
+                 LIMIT 1"
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .with_context(|| format!("failed to read checksum from {}", path.display()))?
+        .flatten()
+    } else {
+        None
+    };
+
     Ok(InputProvenance {
         input_path: path.display().to_string(),
         input_kind: spec.table,
         source_kind: "parquet",
         file_size_bytes: file_size_bytes(path),
         modified_at_epoch_seconds: modified_at_epoch_seconds(path),
+        checksum_sha256,
         sample_count,
         row_count: Some(row_count),
     })
@@ -453,6 +474,7 @@ fn merge_duckdb_inputs(
             source_kind: "duckdb",
             file_size_bytes: file_size_bytes(db_path),
             modified_at_epoch_seconds: modified_at_epoch_seconds(db_path),
+            checksum_sha256: None,
             sample_count,
             row_count: Some(total_rows),
         });
@@ -544,6 +566,11 @@ fn write_input_provenance(conn: &Connection, inputs: &[InputProvenance]) -> Resu
             .row_count
             .map(|value| value.to_string())
             .unwrap_or_else(|| "NULL".to_string());
+        let checksum_sql = input
+            .checksum_sha256
+            .as_deref()
+            .map(|h| format!("'{}'", escape_sql_literal(h)))
+            .unwrap_or_else(|| "NULL".to_string());
 
         conn.execute_batch(&format!(
             "INSERT INTO geac_inputs (
@@ -551,7 +578,7 @@ fn write_input_provenance(conn: &Connection, inputs: &[InputProvenance]) -> Resu
                  modified_at, checksum_sha256, sample_count, row_count
              ) VALUES (
                  '{}', '{}', '{}', {file_size_sql},
-                 {modified_at_sql}, NULL, {sample_count_sql}, {row_count_sql}
+                 {modified_at_sql}, {checksum_sql}, {sample_count_sql}, {row_count_sql}
              );",
             escape_sql_literal(&input.input_path),
             input.input_kind,

@@ -681,7 +681,7 @@ WHERE c.frac_mapq0 > 0.3;
 - [ ] Longitudinal tracking — add `run_id` and `run_date` provenance fields to `CoverageArgs`
   and `CoverageRecord`; surface a run-over-run depth trend line in the Summary tab
 
-## Fragmentomics (long-term, low priority)
+## Fragmentomics
 
 **Motivation:** Cell-free DNA (cfDNA) derived from tumour cells has distinct fragmentation
 patterns compared to normal cfDNA. Capturing fragment-level features enables nucleosome
@@ -689,30 +689,37 @@ positioning analysis and cancer detection via fragmentation signatures — witho
 additional sequencing.
 
 All required infrastructure is already in place: `RefCache` for reference access,
-`insert_size` in the reads schema, and read start/end positions.
+`insert_size` in the reads schema, and read start/end positions. `frag_gc` is already
+implemented in `alt_reads`.
 
-### Candidate columns to add to `alt_reads`
+### Medium-term: `frag_midpoint` on `alt_reads`
 
-| Column | Description | Notes |
-|--------|-------------|-------|
-| `frag_end_motif` | 4 bp sequence at the 5′ cut site (from reference) | Highest-value feature; requires per-fragment reference lookup via `RefCache` |
-| `frag_gc` | GC fraction of the full insert | Computed from reference sequence between fragment start and end |
-| `frag_midpoint` | Genomic centre of the insert | Useful for nucleosome positioning / NDR analysis |
-| `frag_start` | Genomic start coordinate of the fragment | Already derivable from SAM `POS` |
-| `frag_end` | Genomic end coordinate of the fragment | Already derivable from SAM `TLEN` |
+Add `frag_midpoint` (`frag_start + insert_size / 2`, 0-based ref coord) as an optional
+`Int64` field on `AltRead`. Write it to the reads Parquet. Add a fragment midpoint offset
+distribution plot in the Explorer Reads tab (offset = `frag_midpoint - pos`), using the
+same `_has_alt_reads_cols` guard pattern as `frag_gc`.
 
-### Implementation notes
+- [ ] Add `frag_midpoint` to `AltRead` struct in `src/record.rs`
+- [ ] Compute in `src/bam/mod.rs` at both SNV and indel call sites; thread through `build_alt_read` in `src/bam/builders.rs`
+- [ ] Add column to `src/writer/parquet_reads.rs` and `schema/geac_schema.json`
+- [ ] Add midpoint offset distribution plot to the Reads tab in the Explorer
 
-- `frag_end_motif` requires fetching 4 bases from the reference at the 5′ cut site for each
-  fragment; `RefCache` already handles this efficiently.
-- `frag_gc` requires fetching the full insert sequence from the reference — cost scales with
-  insert size, but typical cfDNA inserts are short (~167 bp).
-- These columns are optional additions to the existing `alt_reads` schema; they do not affect
-  the locus table or any existing analysis.
+### Long-term: all-reads end-motif table
 
-- [ ] Add `frag_end_motif`, `frag_gc`, `frag_midpoint` to `AltRead` struct in `src/record.rs`
-- [ ] Populate these fields during BAM pileup in `src/bam/mod.rs` using `RefCache`
-- [ ] Add end-motif frequency plot and fragment midpoint distribution to the Reads tab in the Explorer
+End motifs (the k-mer at the fragment cut site) are only meaningful as a comparison between
+alt-supporting and reference-supporting reads. Since `alt_reads` only covers alt-supporting
+reads, adding `frag_end_motif` there has no reference baseline to compare against.
+
+The correct approach is a new table (separate from `alt_reads`) that captures, for every
+read at a pileup position: the 4-mer cut-site motif and whether the read supports alt or
+ref. The motif should be **reference-based** (`seq[frag_start-2..frag_start+2]`, centered
+on the cleavage point — 2 bases outside the fragment, 2 inside) to avoid hard-clip
+ambiguity. The Explorer would then compare motif distributions between alt-supporting and
+reference-supporting reads as a bait-bias signal.
+
+- [ ] Design the new table schema (per-read, not per-alt-read)
+- [ ] Implement collection in `geac collect` (opt-in flag, like `--reads-output`)
+- [ ] Add Explorer plot comparing end-motif frequency for alt vs ref reads
 
 ## Release roadmap
 

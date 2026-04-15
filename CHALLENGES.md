@@ -976,3 +976,34 @@ landmine. If a field's meaning changes based on another field, extract it into t
 discriminated type itself or delete it. Also: the GEAC↔VCF indel translation is the
 kind of pure function that belongs in a testable helper — the original inline logic in
 `get()` had been wrong for months with no unit test to catch it.
+
+### `input_checksum_sha256` always NULL in merged DuckDB (`geac_inputs` table)
+**Symptom:** After running `geac collect --input-checksum-sha256` and then `geac merge`,
+querying `SELECT checksum_sha256 FROM geac_inputs` in the merged DuckDB returned NULL for
+every row, even though the hash was visibly logged during the collect step.
+**Root cause:** The hash is computed and written to the `input_checksum_sha256` column in
+the per-sample alt_bases Parquet. But `geac merge`'s `InputProvenance` struct had no
+`checksum_sha256` field, `collect_parquet_input_provenance()` never read the column from
+the Parquet, and `write_input_provenance()` hardcoded `NULL` in the INSERT SQL. The hash
+existed in the Parquet files but was simply never forwarded to the merged database.
+**Fix:**
+1. Added `checksum_sha256: Option<String>` to the `InputProvenance` struct in `src/merge.rs`.
+2. In `collect_parquet_input_provenance()`, after the row/sample-count queries, added a
+   query against `alt_bases` Parquets only (other table types don't have this column):
+   ```rust
+   let checksum_sha256: Option<String> = if spec.table == "alt_bases" {
+       conn.query_row(
+           &format!("SELECT input_checksum_sha256 FROM read_parquet('{escaped}')
+                     WHERE input_checksum_sha256 IS NOT NULL LIMIT 1"),
+           [], |row| row.get(0),
+       ).optional()?.flatten()
+   } else { None };
+   ```
+3. Added `checksum_sha256: None` to the DuckDB-source `InputProvenance` push (DuckDB
+   inputs don't carry the per-BAM hash).
+4. In `write_input_provenance()`, replaced the hardcoded `NULL` literal with a proper
+   SQL literal derived from `input.checksum_sha256`.
+**Lesson:** When adding a new metadata column to `geac collect` output, immediately trace
+the full path through `geac merge`: `InputProvenance` struct → `collect_parquet_input_provenance`
+→ `write_input_provenance` INSERT. A column that exists in the Parquet but is never read
+by the merge step will silently produce NULLs with no error.
