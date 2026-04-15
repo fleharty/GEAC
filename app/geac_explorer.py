@@ -1803,56 +1803,39 @@ if _active_main_tab == TAB_VAF_DISTRIBUTION.LABEL:
                         f"ROUND(alt_count * 1.0 / total_depth, 4) < {bin_end}",
                     ], sel, key=f"vaf_{vtype}_{bin_start}")
 
-    # ── Depth retention at common het sites (bait-bias proxy) ─────────────────
+    # ── Allele fraction at gnomAD het sites (bait-bias proxy) ────────────────
     st.divider()
-    st.subheader("Depth retention at common het sites (bait-bias proxy)")
+    st.subheader("Allele fraction at gnomAD het sites (bait-bias proxy)")
     st.caption(
-        "At gnomAD-annotated sites where the observed allele fraction is 25–75%, "
-        "the sample is likely heterozygous — bait-bias would reduce total depth at "
-        "indel sites relative to the sample's median target coverage. "
-        "**depth_retained = total_depth / sample_median_target_depth.** "
-        "Values near 1.0 are expected; a lower median for insertions or deletions vs. "
-        "SNVs indicates reduced capture of indel-containing fragments. "
-        "Note: this is a per-sample-median normalisation (no locus-specific baseline)."
+        "At gnomAD-annotated sites where the observed allele fraction is 30–70%, "
+        "the sample is likely a true germline heterozygote. Bait-bias would cause "
+        "indel-containing fragments to be under-captured relative to reference-only "
+        "fragments, pulling the allele fraction below 0.5 for insertions and deletions "
+        "while SNVs remain near 0.5. "
+        "The dashed line marks the expected allele fraction of 0.5."
     )
-    if "gnomad_af" not in _schema_cols or not _has_sample_metrics:
+    if "gnomad_af" not in _schema_cols:
         st.info(
-            "This section requires `gnomad_af` annotation in the alt-bases table and "
-            "a `sample_metrics` table. Run `geac collect` with `--gnomad` and `--targets` "
-            "to produce these, then re-open the resulting database."
+            "This section requires `gnomad_af` annotation in the alt-bases table. "
+            "Run `geac collect` with `--gnomad` to produce this, then re-open the database."
         )
     else:
 
-        # Depth retention at common het gnomAD sites
         with _timed("bait_bias_gnomad_het"):
             _bb_df = con.execute(f"""
-                WITH sample_baseline AS (
-                    SELECT sample_id,
-                           MEDIAN(median_target_depth_all) AS baseline_depth
-                    FROM sample_metrics
-                    WHERE median_target_depth_all IS NOT NULL
-                    GROUP BY sample_id
-                    HAVING MEDIAN(median_target_depth_all) > 0
-                ),
-                het_sites AS (
-                    SELECT ab.variant_type,
-                           ab.total_depth * 1.0 / sb.baseline_depth AS depth_retained
-                    FROM {table_expr} ab
-                    JOIN sample_baseline sb ON ab.sample_id = sb.sample_id
-                    WHERE {where}
-                      AND ab.gnomad_af IS NOT NULL
-                      AND ab.total_depth > 0
-                      AND ab.alt_count * 1.0 / ab.total_depth BETWEEN 0.25 AND 0.75
-                )
                 SELECT
                     variant_type,
-                    MIN(depth_retained)                                             AS min_dr,
-                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY depth_retained)   AS q1,
-                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY depth_retained)   AS median_dr,
-                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY depth_retained)   AS q3,
-                    MAX(depth_retained)                                             AS max_dr,
-                    COUNT(*)                                                        AS n
-                FROM het_sites
+                    MIN(alt_count * 1.0 / total_depth)                                              AS min_vaf,
+                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY alt_count * 1.0 / total_depth)     AS q1,
+                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY alt_count * 1.0 / total_depth)     AS median_vaf,
+                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY alt_count * 1.0 / total_depth)     AS q3,
+                    MAX(alt_count * 1.0 / total_depth)                                              AS max_vaf,
+                    COUNT(*)                                                                        AS n
+                FROM {table_expr}
+                WHERE {where}
+                  AND gnomad_af IS NOT NULL
+                  AND total_depth > 0
+                  AND alt_count * 1.0 / total_depth BETWEEN 0.30 AND 0.70
                 GROUP BY variant_type
             """).df()
 
@@ -1863,13 +1846,13 @@ if _active_main_tab == TAB_VAF_DISTRIBUTION.LABEL:
             )
         else:
             _bb_df["iqr"]   = _bb_df["q3"] - _bb_df["q1"]
-            _bb_df["lower"] = (_bb_df["q1"] - 1.5 * _bb_df["iqr"]).clip(lower=_bb_df["min_dr"])
-            _bb_df["upper"] = (_bb_df["q3"] + 1.5 * _bb_df["iqr"]).clip(upper=_bb_df["max_dr"])
+            _bb_df["lower"] = (_bb_df["q1"] - 1.5 * _bb_df["iqr"]).clip(lower=_bb_df["min_vaf"])
+            _bb_df["upper"] = (_bb_df["q3"] + 1.5 * _bb_df["iqr"]).clip(upper=_bb_df["max_vaf"])
 
             _bb_base    = alt.Chart(_bb_df)
             _bb_whisker = _bb_base.mark_rule().encode(
                 x=alt.X("variant_type:N", title="Variant type", axis=alt.Axis(labelAngle=0)),
-                y=alt.Y("lower:Q", title="Depth retained", scale=alt.Scale(zero=False)),
+                y=alt.Y("lower:Q",     title="Allele fraction", scale=alt.Scale(domain=[0.25, 0.75])),
                 y2=alt.Y2("upper:Q"),
                 color=alt.Color("variant_type:N", legend=None),
             )
@@ -1880,20 +1863,20 @@ if _active_main_tab == TAB_VAF_DISTRIBUTION.LABEL:
                 color=alt.Color("variant_type:N", legend=None),
                 tooltip=[
                     "variant_type",
-                    alt.Tooltip("n:Q",        title="N",      format=","),
-                    alt.Tooltip("median_dr:Q", title="Median", format=".3f"),
-                    alt.Tooltip("q1:Q",        title="Q1",     format=".3f"),
-                    alt.Tooltip("q3:Q",        title="Q3",     format=".3f"),
-                    alt.Tooltip("lower:Q",     title="Whisker low",  format=".3f"),
-                    alt.Tooltip("upper:Q",     title="Whisker high", format=".3f"),
+                    alt.Tooltip("n:Q",          title="N",           format=","),
+                    alt.Tooltip("median_vaf:Q", title="Median VAF",  format=".3f"),
+                    alt.Tooltip("q1:Q",         title="Q1",          format=".3f"),
+                    alt.Tooltip("q3:Q",         title="Q3",          format=".3f"),
+                    alt.Tooltip("lower:Q",      title="Whisker low",  format=".3f"),
+                    alt.Tooltip("upper:Q",      title="Whisker high", format=".3f"),
                 ],
             )
             _bb_median = _bb_base.mark_tick(color="white", size=40, thickness=2).encode(
                 x=alt.X("variant_type:N"),
-                y=alt.Y("median_dr:Q"),
+                y=alt.Y("median_vaf:Q"),
             )
             _bb_ref_line = (
-                alt.Chart(pd.DataFrame({"y": [1.0]}))
+                alt.Chart(pd.DataFrame({"y": [0.5]}))
                 .mark_rule(color="gray", strokeDash=[4, 4])
                 .encode(y="y:Q")
             )
@@ -1901,14 +1884,14 @@ if _active_main_tab == TAB_VAF_DISTRIBUTION.LABEL:
                 (_bb_whisker + _bb_box + _bb_median + _bb_ref_line)
                 .properties(
                     height=300,
-                    title="Depth retained at common het sites by variant type (observed / sample median)",
+                    title="Allele fraction at gnomAD het sites by variant type",
                 )
                 .interactive(),
                 use_container_width=True,
             )
             _bb_counts = {r["variant_type"]: int(r["n"]) for _, r in _bb_df.iterrows()}
             st.caption(
-                "gnomAD AF 30–70%, confirmed het (VAF 25–75%). "
+                "gnomAD-annotated sites, observed allele fraction 30–70%. "
                 + "  ".join(f"{vt}: n={_bb_counts.get(vt, 0):,}" for vt in ["SNV", "insertion", "deletion"] if vt in _bb_counts)
             )
 
