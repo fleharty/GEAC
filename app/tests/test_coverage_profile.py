@@ -1,4 +1,4 @@
-"""Tests for interval-aware coverage profile expansion helpers."""
+"""Tests for bin-weighted coverage profile aggregation helpers."""
 
 from __future__ import annotations
 
@@ -16,7 +16,18 @@ from coverage_profile import (
 )
 
 
-def test_expanded_depth_profile_uses_interval_spans():
+def test_depth_profile_bin_weighted_aggregation():
+    """Bins are plotted at their own pos; no expansion across bin width.
+
+    sample_a has a single 4bp bin [100,104) with depth=40.
+    sample_b has four 1bp bins [100,101), [101,102), [102,103), [103,104)
+    with depths 10, 20, 30, 40.
+
+    Without expansion, sample_a only contributes at pos=100 (not 101–103).
+    Cross-sample stats therefore differ at each position:
+      pos=100: both samples → mean=(40+10)/2=25, n=2
+      pos=101–103: sample_b only → mean=20/30/40, n=1
+    """
     con = duckdb.connect()
     con.execute(
         """
@@ -47,28 +58,30 @@ def test_expanded_depth_profile_uses_interval_spans():
         ],
     )
 
+    # Genomic span: MAX(end=104) - MIN(pos=100) = 4
     assert expanded_profile_position_count(con, "coverage", "") == 4
 
     profile = load_expanded_depth_profile(con, "coverage", "")
+    # Four rows: one per distinct pos value present in the data
     assert profile["pos"].tolist() == [100, 101, 102, 103]
-    assert profile["mean_depth"].round(2).tolist() == [25.0, 30.0, 35.0, 40.0]
+    # pos=100: mean of sample_a(40) and sample_b(10) = 25
+    # pos=101–103: only sample_b → 20, 30, 40
+    assert profile["mean_depth"].round(2).tolist() == [25.0, 20.0, 30.0, 40.0]
     assert profile["min_depth"].tolist() == [10.0, 20.0, 30.0, 40.0]
-    assert profile["max_depth"].tolist() == [40.0, 40.0, 40.0, 40.0]
-    assert profile["n_samples"].tolist() == [2, 2, 2, 2]
+    assert profile["max_depth"].tolist() == [40.0, 20.0, 30.0, 40.0]
+    assert profile["n_samples"].tolist() == [2, 1, 1, 1]
 
     sample_profile = load_expanded_sample_profile(con, "coverage", "")
-    assert sample_profile["pos"].tolist() == [100, 100, 101, 101, 102, 102, 103, 103]
+    # sample_a only appears at pos=100; sample_b appears at all four positions
+    assert sample_profile["pos"].tolist() == [100, 100, 101, 102, 103]
     assert sample_profile["sample_id"].tolist() == [
         "sample_a",
         "sample_b",
-        "sample_a",
         "sample_b",
-        "sample_a",
         "sample_b",
-        "sample_a",
         "sample_b",
     ]
-    assert sample_profile["depth"].tolist() == [40, 10, 40, 20, 40, 30, 40, 40]
+    assert sample_profile["depth"].tolist() == [40, 10, 20, 30, 40]
 
 
 def test_display_step_rebuckets_to_bin_resolution():

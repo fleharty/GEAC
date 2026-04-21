@@ -888,7 +888,7 @@ with tab_profile:
         st.info("No data for the selected region/gene.")
     elif _prof_n_pos > 50_000:
         st.warning(
-            f"This region spans {_prof_n_pos:,} genomic positions after interval expansion. "
+            f"This region spans {_prof_n_pos:,} genomic positions. "
             "Consider using a smaller region or re-running `geac coverage` with a larger `--bin-size`."
         )
     else:

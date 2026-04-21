@@ -161,23 +161,9 @@ pub fn collect_coverage(
             exon_number,
             args,
         );
-        if args
-            .adaptive_depth_threshold
-            .map_or(false, |t| tally.total_depth < t)
-        {
-            // Flush any in-progress bin, then emit this position at single-base resolution
-            if let Some(bin) = acc.finish() {
-                writer.push(bin)?;
-                positions_written += 1;
-            }
-            acc = BinAccumulator::new(args.bin_size);
-            writer.push(record)?;
+        if let Some(bin) = acc.push(record) {
+            writer.push(bin)?;
             positions_written += 1;
-        } else {
-            if let Some(bin) = acc.push(record) {
-                writer.push(bin)?;
-                positions_written += 1;
-            }
         }
 
         positions_seen += 1;

@@ -399,8 +399,7 @@ Key options:
 | `--min-base-qual` | `20` | Minimum base quality |
 | `--gc-window` | `100` | Window size (bp) for GC-content calculation |
 | `--min-depth` | `0` | Only emit positions with depth ≥ this value |
-| `--bin-size` | `1` | Merge consecutive positions into bins of this size |
-| `--adaptive-depth-threshold` | — | Positions with depth below this value are emitted at single-base resolution (`bin_size=1`) and split any in-progress bin, preserving precision in low-coverage regions |
+| `--bin-size` | `1` | Merge consecutive positions into bins of this size; use larger values (e.g. `1000`) for WGS runs to keep output manageable |
 | `--intervals-output` | — | Write a per-interval summary Parquet alongside the main output (requires `--targets`); used by `geac merge` to populate the `coverage_intervals` DuckDB table |
 | `--fill-zeros` | off | Emit zero-depth positions across all reference contigs even without `--targets`; useful for WGS dropout detection. Has no effect when `--min-depth > 0`. Combine with `--bin-size` for whole-genome runs to keep output size manageable |
 | `--track NAME:FILE` | — | Pre-computed BEDGraph annotation track (repeatable); each `NAME` becomes a nullable `Float32` column in the output Parquet (e.g. `--track gem150:gem_150mer.bedgraph`) |
@@ -571,7 +570,7 @@ The Coverage Explorer provides interactive analysis of `geac coverage` output. I
   - *Mean MAPQ* — cross-sample average mapping quality; dips here indicate depth drops driven by poor mapping rather than true under-coverage
   - *Frac MAPQ 0* — fraction of reads with MAPQ=0; highlights multi-mapping regions that the mean MAPQ can obscure
   - *GC Content* — reference GC% across the window
-  Mixed-resolution data (from `--adaptive-depth-threshold`) is handled correctly by expanding each coverage record to its true genomic interval before aggregation. The ACMG Secondary Findings v3.2 gene list can be used to quickly filter the gene selector to actionable genes.
+  Bins are weighted by `bin_n` when aggregating across samples so wider bins contribute proportionally. The ACMG Secondary Findings v3.2 gene list can be used to quickly filter the gene selector to actionable genes.
 - **IGV** — embedded IGV.js viewer; pre-populated with locus from the Low Coverage tab row click; supports GCS BAMs via ADC token
 
 ### Project config (geac.toml)
