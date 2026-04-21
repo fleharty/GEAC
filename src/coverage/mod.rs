@@ -9,6 +9,7 @@ use crate::bam::{open_bam, read_group_sample_id, RefCache};
 use crate::cli::CoverageArgs;
 use crate::gene_annotations::GeneAnnotations;
 use crate::record::{CoverageRecord, IntervalRecord};
+use crate::region::{RegionInput, parse_region_input};
 use crate::targets::TargetIntervals;
 use crate::track::TrackSet;
 use crate::writer::parquet_coverage::CoverageWriter;
@@ -51,11 +52,16 @@ pub fn collect_coverage(
             .collect()
     };
 
-    if let Some(region) = &args.region {
-        reader
-            .fetch(region.as_str())
-            .with_context(|| format!("failed to fetch region '{region}'"))?;
-    }
+    let region_input = parse_region_input(args.region.as_deref())?;
+    let fetch_regions: Vec<Option<String>> = match &region_input {
+        None => vec![None],
+        Some(RegionInput::Single(s)) => vec![Some(s.clone())],
+        Some(RegionInput::Intervals(ivs)) => ivs
+            .named_intervals()
+            .iter()
+            .map(|iv| Some(format!("{}:{}-{}", iv.chrom, iv.start + 1, iv.end)))
+            .collect(),
+    };
 
     let has_targets = target_intervals.is_some();
     // When targets are provided, track which positions had reads so we can fill zeros.
@@ -84,6 +90,13 @@ pub fn collect_coverage(
     let progress_interval = std::time::Duration::from_secs(args.progress_interval);
     let mut last_progress = start;
     let mut acc = BinAccumulator::new(args.bin_size);
+
+    for fetch_region in &fetch_regions {
+        if let Some(r) = fetch_region.as_deref() {
+            reader
+                .fetch(r)
+                .with_context(|| format!("failed to fetch region '{r}'"))?;
+        }
 
     for pileup in reader.pileup() {
         let pileup = pileup.context("error reading pileup")?;
@@ -184,11 +197,15 @@ pub fn collect_coverage(
         }
     }
 
-    // Flush any partial bin from the pileup phase before zero-depth fill
+    // Flush partial bin at interval boundary so positions from different intervals
+    // are never merged into the same bin.
     if let Some(bin) = acc.finish() {
         writer.push(bin)?;
         positions_written += 1;
     }
+    acc = BinAccumulator::new(args.bin_size);
+
+    } // end fetch_regions loop
 
     // Fill in zero-depth positions within targets that had no reads
     if let Some(ti) = target_intervals {

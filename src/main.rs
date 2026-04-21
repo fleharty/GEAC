@@ -12,6 +12,7 @@ mod pon;
 mod progress;
 mod qc;
 mod record;
+mod region;
 mod repeat;
 mod targets;
 mod track;

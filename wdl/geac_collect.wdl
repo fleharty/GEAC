@@ -28,7 +28,8 @@ version 1.0
 ##   gnomad_af_field      - INFO field to use as allele frequency (default "AF")
 ##   targets              - (optional) BED or Picard interval list; annotates on_target column
 ##   gene_annotations     - (optional) GFF3, GTF, or UCSC genePred; annotates gene column
-##   region               - (optional) restrict to a region, e.g. chr1:1-1000000
+##   region               - (optional) restrict to a region string, e.g. chr1:1-1000000
+##   region_bed           - (optional) BED or Picard interval list; restricts pileup to those intervals
 ##   repeat_window        - bases each side of locus to scan for homopolymers/STRs (default 10)
 ##   min_base_qual        - minimum base quality (default 1)
 ##   min_map_qual         - minimum mapping quality (default 0)
@@ -74,7 +75,8 @@ workflow GeacCollect {
         String  gnomad_af_field = "AF"
         File?   targets
         File?   gene_annotations
-        String? region
+        String? region          # single region string, e.g. "chr1:1-1000000"
+        File?   region_bed      # BED or Picard interval list; restricts processing to those intervals
         Int repeat_window = 10
 
         Int     min_base_qual  = 1
@@ -87,7 +89,7 @@ workflow GeacCollect {
         Int     threads        = 1
 
         String docker_image
-        Int    memory_gb    = 8
+        Int    memory_gb    = 32
         Int    disk_gb      = 100
         Int    preemptible  = 2
     }
@@ -115,6 +117,7 @@ workflow GeacCollect {
             targets               = targets,
             gene_annotations      = gene_annotations,
             region                = region,
+            region_bed            = region_bed,
             repeat_window         = repeat_window,
             min_base_qual         = min_base_qual,
             min_map_qual          = min_map_qual,
@@ -162,6 +165,7 @@ task Collect {
         File?   targets
         File?   gene_annotations
         String? region
+        File?   region_bed
         Int     repeat_window
 
         Int     min_base_qual
@@ -209,6 +213,7 @@ task Collect {
             ~{"--targets "          + targets} \
             ~{"--gene-annotations " + gene_annotations} \
             ~{"--region "           + region} \
+            ~{"--region "           + region_bed} \
             --repeat-window ~{repeat_window} \
             ~{if include_duplicates    then "--include-duplicates"    else ""} \
             ~{if include_secondary     then "--include-secondary"     else ""} \

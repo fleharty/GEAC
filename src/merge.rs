@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use anyhow::{bail, Context, Result};
-use duckdb::Connection;
+use duckdb::{Connection, OptionalExt};
 use tracing::info;
 
 use crate::cli::MergeArgs;

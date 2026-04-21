@@ -91,7 +91,7 @@ Optional flags:
 | `--include-duplicates` | off | Count PCR/optical duplicate reads (FLAG 0x400) |
 | `--include-secondary` | off | Count secondary alignments (FLAG 0x100) |
 | `--include-supplementary` | off | Count supplementary alignments (FLAG 0x800) |
-| `--region` | whole genome | Restrict to a genomic region (e.g. `chr1:1-1000000`) |
+| `--region` | whole genome | Restrict to a region string (`chr1:1-1000000`) **or** a BED/Picard interval list file path; when a file is given, the pileup runs over each interval in the file |
 | `--progress-interval` | 30 | Seconds between progress reports to stderr |
 | `--reads-output` | off | Also write per-read detail Parquet (see below) |
 
@@ -386,7 +386,7 @@ Key options:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--targets` | — | BED or Picard interval list; forces all target positions to be emitted |
-| `--region` | — | Restrict to a genomic region (e.g. `chr1:1000-2000`) |
+| `--region` | — | Restrict to a region string (`chr1:1000-2000`) **or** a BED/Picard interval list file path |
 | `--gene-annotations` | — | GTF, GFF3, or UCSC genePred for gene/transcript annotation |
 | `--sample-id` | SM tag | Override the sample ID stored in the output |
 | `--batch` | — | Batch/group label stored as a column |

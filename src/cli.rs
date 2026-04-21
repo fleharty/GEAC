@@ -169,7 +169,9 @@ pub struct CollectArgs {
     #[arg(long)]
     pub include_supplementary: bool,
 
-    /// Restrict processing to this region (e.g. "chr1:1000-2000")
+    /// Restrict processing to a region. Accepts either a region string (e.g. "chr1:1000-2000")
+    /// or a path to a BED file / Picard interval list. When a file path is given, the pileup
+    /// is restricted to each interval in the file in turn.
     #[arg(long)]
     pub region: Option<String>,
 
@@ -358,7 +360,9 @@ pub struct CoverageArgs {
     #[arg(long)]
     pub targets: Option<PathBuf>,
 
-    /// Restrict processing to this region (e.g. "chr1:1000-2000")
+    /// Restrict processing to a region. Accepts either a region string (e.g. "chr1:1000-2000")
+    /// or a path to a BED file / Picard interval list. When a file path is given, the pileup
+    /// is restricted to each interval in the file in turn.
     #[arg(long)]
     pub region: Option<String>,
 

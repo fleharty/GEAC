@@ -16,6 +16,7 @@ use crate::gene_annotations::GeneAnnotations;
 use crate::gnomad::GnomadIndex;
 use crate::progress::ProgressReporter;
 use crate::record::{AltBase, AltRead, SampleMetricsRecord};
+use crate::region::{RegionInput, parse_region_input};
 use crate::repeat::compute_repeat_metrics;
 use crate::targets::TargetIntervals;
 use crate::vcf::VariantAnnotator;
@@ -69,213 +70,229 @@ pub fn collect_alt_bases(
             .collect()
     };
 
-    if let Some(region) = &args.region {
-        bam.fetch(region.as_str()).with_context(|| {
-            format!(
-                "failed to fetch region '{region}': check that the region is valid and the BAM is indexed"
-            )
-        })?;
-    }
+    let region_input = parse_region_input(args.region.as_deref())?;
+    let region_filter = match &region_input {
+        Some(RegionInput::Single(s)) => parse_region_spec(s),
+        _ => None,
+    };
+    let fetch_regions: Vec<Option<String>> = match &region_input {
+        None => vec![None],
+        Some(RegionInput::Single(s)) => vec![Some(s.clone())],
+        Some(RegionInput::Intervals(ivs)) => ivs
+            .named_intervals()
+            .iter()
+            .map(|iv| Some(format!("{}:{}-{}", iv.chrom, iv.start + 1, iv.end)))
+            .collect(),
+    };
 
     let start = Instant::now();
     let (reporter, progress) = ProgressReporter::start(args.progress_interval);
     let collect_reads = args.reads_output;
     let mut records: Vec<AltBase> = Vec::new();
     let mut read_records: Vec<AltRead> = Vec::new();
-    let region_filter = args.region.as_deref().and_then(parse_region_spec);
     let mut sample_metrics_acc = target_intervals.map(|_| SampleMetricsAccumulator::default());
 
-    for pileup in bam.pileup() {
-        let pileup = pileup.context("error reading pileup")?;
-        let tid = pileup.tid() as usize;
-        let pos = pileup.pos() as i64;
-
-        let (chrom, ref_base) = ref_cache.get(&targets, tid, pos as usize)?;
-        if ref_base == 'N' {
-            continue;
+    for fetch_region in &fetch_regions {
+        if let Some(r) = fetch_region.as_deref() {
+            bam.fetch(r).with_context(|| {
+                format!(
+                    "failed to fetch region '{r}': check that the region is valid and the BAM is indexed"
+                )
+            })?;
         }
 
-        let PileupResult {
-            bases,
-            total_depth,
-            fwd_depth,
-            rev_depth,
-            overlap_depth,
-            read_details,
-        } = tally_pileup(
-            &pileup,
-            args.pipeline,
-            args.min_base_qual,
-            args.min_map_qual,
-            args.include_duplicates,
-            args.include_secondary,
-            args.include_supplementary,
-            ref_base,
-            collect_reads,
-            false,
-        );
+        for pileup in bam.pileup() {
+            let pileup = pileup.context("error reading pileup")?;
+            let tid = pileup.tid() as usize;
+            let pos = pileup.pos() as i64;
 
-        progress.positions_processed.fetch_add(1, Ordering::Relaxed);
-        progress
-            .reads_processed
-            .fetch_add(total_depth as u64, Ordering::Relaxed);
-        progress.update_locus(&chrom, pos);
-
-        if total_depth == 0 {
-            continue;
-        }
-
-        let on_target = target_intervals.map(|t| t.contains(&chrom, pos));
-        if let Some(acc) = sample_metrics_acc.as_mut() {
-            acc.observe_position(
-                &chrom,
-                pos,
-                total_depth,
-                on_target == Some(true),
-                region_filter.as_ref(),
-            );
-        }
-        let gene = gene_annots.and_then(|g| g.get(&chrom, pos)).map(|a| a.gene);
-        let repeat =
-            compute_repeat_metrics(ref_cache.current_seq(), pos as usize, args.repeat_window);
-        let trinuc_context = {
-            let seq = ref_cache.current_seq();
-            let p = pos as usize;
-            if p > 0 && p + 1 < seq.len() {
-                Some(format!(
-                    "{}{}{}",
-                    seq[p - 1] as char,
-                    seq[p] as char,
-                    seq[p + 1] as char
-                ))
-            } else {
-                None
-            }
-        };
-
-        let ref_tally = bases.get(&ref_base);
-        let locus = LocusContext::new(
-            args,
-            &sample_id,
-            &chrom,
-            pos,
-            ref_base,
-            total_depth,
-            fwd_depth,
-            rev_depth,
-            overlap_depth,
-            ref_tally,
-            on_target,
-            gene,
-            &repeat,
-            trinuc_context,
-            input_checksum_sha256.clone(),
-        );
-
-        for (base, tally) in &bases {
-            if *base == ref_base || *base == 'N' || tally.total == 0 {
+            let (chrom, ref_base) = ref_cache.get(&targets, tid, pos as usize)?;
+            if ref_base == 'N' {
                 continue;
             }
 
-            progress.alt_bases_found.fetch_add(1, Ordering::Relaxed);
-
-            let alt_allele = base.to_string();
-            let (variant_called, variant_filter) =
-                vcf_annotation(annotator, &chrom, pos, &alt_allele);
-            let gnomad_af = if let Some(ref mut g) = gnomad {
-                g.get(&chrom, pos, &ref_base.to_string(), &alt_allele)?
-            } else {
-                None
-            };
-
-            let n_ctx_summary = if collect_reads {
-                read_details
-                    .get(base)
-                    .map(|details| locus_n_context_summary(details))
-            } else {
-                None
-            };
-
-            locus.push_snv_record(
-                &mut records,
-                *base,
-                tally,
-                variant_called,
-                variant_filter,
-                gnomad_af,
-                n_ctx_summary,
+            let PileupResult {
+                bases,
+                total_depth,
+                fwd_depth,
+                rev_depth,
+                overlap_depth,
+                read_details,
+            } = tally_pileup(
+                &pileup,
+                args.pipeline,
+                args.min_base_qual,
+                args.min_map_qual,
+                args.include_duplicates,
+                args.include_secondary,
+                args.include_supplementary,
+                ref_base,
+                collect_reads,
+                false,
             );
 
+            progress.positions_processed.fetch_add(1, Ordering::Relaxed);
+            progress
+                .reads_processed
+                .fetch_add(total_depth as u64, Ordering::Relaxed);
+            progress.update_locus(&chrom, pos);
+
+            if total_depth == 0 {
+                continue;
+            }
+
+            let on_target = target_intervals.map(|t| t.contains(&chrom, pos));
+            if let Some(acc) = sample_metrics_acc.as_mut() {
+                acc.observe_position(
+                    &chrom,
+                    pos,
+                    total_depth,
+                    on_target == Some(true),
+                    region_filter.as_ref(),
+                );
+            }
+            let gene = gene_annots.and_then(|g| g.get(&chrom, pos)).map(|a| a.gene);
+            let repeat =
+                compute_repeat_metrics(ref_cache.current_seq(), pos as usize, args.repeat_window);
+            let trinuc_context = {
+                let seq = ref_cache.current_seq();
+                let p = pos as usize;
+                if p > 0 && p + 1 < seq.len() {
+                    Some(format!(
+                        "{}{}{}",
+                        seq[p - 1] as char,
+                        seq[p] as char,
+                        seq[p + 1] as char
+                    ))
+                } else {
+                    None
+                }
+            };
+
+            let ref_tally = bases.get(&ref_base);
+            let locus = LocusContext::new(
+                args,
+                &sample_id,
+                &chrom,
+                pos,
+                ref_base,
+                total_depth,
+                fwd_depth,
+                rev_depth,
+                overlap_depth,
+                ref_tally,
+                on_target,
+                gene,
+                &repeat,
+                trinuc_context,
+                input_checksum_sha256.clone(),
+            );
+
+            for (base, tally) in &bases {
+                if *base == ref_base || *base == 'N' || tally.total == 0 {
+                    continue;
+                }
+
+                progress.alt_bases_found.fetch_add(1, Ordering::Relaxed);
+
+                let alt_allele = base.to_string();
+                let (variant_called, variant_filter) =
+                    vcf_annotation(annotator, &chrom, pos, &alt_allele);
+                let gnomad_af = if let Some(ref mut g) = gnomad {
+                    g.get(&chrom, pos, &ref_base.to_string(), &alt_allele)?
+                } else {
+                    None
+                };
+
+                let n_ctx_summary = if collect_reads {
+                    read_details
+                        .get(base)
+                        .map(|details| locus_n_context_summary(details))
+                } else {
+                    None
+                };
+
+                locus.push_snv_record(
+                    &mut records,
+                    *base,
+                    tally,
+                    variant_called,
+                    variant_filter,
+                    gnomad_af,
+                    n_ctx_summary,
+                );
+
+                if collect_reads {
+                    if let Some(details) = read_details.get(base) {
+                        let seq = ref_cache.current_seq();
+                        for detail in details {
+                            let frag_gc = detail.insert_size.and_then(|ins| {
+                                gc_frac(seq, detail.frag_start as usize, ins as usize)
+                            });
+                            read_records.push(locus.build_alt_read(&alt_allele, detail, frag_gc));
+                        }
+                    }
+                }
+            }
+
+            let (indels, indel_read_details) = tally_indels(
+                &pileup,
+                args.pipeline,
+                pos,
+                ref_cache.current_seq(),
+                args.min_map_qual,
+                args.include_duplicates,
+                args.include_secondary,
+                args.include_supplementary,
+                collect_reads,
+            );
+
+            for indel in indels.values() {
+                if indel.total == 0 {
+                    continue;
+                }
+
+                progress.alt_bases_found.fetch_add(1, Ordering::Relaxed);
+
+                let (variant_called, variant_filter) =
+                    vcf_annotation(annotator, &chrom, pos, &indel.alt_allele);
+                let gnomad_af = if let Some(ref mut g) = gnomad {
+                    // gnomAD lookup needs the anchor base (single char), not the
+                    // deleted bases that IndelCount.ref_allele happens to store for
+                    // deletions. Pass ref_base — matches the SNV call above and the
+                    // AltBase.ref_allele contract downstream.
+                    g.get(&chrom, pos, &ref_base.to_string(), &indel.alt_allele)?
+                } else {
+                    None
+                };
+
+                let n_ctx_summary = if collect_reads {
+                    indel_read_details
+                        .get(&indel.alt_allele)
+                        .map(|details| locus_n_context_summary(details))
+                } else {
+                    None
+                };
+
+                locus.push_indel_record(
+                    &mut records,
+                    indel,
+                    variant_called,
+                    variant_filter,
+                    gnomad_af,
+                    n_ctx_summary,
+                );
+            }
+
             if collect_reads {
-                if let Some(details) = read_details.get(base) {
+                for (alt_allele, details) in &indel_read_details {
                     let seq = ref_cache.current_seq();
                     for detail in details {
                         let frag_gc = detail.insert_size.and_then(|ins| {
                             gc_frac(seq, detail.frag_start as usize, ins as usize)
                         });
-                        read_records.push(locus.build_alt_read(&alt_allele, detail, frag_gc));
+                        read_records.push(locus.build_alt_read(alt_allele, detail, frag_gc));
                     }
-                }
-            }
-        }
-
-        let (indels, indel_read_details) = tally_indels(
-            &pileup,
-            args.pipeline,
-            pos,
-            ref_cache.current_seq(),
-            args.min_map_qual,
-            args.include_duplicates,
-            args.include_secondary,
-            args.include_supplementary,
-            collect_reads,
-        );
-
-        for indel in indels.values() {
-            if indel.total == 0 {
-                continue;
-            }
-
-            progress.alt_bases_found.fetch_add(1, Ordering::Relaxed);
-
-            let (variant_called, variant_filter) =
-                vcf_annotation(annotator, &chrom, pos, &indel.alt_allele);
-            let gnomad_af = if let Some(ref mut g) = gnomad {
-                // gnomAD lookup needs the anchor base (single char), not the
-                // deleted bases that IndelCount.ref_allele happens to store for
-                // deletions. Pass ref_base — matches the SNV call above and the
-                // AltBase.ref_allele contract downstream.
-                g.get(&chrom, pos, &ref_base.to_string(), &indel.alt_allele)?
-            } else {
-                None
-            };
-
-            let n_ctx_summary = if collect_reads {
-                indel_read_details
-                    .get(&indel.alt_allele)
-                    .map(|details| locus_n_context_summary(details))
-            } else {
-                None
-            };
-
-            locus.push_indel_record(
-                &mut records,
-                indel,
-                variant_called,
-                variant_filter,
-                gnomad_af,
-                n_ctx_summary,
-            );
-        }
-
-        if collect_reads {
-            for (alt_allele, details) in &indel_read_details {
-                let seq = ref_cache.current_seq();
-                for detail in details {
-                    let frag_gc = detail.insert_size.and_then(|ins| {
-                        gc_frac(seq, detail.frag_start as usize, ins as usize)
-                    });
-                    read_records.push(locus.build_alt_read(alt_allele, detail, frag_gc));
                 }
             }
         }
