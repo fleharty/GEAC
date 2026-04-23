@@ -91,9 +91,15 @@ pub fn collect_fragments(args: &FragmentsArgs, writer: &mut FragmentsWriter) -> 
 
             let gc_content = gc_frac(seq, frag_start as usize, insert_size as usize);
 
-            let end_motif_5p = extract_motif(seq, frag_start as usize, 4);
-            let end_motif_3p = if frag_end as usize >= 4 {
-                extract_motif(seq, frag_end as usize - 4, 4)
+            // Centered 4-mer: [cut-2, cut+2) — 2 bp inside + 2 bp outside the fragment,
+            // matching the standard cfDNA end-motif convention (Jiang et al. 2020).
+            let end_motif_5p = if frag_start as usize >= 2 {
+                extract_motif(seq, frag_start as usize - 2, 4)
+            } else {
+                None
+            };
+            let end_motif_3p = if frag_end as usize >= 2 {
+                extract_motif(seq, frag_end as usize - 2, 4)
             } else {
                 None
             };
