@@ -4,6 +4,7 @@ mod bam;
 mod cli;
 mod cohort;
 mod coverage;
+mod fragments;
 mod gene_annotations;
 mod gnomad;
 mod merge;
@@ -272,6 +273,21 @@ fn main() -> Result<()> {
                 }
                 iv_writer.close()?;
             }
+
+            info!("done");
+        }
+
+        Command::Fragments(args) => {
+            info!(
+                input = %args.input.display(),
+                output = %args.output.display(),
+                sample_id = %args.sample_id.as_deref().unwrap_or("<from SM tag>"),
+                "collecting fragments"
+            );
+
+            let mut frag_writer = writer::parquet_fragments::FragmentsWriter::new(&args.output)?;
+            fragments::collect_fragments(&args, &mut frag_writer)?;
+            frag_writer.close()?;
 
             info!("done");
         }

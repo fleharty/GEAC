@@ -16,6 +16,10 @@ struct TableSpec {
     suffix: Option<&'static str>,
     index_sql: Option<&'static str>,
     rebuild_samples_summary: bool,
+    /// When true, files are registered as an external DuckDB VIEW over read_parquet()
+    /// rather than ingested into a table. Use for large outputs where copying into
+    /// DuckDB would be prohibitively expensive (e.g. WGS-scale fragment records).
+    view_only: bool,
 }
 
 struct InputProvenance {
@@ -38,6 +42,7 @@ const TABLE_SPECS: &[TableSpec] = &[
              CREATE INDEX IF NOT EXISTS idx_sample_id ON alt_bases (sample_id);",
         ),
         rebuild_samples_summary: true,
+        view_only: false,
     },
     TableSpec {
         table: "alt_reads",
@@ -47,6 +52,7 @@ const TABLE_SPECS: &[TableSpec] = &[
              ON alt_reads (sample_id, chrom, pos, alt_allele);",
         ),
         rebuild_samples_summary: false,
+        view_only: false,
     },
     TableSpec {
         table: "normal_evidence",
@@ -56,6 +62,7 @@ const TABLE_SPECS: &[TableSpec] = &[
              ON normal_evidence (tumor_sample_id, chrom, pos, tumor_alt_allele);",
         ),
         rebuild_samples_summary: false,
+        view_only: false,
     },
     TableSpec {
         table: "pon_evidence",
@@ -65,6 +72,7 @@ const TABLE_SPECS: &[TableSpec] = &[
              ON pon_evidence (tumor_sample_id, chrom, pos, tumor_alt_allele);",
         ),
         rebuild_samples_summary: false,
+        view_only: false,
     },
     TableSpec {
         table: "coverage",
@@ -74,6 +82,7 @@ const TABLE_SPECS: &[TableSpec] = &[
              ON coverage (sample_id, chrom, pos);",
         ),
         rebuild_samples_summary: false,
+        view_only: false,
     },
     TableSpec {
         table: "coverage_intervals",
@@ -83,6 +92,7 @@ const TABLE_SPECS: &[TableSpec] = &[
              ON coverage_intervals (sample_id, chrom, start, \"end\");",
         ),
         rebuild_samples_summary: false,
+        view_only: false,
     },
     TableSpec {
         table: "sample_metrics",
@@ -92,6 +102,14 @@ const TABLE_SPECS: &[TableSpec] = &[
              ON sample_metrics (sample_id);",
         ),
         rebuild_samples_summary: false,
+        view_only: false,
+    },
+    TableSpec {
+        table: "fragments",
+        suffix: Some(".fragments.parquet"),
+        index_sql: None,
+        rebuild_samples_summary: false,
+        view_only: true,
     },
 ];
 
@@ -135,9 +153,8 @@ fn modified_at_epoch_seconds(path: &Path) -> Option<f64> {
 
 fn sample_id_column(table: &str) -> Option<&'static str> {
     match table {
-        "alt_bases" | "alt_reads" | "coverage" | "coverage_intervals" | "sample_metrics" => {
-            Some("sample_id")
-        }
+        "alt_bases" | "alt_reads" | "coverage" | "coverage_intervals" | "sample_metrics"
+        | "fragments" => Some("sample_id"),
         "normal_evidence" | "pon_evidence" => Some("tumor_sample_id"),
         _ => None,
     }
@@ -344,6 +361,10 @@ fn merge_parquet_group(
         return Ok(());
     }
 
+    if spec.view_only {
+        return merge_parquet_view(conn, spec, inputs, input_provenance);
+    }
+
     info!(
         table = spec.table,
         n_files = inputs.len(),
@@ -387,6 +408,39 @@ fn merge_parquet_group(
     Ok(())
 }
 
+fn merge_parquet_view(
+    conn: &Connection,
+    spec: &TableSpec,
+    inputs: &[&PathBuf],
+    input_provenance: &mut Vec<InputProvenance>,
+) -> Result<()> {
+    info!(
+        table = spec.table,
+        n_files = inputs.len(),
+        "registering Parquet files as external view"
+    );
+
+    let path_list = inputs
+        .iter()
+        .map(|p| format!("'{}'", escape_path(p)))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    conn.execute_batch(&format!(
+        "CREATE VIEW {} AS SELECT * FROM read_parquet([{path_list}]);",
+        spec.table
+    ))
+    .with_context(|| format!("failed to create view {} over Parquet files", spec.table))?;
+
+    info!(table = spec.table, "external view created");
+
+    for path in inputs {
+        input_provenance.push(collect_parquet_input_provenance(conn, spec, path)?);
+    }
+
+    Ok(())
+}
+
 fn merge_duckdb_inputs(
     conn: &Connection,
     duckdb_inputs: &[&PathBuf],
@@ -402,6 +456,9 @@ fn merge_duckdb_inputs(
 
         let mut total_rows = 0_i64;
         for spec in TABLE_SPECS {
+            if spec.view_only {
+                continue;
+            }
             if src_table_exists(conn, &alias, spec.table)? {
                 let n_src: i64 = conn
                     .query_row(
@@ -516,6 +573,9 @@ fn rebuild_samples_summary(conn: &Connection) -> Result<()> {
 
 fn build_indices_and_derived_tables(conn: &Connection) -> Result<()> {
     for spec in TABLE_SPECS {
+        if spec.view_only {
+            continue;
+        }
         if dst_table_exists(conn, spec.table)? {
             if let Some(index_sql) = spec.index_sql {
                 info!(table = spec.table, "creating indices");
@@ -783,6 +843,17 @@ mod tests {
             vec!["sample.pon_evidence.parquet"]
         );
         assert_eq!(group_names("coverage"), vec!["sample.coverage.parquet"]);
+
+        // fragments routing test
+        let frag_inputs = vec![PathBuf::from("sample.fragments.parquet")];
+        let (_, frag_groups) = classify_inputs(&frag_inputs);
+        assert_eq!(
+            frag_groups["fragments"]
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>(),
+            vec!["sample.fragments.parquet"]
+        );
     }
 
     #[test]

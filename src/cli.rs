@@ -38,6 +38,8 @@ pub enum Command {
     /// Compute per-position coverage metrics from a BAM/CRAM file
     Coverage(CoverageArgs),
 
+    /// Extract per-fragment metrics (insert size, GC content, end motifs) from a BAM/CRAM file
+    Fragments(FragmentsArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -411,6 +413,63 @@ pub struct CoverageArgs {
     /// Has no effect when --min-depth > 0 (zero-depth positions would always be filtered).
     #[arg(long)]
     pub fill_zeros: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct FragmentsArgs {
+    /// Input BAM or CRAM file
+    #[arg(short, long)]
+    pub input: PathBuf,
+
+    /// Reference FASTA (required for GC content and end motifs)
+    #[arg(short = 'r', long)]
+    pub reference: PathBuf,
+
+    /// Sample identifier.
+    /// If omitted, the SM tag from the BAM/CRAM read group header is used.
+    #[arg(short, long)]
+    pub sample_id: Option<String>,
+
+    /// Optional batch label stored as a column in the output Parquet
+    #[arg(long)]
+    pub batch: Option<String>,
+
+    /// Optional free-text label 1 for this sample
+    #[arg(long)]
+    pub label1: Option<String>,
+
+    /// Optional free-text label 2 for this sample
+    #[arg(long)]
+    pub label2: Option<String>,
+
+    /// Optional free-text label 3 for this sample
+    #[arg(long)]
+    pub label3: Option<String>,
+
+    /// Optional timepoint label for longitudinal studies
+    #[arg(long)]
+    pub timepoint: Option<String>,
+
+    /// Output Parquet file path (should end in .fragments.parquet)
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Read type: raw, simplex, or duplex
+    #[arg(long, default_value = "duplex")]
+    pub read_type: ReadType,
+
+    /// Pipeline that produced the BAM/CRAM: fgbio, dragen, or raw
+    #[arg(long, default_value = "fgbio")]
+    pub pipeline: Pipeline,
+
+    /// Restrict processing to a region. Accepts either a region string (e.g. "chr1:1000-2000")
+    /// or a path to a BED file / Picard interval list.
+    #[arg(long)]
+    pub region: Option<String>,
+
+    /// Minimum mapping quality for R1 reads included in output
+    #[arg(long, default_value_t = 0)]
+    pub min_map_qual: u8,
 }
 
 // Allow clap to parse ReadType and Pipeline from strings

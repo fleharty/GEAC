@@ -407,6 +407,60 @@ Key options:
 The output Parquet is routed to the `coverage` table by `geac merge` when its filename
 ends in `.coverage.parquet`.
 
+### Fragments — per-fragment metrics for fragmentomics
+
+`geac fragments` iterates over read pairs and emits one record per fragment (insert size,
+GC content, end motifs, midpoint) as a Parquet file (`.fragments.parquet`).  Unlike
+`geac collect` and `geac coverage`, this command operates at read-pair resolution rather
+than pileup positions — it is fast and suitable for cfDNA fragmentomics workflows.
+
+```bash
+geac fragments \
+  --input     SAMPLE.bam \
+  --reference hg38.fa \
+  --output    SAMPLE.fragments.parquet \
+  --read-type duplex \
+  --pipeline  fgbio \
+  [--region   chr1:1000000-2000000]   # restrict for interactive/exploratory use
+```
+
+Key flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--region` | — | Restrict to a region string (e.g. `chr1:1-50000`) or a BED file path |
+| `--min-map-qual` | `0` | Minimum MAPQ for R1 reads |
+| `--read-type` | `duplex` | raw / simplex / duplex |
+| `--pipeline` | `fgbio` | fgbio / dragen / raw |
+
+The output Parquet is registered as an **external DuckDB view** (not ingested) by
+`geac merge` when its filename ends in `.fragments.parquet`.  This keeps the DuckDB file
+small while allowing DuckDB's Parquet pushdown to query large WGS fragment files
+efficiently.
+
+Alt-allele annotation and local depth context are available via post-hoc joins against
+the `alt_bases` and `coverage` tables:
+
+```sql
+-- Fragment size distribution for fragments carrying a somatic variant
+SELECT f.insert_size, COUNT(*) AS n
+FROM fragments f
+JOIN alt_bases ab
+  ON  f.sample_id = ab.sample_id
+  AND f.chrom     = ab.chrom
+  AND ab.pos BETWEEN f.frag_start AND f.frag_end
+WHERE ab.vaf BETWEEN 0.001 AND 0.01
+GROUP BY f.insert_size
+ORDER BY f.insert_size;
+
+-- Nucleosome profiling: midpoint density across a region
+SELECT midpoint, COUNT(*) AS n
+FROM fragments
+WHERE chrom = 'chr1' AND midpoint BETWEEN 1000000 AND 1200000
+GROUP BY midpoint
+ORDER BY midpoint;
+```
+
 ### Query the cohort (DuckDB)
 
 You can query either a merged DuckDB or raw Parquet files directly.
@@ -789,6 +843,7 @@ WDL 1.0 workflows are provided in `wdl/`:
 |---|---|---|
 | `geac_cohort.wdl` | **Tested** | Full cohort workflow: scatters `geac collect` then gathers with `geac merge` |
 | `geac_coverage.wdl` | **Tested** | Full coverage workflow: scatters `geac coverage` then gathers with `geac merge` |
+| `geac_fragments.wdl` | Untested | Scatters `geac fragments` across a cohort; outputs per-sample fragment Parquets for fragmentomics analysis |
 | `geac_cohort_loci.wdl` | Untested | Runs `geac cohort` on a set of per-sample Parquets to identify recurrent alt-base loci |
 | `geac_collect.wdl` | Untested | Single-sample wrapper around `geac collect`; use this to scatter across a sample table |
 | `geac_merge.wdl` | Untested | Standalone merge — takes existing Parquets and builds a DuckDB |

@@ -351,6 +351,37 @@ pub struct AltRead {
     pub input_checksum_sha256: Option<String>,
 }
 
+/// One record per fragment (read pair) produced by `geac fragments`.
+/// Coordinates are 0-based. Only proper pairs with positive TLEN are emitted.
+#[derive(Debug, Clone)]
+pub struct FragmentRecord {
+    pub sample_id: String,
+    pub chrom: String,
+    /// 0-based fragment start (leftmost position of the pair)
+    pub frag_start: i64,
+    /// 0-based fragment end (frag_start + abs(TLEN))
+    pub frag_end: i64,
+    /// Fragment midpoint: (frag_start + frag_end) / 2
+    pub midpoint: i64,
+    /// abs(TLEN) from the BAM record
+    pub insert_size: i32,
+    /// GC fraction of the fragment span computed from the reference sequence
+    pub gc_content: Option<f32>,
+    /// 4-mer reference sequence at the 5' fragment end
+    pub end_motif_5p: Option<String>,
+    /// 4-mer reference sequence at the 3' fragment end
+    pub end_motif_3p: Option<String>,
+    /// Mapping quality of R1
+    pub map_qual: i32,
+    pub read_type: ReadType,
+    pub pipeline: Pipeline,
+    pub batch: Option<String>,
+    pub label1: Option<String>,
+    pub label2: Option<String>,
+    pub label3: Option<String>,
+    pub timepoint: Option<String>,
+}
+
 /// Per-interval coverage summary produced by `geac coverage --intervals-output`.
 /// One row per target interval. Coordinates are 0-based half-open [start, end).
 #[derive(Debug, Clone)]

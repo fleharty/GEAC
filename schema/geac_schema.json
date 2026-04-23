@@ -229,6 +229,29 @@
         "pipeline"
       ],
       "optional_columns": []
+    },
+    "fragments": {
+      "required_columns": [
+        "sample_id",
+        "chrom",
+        "frag_start",
+        "frag_end",
+        "midpoint",
+        "insert_size",
+        "map_qual",
+        "read_type",
+        "pipeline"
+      ],
+      "optional_columns": [
+        "gc_content",
+        "end_motif_5p",
+        "end_motif_3p",
+        "batch",
+        "label1",
+        "label2",
+        "label3",
+        "timepoint"
+      ]
     }
   }
 }
