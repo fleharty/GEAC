@@ -1007,3 +1007,20 @@ existed in the Parquet files but was simply never forwarded to the merged databa
 the full path through `geac merge`: `InputProvenance` struct → `collect_parquet_input_provenance`
 → `write_input_provenance` INSERT. A column that exists in the Parquet but is never read
 by the merge step will silently produce NULLs with no error.
+
+---
+
+### `geac fragments` produced empty Parquet (0 records) when no `--region` specified
+
+**Symptom:** Running `geac fragments` on a 1 GB BAM with no `--region` flag produced a
+~2 KB Parquet with zero fragment records and completed almost instantly.
+
+**Root cause:** `open_bam` returns a `rust_htslib::bam::IndexedReader`. On an
+`IndexedReader`, calling `records()` without a prior `fetch()` silently yields zero
+records — htslib requires an explicit fetch to initialise the iterator. When no region
+is provided, the code skipped the `bam.fetch()` call, so the inner loop never executed.
+
+**Fix:** Always call `bam.fetch(".")` (all mapped reads) when no region is specified.
+
+**Lesson:** Any code that opens a BAM via `open_bam` (which returns `IndexedReader`)
+must call `bam.fetch(...)` before iterating with `records()`, even for whole-file scans.

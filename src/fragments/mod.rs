@@ -45,9 +45,9 @@ pub fn collect_fragments(args: &FragmentsArgs, writer: &mut FragmentsWriter) -> 
     let mut fragments_written: u64 = 0;
 
     for fetch_region in &fetch_regions {
-        if let Some(r) = fetch_region.as_deref() {
-            bam.fetch(r)
-                .with_context(|| format!("failed to fetch region '{r}'"))?;
+        match fetch_region.as_deref() {
+            Some(r) => bam.fetch(r).with_context(|| format!("failed to fetch region '{r}'"))?,
+            None => bam.fetch(".").context("failed to fetch all reads")?,
         }
 
         for record in bam.records() {
