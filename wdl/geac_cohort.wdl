@@ -38,6 +38,12 @@ version 1.0
 ##   include_supplementary   - include supplementary alignments (FLAG 0x800); default false
 ##   reads_output            - also write per-read detail Parquets and merge into alt_reads table (default false)
 ##   input_checksum_sha256   - compute SHA-256 for each input BAM/CRAM during collect (default false)
+##   run_fragments           - also run geac fragments in parallel and register fragment Parquets
+##                             as an external view in the cohort DuckDB (default false).
+##                             Note: requires a second BAM pass per sample (parallel, not sequential).
+##                             Fragment Parquets are large for WGS — increase fragments_disk_gb accordingly.
+##                             The DuckDB view references the GCS paths of the fragment Parquets; do not
+##                             move or delete them after the merge or the view will break.
 ##   cohort_name             - Base name for the output DuckDB file (default: cohort)
 ##   docker_image            - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##
@@ -45,6 +51,7 @@ version 1.0
 ##   locus_parquets          - Per-sample locus Parquet files from geac collect
 ##   reads_parquets          - Per-sample reads Parquet files (empty when reads_output=false)
 ##   sample_metrics_parquets - Per-sample sample_metrics Parquet files (empty when targets absent)
+##   fragments_parquets      - Per-sample fragment Parquet files (empty when run_fragments=false)
 ##   cohort_db               - Merged cohort DuckDB from geac merge
 
 workflow GeacCohort {
@@ -85,6 +92,7 @@ workflow GeacCohort {
         Boolean include_supplementary = false
         Boolean reads_output  = false
         Boolean input_checksum_sha256 = true
+        Boolean run_fragments = false
         Int     threads       = 1
 
         String cohort_name = "cohort"
@@ -93,6 +101,7 @@ workflow GeacCohort {
         String docker_image
         Int    collect_memory_gb       = 8
         Int    collect_disk_gb         = 100
+        Int    fragments_disk_gb       = 200
         Int    merge_memory_gb         = 16
         Int    merge_disk_gb           = 50
         Int    preemptible             = 2
@@ -170,16 +179,41 @@ workflow GeacCohort {
                 disk_gb               = collect_disk_gb,
                 preemptible           = preemptible,
         }
+
+        if (run_fragments) {
+            call Fragments {
+                input:
+                    input_bam             = input_bams[i],
+                    input_bam_index       = input_bam_indices[i],
+                    reference_fasta       = reference_fasta,
+                    reference_fasta_index = reference_fasta_index,
+                    read_type             = this_read_type,
+                    pipeline              = this_pipeline,
+                    sample_id             = this_sample_id,
+                    batch                 = this_batch,
+                    label1                = this_label1,
+                    label2                = this_label2,
+                    label3                = this_label3,
+                    timepoint             = this_timepoint,
+                    region                = region,
+                    min_map_qual          = min_map_qual,
+                    docker_image          = docker_image,
+                    memory_gb             = collect_memory_gb,
+                    disk_gb               = fragments_disk_gb,
+                    preemptible           = preemptible,
+            }
+        }
     }
 
     # Flatten per-sample reads parquet arrays into a single array.
     # When reads_output=false every inner array is empty, so the result is [].
     Array[File] all_reads_parquets = flatten(Collect.reads_parquets)
     Array[File] all_sample_metrics_parquets = flatten(Collect.sample_metrics_parquets)
+    Array[File] all_fragments_parquets = select_all(Fragments.fragments_parquet)
 
     call Merge {
         input:
-            parquets     = flatten([Collect.locus_parquet, all_reads_parquets, all_sample_metrics_parquets]),
+            parquets     = flatten([Collect.locus_parquet, all_reads_parquets, all_sample_metrics_parquets, all_fragments_parquets]),
             cohort_name  = cohort_name,
             docker_image = docker_image,
             memory_gb    = merge_memory_gb,
@@ -191,6 +225,7 @@ workflow GeacCohort {
         Array[File] locus_parquets          = Collect.locus_parquet
         Array[File] reads_parquets          = all_reads_parquets
         Array[File] sample_metrics_parquets = all_sample_metrics_parquets
+        Array[File] fragments_parquets      = all_fragments_parquets
         File        cohort_db               = Merge.cohort_db
     }
 }
@@ -320,6 +355,66 @@ task Merge {
         docker:      docker_image
         memory:      memory_gb + " GB"
         cpu:         2
+        disks:       "local-disk " + disk_gb + " HDD"
+        preemptible: preemptible
+    }
+}
+
+task Fragments {
+
+    input {
+        File   input_bam
+        File   input_bam_index
+        File   reference_fasta
+        File   reference_fasta_index
+        String read_type
+        String pipeline
+
+        String? sample_id
+        String? batch
+        String? label1
+        String? label2
+        String? label3
+        String? timepoint
+        String? region
+        Int     min_map_qual
+
+        String docker_image
+        Int    memory_gb
+        Int    disk_gb
+        Int    preemptible
+    }
+
+    String stem        = sub(basename(input_bam), "\\.(bam|cram)$", "")
+    String output_name = stem + ".fragments.parquet"
+
+    command <<<
+        set -euo pipefail
+
+        geac fragments \
+            --input            ~{input_bam} \
+            --reference        ~{reference_fasta} \
+            --output           ~{output_name} \
+            --read-type        ~{read_type} \
+            --pipeline         ~{pipeline} \
+            --min-map-qual     ~{min_map_qual} \
+            ~{"--sample-id "   + sample_id} \
+            ~{"--batch "       + batch} \
+            ~{"--label1 "      + label1} \
+            ~{"--label2 "      + label2} \
+            ~{"--label3 "      + label3} \
+            ~{"--timepoint "   + timepoint} \
+            ~{"--region "      + region}
+    >>>
+
+    output {
+        File fragments_parquet = output_name
+    }
+
+    runtime {
+        docker:      docker_image
+        memory:      memory_gb + " GB"
+        cpu:         1
         disks:       "local-disk " + disk_gb + " HDD"
         preemptible: preemptible
     }

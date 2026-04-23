@@ -898,8 +898,11 @@ Shared inputs applied to all samples: `reference_fasta`, `targets`, `gene_annota
 `region`, `repeat_window`, `min_base_qual`, `min_map_qual`,
 `include_duplicates`, `include_secondary`, `include_supplementary`,
 `gnomad`, `gnomad_index`, `gnomad_af_field` (optional gnomAD AF annotation), `threads`.
+Set `run_fragments=true` to run `geac fragments` in parallel with `geac collect` for each
+sample; fragment Parquets are passed to `geac merge` and registered as an external
+DuckDB view. Increase `fragments_disk_gb` (default 200) for WGS cohorts.
 
-Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty when `reads_output=false`), `sample_metrics_parquets` (Array[File], empty when `targets` is absent), `cohort_db` (File, the merged DuckDB).
+Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty when `reads_output=false`), `sample_metrics_parquets` (Array[File], empty when `targets` is absent), `fragments_parquets` (Array[File], empty when `run_fragments=false`), `cohort_db` (File, the merged DuckDB).
 
 ### `geac_merge.wdl` inputs
 

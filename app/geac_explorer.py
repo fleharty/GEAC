@@ -4011,254 +4011,254 @@ if _active_main_tab == TAB_READS.LABEL:
         )
 
         # ── Row 1: Read position bias ──────────────────────────────────────────
-        st.subheader("Read position bias")
-        _dfe_ctrl1, _dfe_ctrl2, _dfe_ctrl3 = st.columns([3, 2, 1])
-        _dfe_color_options = ["All samples (aggregate)", "Sample"]
-        if _alt_reads_has_batch:
-            _dfe_color_options.append("Batch")
-        if _alt_reads_has_pipeline:
-            _dfe_color_options.append("Pipeline")
-        if _alt_reads_has_label1:
-            _dfe_color_options.append("Label 1")
-        if _alt_reads_has_label2:
-            _dfe_color_options.append("Label 2")
-        if _alt_reads_has_label3:
-            _dfe_color_options.append("Label 3")
-        if _alt_reads_has_timepoint:
-            _dfe_color_options.append("Timepoint")
-        _dfe_color_by = _dfe_ctrl1.radio(
-            "Color by", _dfe_color_options,
-            horizontal=True, key="dfe_color_by",
-        )
-        _dfe_y_mode = _dfe_ctrl2.radio(
-            "Y axis", ["Fraction", "Count"],
-            horizontal=True, key="dfe_y_mode",
-        )
-        _dfe_by_read   = _dfe_ctrl3.checkbox("Show R1/R2", value=False, key="dfe_show_r1r2")
-        _dfe_by_sample = _dfe_color_by == "Sample"
-        _dfe_by_batch  = _dfe_color_by == "Batch"
-        _dfe_by_pipeline = _dfe_color_by == "Pipeline"
-        _dfe_by_label  = _dfe_color_by in ("Label 1", "Label 2", "Label 3", "Timepoint")
-        _dfe_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3", "Timepoint": "timepoint"}.get(_dfe_color_by)
-        _dfe_normalize = _dfe_y_mode == "Fraction"
-        _DFE_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
-        if _dfe_by_batch and _dfe_by_read:
-            _dfe_source      = _r_join
-            _dfe_select_expr = f"ar.batch || ' ' || {_DFE_READ_EXPR} AS label, "
-            _dfe_group_expr  = "label, "
-            _dfe_label_col   = "label"
-        elif _dfe_by_pipeline and _dfe_by_read:
-            _dfe_source      = _r_join
-            _dfe_select_expr = f"ar.pipeline || ' ' || {_DFE_READ_EXPR} AS label, "
-            _dfe_group_expr  = "label, "
-            _dfe_label_col   = "label"
-        elif _dfe_by_label and _dfe_by_read:
-            _dfe_source      = _r_join
-            _dfe_select_expr = f"ar.{_dfe_lbl_col} || ' ' || {_DFE_READ_EXPR} AS label, "
-            _dfe_group_expr  = "label, "
-            _dfe_label_col   = "label"
-        elif _dfe_by_sample and _dfe_by_read:
-            _dfe_source      = _r_join
-            _dfe_select_expr = f"ar.sample_id || ' ' || {_DFE_READ_EXPR} AS label, "
-            _dfe_group_expr  = "label, "
-            _dfe_label_col   = "label"
-        elif _dfe_by_read:
-            _dfe_source      = _r_join
-            _dfe_select_expr = f"{_DFE_READ_EXPR} AS read, "
-            _dfe_group_expr  = "read, "
-            _dfe_label_col   = "read"
-        elif _dfe_by_batch:
-            _dfe_source      = _r_join
-            _dfe_select_expr = "ar.batch, "
-            _dfe_group_expr  = "ar.batch, "
-            _dfe_label_col   = "batch"
-        elif _dfe_by_pipeline:
-            _dfe_source      = _r_join
-            _dfe_select_expr = "ar.pipeline, "
-            _dfe_group_expr  = "ar.pipeline, "
-            _dfe_label_col   = "pipeline"
-        elif _dfe_by_label:
-            _dfe_source      = _r_join
-            _dfe_select_expr = f"ar.{_dfe_lbl_col}, "
-            _dfe_group_expr  = f"ar.{_dfe_lbl_col}, "
-            _dfe_label_col   = _dfe_lbl_col
-        elif _dfe_by_sample:
-            _dfe_source      = _r_join
-            _dfe_select_expr = "ar.sample_id, "
-            _dfe_group_expr  = "ar.sample_id, "
-            _dfe_label_col   = "sample_id"
-        else:
-            _dfe_source      = _r_join
-            _dfe_select_expr = ""
-            _dfe_group_expr  = ""
-            _dfe_label_col   = None
+        with st.expander("Read position bias", expanded=True):
+            _dfe_ctrl1, _dfe_ctrl2, _dfe_ctrl3 = st.columns([3, 2, 1])
+            _dfe_color_options = ["All samples (aggregate)", "Sample"]
+            if _alt_reads_has_batch:
+                _dfe_color_options.append("Batch")
+            if _alt_reads_has_pipeline:
+                _dfe_color_options.append("Pipeline")
+            if _alt_reads_has_label1:
+                _dfe_color_options.append("Label 1")
+            if _alt_reads_has_label2:
+                _dfe_color_options.append("Label 2")
+            if _alt_reads_has_label3:
+                _dfe_color_options.append("Label 3")
+            if _alt_reads_has_timepoint:
+                _dfe_color_options.append("Timepoint")
+            _dfe_color_by = _dfe_ctrl1.radio(
+                "Color by", _dfe_color_options,
+                horizontal=True, key="dfe_color_by",
+            )
+            _dfe_y_mode = _dfe_ctrl2.radio(
+                "Y axis", ["Fraction", "Count"],
+                horizontal=True, key="dfe_y_mode",
+            )
+            _dfe_by_read   = _dfe_ctrl3.checkbox("Show R1/R2", value=False, key="dfe_show_r1r2")
+            _dfe_by_sample = _dfe_color_by == "Sample"
+            _dfe_by_batch  = _dfe_color_by == "Batch"
+            _dfe_by_pipeline = _dfe_color_by == "Pipeline"
+            _dfe_by_label  = _dfe_color_by in ("Label 1", "Label 2", "Label 3", "Timepoint")
+            _dfe_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3", "Timepoint": "timepoint"}.get(_dfe_color_by)
+            _dfe_normalize = _dfe_y_mode == "Fraction"
+            _DFE_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
+            if _dfe_by_batch and _dfe_by_read:
+                _dfe_source      = _r_join
+                _dfe_select_expr = f"ar.batch || ' ' || {_DFE_READ_EXPR} AS label, "
+                _dfe_group_expr  = "label, "
+                _dfe_label_col   = "label"
+            elif _dfe_by_pipeline and _dfe_by_read:
+                _dfe_source      = _r_join
+                _dfe_select_expr = f"ar.pipeline || ' ' || {_DFE_READ_EXPR} AS label, "
+                _dfe_group_expr  = "label, "
+                _dfe_label_col   = "label"
+            elif _dfe_by_label and _dfe_by_read:
+                _dfe_source      = _r_join
+                _dfe_select_expr = f"ar.{_dfe_lbl_col} || ' ' || {_DFE_READ_EXPR} AS label, "
+                _dfe_group_expr  = "label, "
+                _dfe_label_col   = "label"
+            elif _dfe_by_sample and _dfe_by_read:
+                _dfe_source      = _r_join
+                _dfe_select_expr = f"ar.sample_id || ' ' || {_DFE_READ_EXPR} AS label, "
+                _dfe_group_expr  = "label, "
+                _dfe_label_col   = "label"
+            elif _dfe_by_read:
+                _dfe_source      = _r_join
+                _dfe_select_expr = f"{_DFE_READ_EXPR} AS read, "
+                _dfe_group_expr  = "read, "
+                _dfe_label_col   = "read"
+            elif _dfe_by_batch:
+                _dfe_source      = _r_join
+                _dfe_select_expr = "ar.batch, "
+                _dfe_group_expr  = "ar.batch, "
+                _dfe_label_col   = "batch"
+            elif _dfe_by_pipeline:
+                _dfe_source      = _r_join
+                _dfe_select_expr = "ar.pipeline, "
+                _dfe_group_expr  = "ar.pipeline, "
+                _dfe_label_col   = "pipeline"
+            elif _dfe_by_label:
+                _dfe_source      = _r_join
+                _dfe_select_expr = f"ar.{_dfe_lbl_col}, "
+                _dfe_group_expr  = f"ar.{_dfe_lbl_col}, "
+                _dfe_label_col   = _dfe_lbl_col
+            elif _dfe_by_sample:
+                _dfe_source      = _r_join
+                _dfe_select_expr = "ar.sample_id, "
+                _dfe_group_expr  = "ar.sample_id, "
+                _dfe_label_col   = "sample_id"
+            else:
+                _dfe_source      = _r_join
+                _dfe_select_expr = ""
+                _dfe_group_expr  = ""
+                _dfe_label_col   = None
 
-        _dfe_df = con.execute(f"""
-            SELECT {_dfe_select_expr}ar.cycle, COUNT(*) AS n_reads
-            FROM {_dfe_source}
-            GROUP BY {_dfe_group_expr}ar.cycle
-            ORDER BY {_dfe_group_expr}ar.cycle
-        """).df()
+            _dfe_df = con.execute(f"""
+                SELECT {_dfe_select_expr}ar.cycle, COUNT(*) AS n_reads
+                FROM {_dfe_source}
+                GROUP BY {_dfe_group_expr}ar.cycle
+                ORDER BY {_dfe_group_expr}ar.cycle
+            """).df()
 
-        if _dfe_df.empty:
-            st.info("No data.")
-        else:
-            if _dfe_normalize:
+            if _dfe_df.empty:
+                st.info("No data.")
+            else:
+                if _dfe_normalize:
+                    if _dfe_label_col:
+                        _dfe_df["y_val"] = _dfe_df.groupby(_dfe_label_col)["n_reads"].transform(
+                            lambda x: x / x.sum()
+                        )
+                    else:
+                        _dfe_df["y_val"] = _dfe_df["n_reads"] / _dfe_df["n_reads"].sum()
+                    _dfe_y_field = "y_val:Q"
+                    _dfe_y_title = "Fraction of alt-supporting reads"
+                    _dfe_y_fmt = ".3f"
+                else:
+                    _dfe_df["y_val"] = _dfe_df["n_reads"]
+                    _dfe_y_field = "y_val:Q"
+                    _dfe_y_title = "Alt-supporting reads"
+                    _dfe_y_fmt = "d"
+
+                _dfe_enc = dict(
+                    x=alt.X("cycle:Q", title="Cycle (1-based)", bin=False),
+                    y=alt.Y(_dfe_y_field, title=_dfe_y_title),
+                    tooltip=[
+                        *([f"{_dfe_label_col}:N"] if _dfe_label_col else []),
+                        alt.Tooltip("cycle:Q", title="Cycle"),
+                        alt.Tooltip(_dfe_y_field, format=_dfe_y_fmt, title=_dfe_y_title),
+                    ],
+                )
                 if _dfe_label_col:
-                    _dfe_df["y_val"] = _dfe_df.groupby(_dfe_label_col)["n_reads"].transform(
-                        lambda x: x / x.sum()
+                    _dfe_enc["color"] = alt.Color(f"{_dfe_label_col}:N", scale=alt.Scale(scheme="tableau10"))
+                    _dfe_chart = (
+                        alt.Chart(_dfe_df)
+                        .mark_line(point=True, opacity=0.8)
+                        .encode(**_dfe_enc)
+                        .properties(height=300)
                     )
                 else:
-                    _dfe_df["y_val"] = _dfe_df["n_reads"] / _dfe_df["n_reads"].sum()
-                _dfe_y_field = "y_val:Q"
-                _dfe_y_title = "Fraction of alt-supporting reads"
-                _dfe_y_fmt = ".3f"
-            else:
-                _dfe_df["y_val"] = _dfe_df["n_reads"]
-                _dfe_y_field = "y_val:Q"
-                _dfe_y_title = "Alt-supporting reads"
-                _dfe_y_fmt = "d"
-
-            _dfe_enc = dict(
-                x=alt.X("cycle:Q", title="Cycle (1-based)", bin=False),
-                y=alt.Y(_dfe_y_field, title=_dfe_y_title),
-                tooltip=[
-                    *([f"{_dfe_label_col}:N"] if _dfe_label_col else []),
-                    alt.Tooltip("cycle:Q", title="Cycle"),
-                    alt.Tooltip(_dfe_y_field, format=_dfe_y_fmt, title=_dfe_y_title),
-                ],
-            )
-            if _dfe_label_col:
-                _dfe_enc["color"] = alt.Color(f"{_dfe_label_col}:N", scale=alt.Scale(scheme="tableau10"))
-                _dfe_chart = (
-                    alt.Chart(_dfe_df)
-                    .mark_line(point=True, opacity=0.8)
-                    .encode(**_dfe_enc)
-                    .properties(height=300)
+                    _dfe_chart = (
+                        alt.Chart(_dfe_df)
+                        .mark_line(point=True, color="#f58518")
+                        .encode(**_dfe_enc)
+                        .properties(height=300)
+                    )
+                st.altair_chart(_dfe_chart, width="stretch")
+                st.caption(
+                    "A spike at high cycle numbers indicates alt-supporting reads clustered at read ends — "
+                    "a red flag for alignment artefacts or damaged bases."
                 )
-            else:
-                _dfe_chart = (
-                    alt.Chart(_dfe_df)
-                    .mark_line(point=True, color="#f58518")
-                    .encode(**_dfe_enc)
-                    .properties(height=300)
-                )
-            st.altair_chart(_dfe_chart, width="stretch")
-            st.caption(
-                "A spike at high cycle numbers indicates alt-supporting reads clustered at read ends — "
-                "a red flag for alignment artefacts or damaged bases."
-            )
 
         # ── Row 2: Base qual vs dist from read end scatter ────────────────────
-        st.subheader("Mean base quality by cycle")
-        _bq_ctrl1, _bq_ctrl2 = st.columns([4, 1])
-        _bq_color_options = ["All samples (aggregate)", "Sample"]
-        if _alt_reads_has_batch:
-            _bq_color_options.append("Batch")
-        if _alt_reads_has_label1:
-            _bq_color_options.append("Label 1")
-        if _alt_reads_has_label2:
-            _bq_color_options.append("Label 2")
-        if _alt_reads_has_label3:
-            _bq_color_options.append("Label 3")
-        if _alt_reads_has_timepoint:
-            _bq_color_options.append("Timepoint")
-        _bq_color_by = _bq_ctrl1.radio(
-            "Color by", _bq_color_options,
-            horizontal=True, key="bq_color_by",
-        )
-        _bq_by_read   = _bq_ctrl2.checkbox("Show R1/R2", value=False, key="bq_show_r1r2")
-        _bq_by_sample = _bq_color_by == "Sample"
-        _bq_by_batch  = _bq_color_by == "Batch"
-        _bq_by_label  = _bq_color_by in ("Label 1", "Label 2", "Label 3", "Timepoint")
-        _bq_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3", "Timepoint": "timepoint"}.get(_bq_color_by)
-        _BQ_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
-        if _bq_by_batch and _bq_by_read:
-            _bq_source      = _r_join
-            _bq_select_expr = f"ar.batch || ' ' || {_BQ_READ_EXPR} AS label, "
-            _bq_group_expr  = "label, "
-            _bq_label_col   = "label"
-        elif _bq_by_label and _bq_by_read:
-            _bq_source      = _r_join
-            _bq_select_expr = f"ar.{_bq_lbl_col} || ' ' || {_BQ_READ_EXPR} AS label, "
-            _bq_group_expr  = "label, "
-            _bq_label_col   = "label"
-        elif _bq_by_sample and _bq_by_read:
-            _bq_source      = _r_join
-            _bq_select_expr = f"ar.sample_id || ' ' || {_BQ_READ_EXPR} AS label, "
-            _bq_group_expr  = "label, "
-            _bq_label_col   = "label"
-        elif _bq_by_read:
-            _bq_source      = _r_join
-            _bq_select_expr = f"{_BQ_READ_EXPR} AS read, "
-            _bq_group_expr  = "read, "
-            _bq_label_col   = "read"
-        elif _bq_by_batch:
-            _bq_source      = _r_join
-            _bq_select_expr = "ar.batch, "
-            _bq_group_expr  = "ar.batch, "
-            _bq_label_col   = "batch"
-        elif _bq_by_label:
-            _bq_source      = _r_join
-            _bq_select_expr = f"ar.{_bq_lbl_col}, "
-            _bq_group_expr  = f"ar.{_bq_lbl_col}, "
-            _bq_label_col   = _bq_lbl_col
-        elif _bq_by_sample:
-            _bq_source      = _r_join
-            _bq_select_expr = "ar.sample_id, "
-            _bq_group_expr  = "ar.sample_id, "
-            _bq_label_col   = "sample_id"
-        else:
-            _bq_source      = _r_join
-            _bq_select_expr = ""
-            _bq_group_expr  = ""
-            _bq_label_col   = None
-
-        _bq_df = con.execute(f"""
-            SELECT
-                {_bq_select_expr}ar.cycle,
-                ROUND(AVG(ar.base_qual), 2) AS mean_base_qual,
-                COUNT(*) AS n_reads
-            FROM {_bq_source}
-            GROUP BY {_bq_group_expr}ar.cycle
-            ORDER BY {_bq_group_expr}ar.cycle
-        """).df()
-
-        if _bq_df.empty:
-            st.info("No data.")
-        else:
-            _bq_enc = dict(
-                x=alt.X("cycle:Q", title="Cycle (1-based)"),
-                y=alt.Y("mean_base_qual:Q", title="Mean base quality (Phred)",
-                        scale=alt.Scale(zero=False)),
-                tooltip=[
-                    *([f"{_bq_label_col}:N"] if _bq_label_col else []),
-                    alt.Tooltip("cycle:Q", title="Cycle"),
-                    alt.Tooltip("mean_base_qual:Q", format=".1f", title="Mean base qual"),
-                    alt.Tooltip("n_reads:Q", title="Reads"),
-                ],
+        with st.expander("Mean base quality by cycle", expanded=True):
+            _bq_ctrl1, _bq_ctrl2 = st.columns([4, 1])
+            _bq_color_options = ["All samples (aggregate)", "Sample"]
+            if _alt_reads_has_batch:
+                _bq_color_options.append("Batch")
+            if _alt_reads_has_label1:
+                _bq_color_options.append("Label 1")
+            if _alt_reads_has_label2:
+                _bq_color_options.append("Label 2")
+            if _alt_reads_has_label3:
+                _bq_color_options.append("Label 3")
+            if _alt_reads_has_timepoint:
+                _bq_color_options.append("Timepoint")
+            _bq_color_by = _bq_ctrl1.radio(
+                "Color by", _bq_color_options,
+                horizontal=True, key="bq_color_by",
             )
-            if _bq_label_col:
-                _bq_enc["color"] = alt.Color(f"{_bq_label_col}:N", scale=alt.Scale(scheme="tableau10"))
-                _bq_chart = (
-                    alt.Chart(_bq_df)
-                    .mark_line(point=True, opacity=0.8)
-                    .encode(**_bq_enc)
-                    .properties(height=350)
-                )
+            _bq_by_read   = _bq_ctrl2.checkbox("Show R1/R2", value=False, key="bq_show_r1r2")
+            _bq_by_sample = _bq_color_by == "Sample"
+            _bq_by_batch  = _bq_color_by == "Batch"
+            _bq_by_label  = _bq_color_by in ("Label 1", "Label 2", "Label 3", "Timepoint")
+            _bq_lbl_col   = {"Label 1": "label1", "Label 2": "label2", "Label 3": "label3", "Timepoint": "timepoint"}.get(_bq_color_by)
+            _BQ_READ_EXPR = "CASE WHEN ar.is_read1 THEN 'R1' ELSE 'R2' END"
+            if _bq_by_batch and _bq_by_read:
+                _bq_source      = _r_join
+                _bq_select_expr = f"ar.batch || ' ' || {_BQ_READ_EXPR} AS label, "
+                _bq_group_expr  = "label, "
+                _bq_label_col   = "label"
+            elif _bq_by_label and _bq_by_read:
+                _bq_source      = _r_join
+                _bq_select_expr = f"ar.{_bq_lbl_col} || ' ' || {_BQ_READ_EXPR} AS label, "
+                _bq_group_expr  = "label, "
+                _bq_label_col   = "label"
+            elif _bq_by_sample and _bq_by_read:
+                _bq_source      = _r_join
+                _bq_select_expr = f"ar.sample_id || ' ' || {_BQ_READ_EXPR} AS label, "
+                _bq_group_expr  = "label, "
+                _bq_label_col   = "label"
+            elif _bq_by_read:
+                _bq_source      = _r_join
+                _bq_select_expr = f"{_BQ_READ_EXPR} AS read, "
+                _bq_group_expr  = "read, "
+                _bq_label_col   = "read"
+            elif _bq_by_batch:
+                _bq_source      = _r_join
+                _bq_select_expr = "ar.batch, "
+                _bq_group_expr  = "ar.batch, "
+                _bq_label_col   = "batch"
+            elif _bq_by_label:
+                _bq_source      = _r_join
+                _bq_select_expr = f"ar.{_bq_lbl_col}, "
+                _bq_group_expr  = f"ar.{_bq_lbl_col}, "
+                _bq_label_col   = _bq_lbl_col
+            elif _bq_by_sample:
+                _bq_source      = _r_join
+                _bq_select_expr = "ar.sample_id, "
+                _bq_group_expr  = "ar.sample_id, "
+                _bq_label_col   = "sample_id"
             else:
-                _bq_chart = (
-                    alt.Chart(_bq_df)
-                    .mark_line(point=True, color="#f58518")
-                    .encode(**_bq_enc)
-                    .properties(height=350)
+                _bq_source      = _r_join
+                _bq_select_expr = ""
+                _bq_group_expr  = ""
+                _bq_label_col   = None
+
+            _bq_df = con.execute(f"""
+                SELECT
+                    {_bq_select_expr}ar.cycle,
+                    ROUND(AVG(ar.base_qual), 2) AS mean_base_qual,
+                    COUNT(*) AS n_reads
+                FROM {_bq_source}
+                GROUP BY {_bq_group_expr}ar.cycle
+                ORDER BY {_bq_group_expr}ar.cycle
+            """).df()
+
+            if _bq_df.empty:
+                st.info("No data.")
+            else:
+                _bq_enc = dict(
+                    x=alt.X("cycle:Q", title="Cycle (1-based)"),
+                    y=alt.Y("mean_base_qual:Q", title="Mean base quality (Phred)",
+                            scale=alt.Scale(zero=False)),
+                    tooltip=[
+                        *([f"{_bq_label_col}:N"] if _bq_label_col else []),
+                        alt.Tooltip("cycle:Q", title="Cycle"),
+                        alt.Tooltip("mean_base_qual:Q", format=".1f", title="Mean base qual"),
+                        alt.Tooltip("n_reads:Q", title="Reads"),
+                    ],
                 )
-            st.altair_chart(_bq_chart, width="stretch")
-            st.caption(
-                "A drop in mean base quality at high cycle numbers (late in the read) "
-                "indicates that alt-supporting reads at those positions may be artefacts. "
-                "Quality is averaged arithmetically over Phred scores (not over error probabilities)."
-            )
+                if _bq_label_col:
+                    _bq_enc["color"] = alt.Color(f"{_bq_label_col}:N", scale=alt.Scale(scheme="tableau10"))
+                    _bq_chart = (
+                        alt.Chart(_bq_df)
+                        .mark_line(point=True, opacity=0.8)
+                        .encode(**_bq_enc)
+                        .properties(height=350)
+                    )
+                else:
+                    _bq_chart = (
+                        alt.Chart(_bq_df)
+                        .mark_line(point=True, color="#f58518")
+                        .encode(**_bq_enc)
+                        .properties(height=350)
+                    )
+                st.altair_chart(_bq_chart, width="stretch")
+                st.caption(
+                    "A drop in mean base quality at high cycle numbers (late in the read) "
+                    "indicates that alt-supporting reads at those positions may be artefacts. "
+                    "Quality is averaged arithmetically over Phred scores (not over error probabilities)."
+                )
 
         # ── Row 3: N context around alt-supporting reads ──────────────────────
         st.subheader("N context around alt-supporting reads")
