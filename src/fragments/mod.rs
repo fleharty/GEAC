@@ -93,13 +93,16 @@ pub fn collect_fragments(args: &FragmentsArgs, writer: &mut FragmentsWriter) -> 
 
             // Centered 4-mer: [cut-2, cut+2) — 2 bp inside + 2 bp outside the fragment,
             // matching the standard cfDNA end-motif convention (Jiang et al. 2020).
+            // The 5′ motif is read directly from the + strand.
+            // The 3′ end is the 5′ end of the − strand, so its motif must be
+            // reverse-complemented to be reported in the same 5′→3′ convention.
             let end_motif_5p = if frag_start as usize >= 2 {
                 extract_motif(seq, frag_start as usize - 2, 4)
             } else {
                 None
             };
             let end_motif_3p = if frag_end as usize >= 2 {
-                extract_motif(seq, frag_end as usize - 2, 4)
+                extract_motif(seq, frag_end as usize - 2, 4).map(|m| reverse_complement(&m))
             } else {
                 None
             };
@@ -143,4 +146,17 @@ fn extract_motif(seq: &[u8], start: usize, len: usize) -> Option<String> {
     } else {
         None
     }
+}
+
+fn reverse_complement(seq: &str) -> String {
+    seq.chars()
+        .rev()
+        .map(|c| match c {
+            'A' => 'T',
+            'T' => 'A',
+            'C' => 'G',
+            'G' => 'C',
+            other => other,
+        })
+        .collect()
 }

@@ -1024,3 +1024,32 @@ is provided, the code skipped the `bam.fetch()` call, so the inner loop never ex
 
 **Lesson:** Any code that opens a BAM via `open_bam` (which returns `IndexedReader`)
 must call `bam.fetch(...)` before iterating with `records()`, even for whole-file scans.
+
+---
+
+### `end_motif_3p` reported in + strand orientation instead of 5′→3′ of the − strand
+
+**Symptom:** The `end_motif_3p` column in the fragments Parquet contained the raw + strand
+sequence at the right cut site rather than the end motif as it would be read in the 5′→3′
+direction of the minus strand, making 3′ motifs incomparable to 5′ motifs under the
+standard cfDNA end-motif convention (Jiang et al. 2020).
+
+**Root cause:** The code extracted `seq[frag_end-2 : frag_end+2]` directly from the + strand
+reference. Because `geac fragments` only processes R1 with positive TLEN (R1 on + strand),
+`frag_end` is the right edge of the fragment. The 3′ cut is the 5′ end of the minus strand;
+to report its 4-mer in 5′→3′ direction it must be reverse-complemented.
+
+**Fix:** Applied `reverse_complement()` to the extracted sequence for `end_motif_3p`:
+```rust
+let end_motif_3p = if frag_end as usize >= 2 {
+    extract_motif(seq, frag_end as usize - 2, 4).map(|m| reverse_complement(&m))
+} else {
+    None
+};
+```
+Added a `reverse_complement` helper in `src/fragments/mod.rs`.
+
+**Lesson:** End motifs at the 3′ end of a fragment are on the minus strand. Always
+reverse-complement the + strand reference sequence to get the motif in the biologically
+meaningful 5′→3′ orientation. The 5′ motif needs no transformation because R1 already
+reads in the + strand direction.

@@ -76,6 +76,7 @@ from explorer.tabs import (
     TAB_PIPELINE_COMPARISON,
     TAB_READ_TYPE_COMPARISON,
     TAB_AI_PLOT_BUILDER,
+    TAB_FRAGMENTOMICS,
 )
 
 _IS_MIN, _IS_MAX = 20, 500  # insert size slider bounds
@@ -180,6 +181,7 @@ _has_alt_reads = data_source.has_optional_table("alt_reads")
 _has_normal_evidence = data_source.has_optional_table("normal_evidence")
 _has_pon_evidence = data_source.has_optional_table("pon_evidence")
 _has_sample_metrics = data_source.has_optional_table("sample_metrics")
+_has_fragments = data_source.has_optional_table("fragments")
 if "_alt_reads_cols_cached" not in st.session_state:
     st.session_state["_alt_reads_cols_cached"] = (
         set(con.execute("SELECT * FROM alt_reads LIMIT 0").df().columns)
@@ -7399,6 +7401,439 @@ if _active_main_tab == TAB_AI_PLOT_BUILDER.LABEL:
                     st.error("The generated code raised an error:")
                     st.code(traceback.format_exc(), language="text")
                     st.caption("Try rephrasing your request or click Generate again.")
+
+# ── Fragmentomics ──────────────────────────────────────────────────────────────
+if _active_main_tab == TAB_FRAGMENTOMICS.LABEL:
+    if not _has_fragments:
+        st.info(
+            "No `fragments` view found in this database. "
+            "Run `geac fragments` on each sample and include the "
+            "`.fragments.parquet` files when running `geac merge`, or use "
+            "`run_fragments=true` in `geac_cohort.wdl`."
+        )
+    else:
+        st.subheader("End-motif frequency by insert size")
+        st.caption(
+            "4-mer end-motif frequency at each insert size. "
+            "Motifs are centered on the fragment cut site [cut−2, cut+2) using the reference sequence. "
+            "Color encodes the fraction of fragments at each insert size carrying that motif."
+        )
+
+        _fm_c1, _fm_c2, _fm_c3, _fm_c4, _fm_c5, _fm_c6, _fm_c7 = st.columns([1, 1, 1, 1, 1, 1, 1])
+        with _fm_c1:
+            _fm_end = st.selectbox("End", ["5′", "3′"], key="fm_end")
+        with _fm_c2:
+            _fm_top_n = st.slider("Top N motifs", 5, 64, 16, key="fm_top_n")
+        with _fm_c3:
+            _fm_is_min = st.number_input("Min insert size", value=50, step=10, key="fm_is_min")
+        with _fm_c4:
+            _fm_is_max = st.number_input("Max insert size", value=400, step=10, key="fm_is_max")
+        with _fm_c5:
+            _fm_smooth = st.slider("Smoothing window (bp)", 1, 51, 11, step=2, key="fm_smooth")
+        with _fm_c6:
+            _fm_columns = st.slider("Columns", 1, 8, 4, key="fm_columns")
+        with _fm_c7:
+            _fm_group_by  = st.radio("Group by", ["Totals", "Sample", "Batch"], key="fm_by_sample")
+            _fm_group_dim = {"Totals": None, "Sample": "sample_id", "Batch": "batch"}[_fm_group_by]
+            _fm_group_label = _fm_group_by  # "Sample" or "Batch" for axis/legend titles
+
+        _fm_motif_col = "end_motif_5p" if _fm_end == "5′" else "end_motif_3p"
+
+        # Sample filter — fragments table may span many samples
+        with _timed("fm_sample_list"):
+            _fm_samples = con.execute(
+                "SELECT DISTINCT sample_id FROM fragments ORDER BY sample_id"
+            ).df()["sample_id"].tolist()
+
+        if not st.session_state.get("fm_samples"):
+            st.session_state["fm_samples"] = _fm_samples[:min(len(_fm_samples), 6)]
+        _fm_sel_samples = st.multiselect(
+            "Samples", _fm_samples,
+            key="fm_samples",
+        )
+        if not _fm_sel_samples:
+            st.info("Select at least one sample.")
+        else:
+            _fm_sample_list = ", ".join(f"'{s}'" for s in _fm_sel_samples)
+            _fm_parts = [
+                f"{_fm_motif_col} IS NOT NULL",
+                f"insert_size BETWEEN {int(_fm_is_min)} AND {int(_fm_is_max)}",
+                f"sample_id IN ({_fm_sample_list})",
+            ]
+            if _region.chrom is not None:
+                _fm_parts.append(f"chrom = '{_sql_str(_region.chrom)}'")
+            if _region.start is not None and _region.end is not None:
+                _fm_parts.append(f"midpoint BETWEEN {_region.start} AND {_region.end}")
+            elif _region.start is not None:
+                _fm_parts.append(f"midpoint = {_region.start}")
+            if batch_sel:
+                _fm_parts.append("batch IN ({})".format(", ".join(f"'{_sql_str(b)}'" for b in batch_sel)))
+            if label1_sel:
+                _fm_parts.append("label1 IN ({})".format(", ".join(f"'{_sql_str(v)}'" for v in label1_sel)))
+            if label2_sel:
+                _fm_parts.append("label2 IN ({})".format(", ".join(f"'{_sql_str(v)}'" for v in label2_sel)))
+            if label3_sel:
+                _fm_parts.append("label3 IN ({})".format(", ".join(f"'{_sql_str(v)}'" for v in label3_sel)))
+            if timepoint_sel:
+                _fm_parts.append("timepoint IN ({})".format(", ".join(f"'{_sql_str(v)}'" for v in timepoint_sel)))
+            _fm_where = " AND ".join(_fm_parts)
+
+            # Identify top-N motifs by overall count across selected range
+            with _timed("fm_top_motifs"):
+                _fm_top_df = con.execute(f"""
+                    SELECT {_fm_motif_col} AS motif, COUNT(*) AS n
+                    FROM fragments
+                    WHERE {_fm_where}
+                    GROUP BY motif
+                    ORDER BY n DESC
+                    LIMIT {_fm_top_n}
+                """).df()
+
+            if _fm_top_df.empty:
+                st.info("No fragments match the current filters.")
+            else:
+                _fm_top_motifs = _fm_top_df["motif"].tolist()
+                _fm_motif_list = ", ".join(f"'{m}'" for m in _fm_top_motifs)
+
+                with _timed("fm_query"):
+                    if _fm_group_dim:
+                        _fm_df = con.execute(f"""
+                            WITH counts AS (
+                                SELECT
+                                    {_fm_group_dim},
+                                    {_fm_motif_col}  AS motif,
+                                    insert_size,
+                                    COUNT(*)         AS n
+                                FROM fragments
+                                WHERE {_fm_where}
+                                  AND {_fm_motif_col} IN ({_fm_motif_list})
+                                GROUP BY {_fm_group_dim}, motif, insert_size
+                            )
+                            SELECT
+                                {_fm_group_dim},
+                                motif,
+                                insert_size,
+                                n,
+                                n * 1.0 / SUM(n) OVER (PARTITION BY {_fm_group_dim}, insert_size) AS freq
+                            FROM counts
+                            ORDER BY {_fm_group_dim}, insert_size, motif
+                        """).df()
+                    else:
+                        _fm_df = con.execute(f"""
+                            WITH counts AS (
+                                SELECT
+                                    {_fm_motif_col}  AS motif,
+                                    insert_size,
+                                    COUNT(*)         AS n
+                                FROM fragments
+                                WHERE {_fm_where}
+                                  AND {_fm_motif_col} IN ({_fm_motif_list})
+                                GROUP BY motif, insert_size
+                            )
+                            SELECT
+                                motif,
+                                insert_size,
+                                n,
+                                n * 1.0 / SUM(n) OVER (PARTITION BY insert_size) AS freq
+                            FROM counts
+                            ORDER BY insert_size, motif
+                        """).df()
+
+                _fm_sort_cols = [_fm_group_dim, "motif", "insert_size"] if _fm_group_dim else ["motif", "insert_size"]
+                _fm_group_cols = [_fm_group_dim, "motif"] if _fm_group_dim else ["motif"]
+                _fm_df_raw = _fm_df.copy()
+                if _fm_smooth > 1:
+                    _fm_df = (
+                        _fm_df.sort_values(_fm_sort_cols)
+                        .assign(freq=lambda d: d.groupby(_fm_group_cols)["freq"]
+                                .transform(lambda s: s.rolling(_fm_smooth, center=True, min_periods=1).mean()))
+                    )
+
+                _fm_encode = dict(
+                    x=alt.X("insert_size:Q", title="Insert size (bp)"),
+                    y=alt.Y("freq:Q", title="Fraction"),
+                    tooltip=[
+                        alt.Tooltip("motif:N",       title="Motif"),
+                        alt.Tooltip("insert_size:Q", title="Insert size"),
+                        alt.Tooltip("freq:Q",        title="Fraction", format=".4f"),
+                        alt.Tooltip("n:Q",           title="Count"),
+                    ],
+                )
+                if _fm_group_dim:
+                    _fm_encode["color"] = alt.Color(f"{_fm_group_dim}:N", title=_fm_group_label)
+                    _fm_encode["tooltip"].insert(0, alt.Tooltip(f"{_fm_group_dim}:N", title=_fm_group_label))
+
+                # ~700px usable width; divide evenly across columns with a small gutter
+                _fm_facet_width = max(80, (700 // _fm_columns) - 20)
+                _fm_chart = (
+                    alt.Chart(_fm_df)
+                    .mark_line()
+                    .encode(**_fm_encode)
+                    .properties(width=_fm_facet_width, height=120)
+                    .facet(
+                        facet=alt.Facet("motif:N", title=f"{_fm_end} end motif",
+                                        sort=_fm_top_motifs),
+                        columns=_fm_columns,
+                    )
+                    .resolve_scale(y="independent")
+                )
+
+                st.altair_chart(_fm_chart, use_container_width=True)
+
+                # ── Power spectrum ─────────────────────────────────────────────
+                st.subheader("Power spectrum of end-motif frequency (insert size axis)")
+                st.caption(
+                    "FFT power spectrum of end-motif frequency along the insert size axis. "
+                    "A peak near **10.5 bp** (red line) indicates rotational nucleosome "
+                    "positioning signal. Computed on unsmoothed data; the smoothing window "
+                    "above does not affect this plot. Restrict the insert size range to the "
+                    "mononucleosome window (100–300 bp) for best signal-to-noise."
+                )
+
+                _fm_fft_c1, _fm_fft_c2 = st.columns(2)
+                with _fm_fft_c1:
+                    _fm_fft_is_min = st.number_input(
+                        "Min insert size for FFT", value=100, step=10, key="fm_fft_is_min"
+                    )
+                with _fm_fft_c2:
+                    _fm_fft_is_max = st.number_input(
+                        "Max insert size for FFT", value=300, step=10, key="fm_fft_is_max"
+                    )
+
+                _fm_fft_records = []
+                _fm_fft_groups = (
+                    [((gval, m), grp)
+                     for (gval, m), grp in _fm_df_raw.groupby([_fm_group_dim, "motif"])]
+                    if _fm_group_dim
+                    else [((None, m), grp)
+                          for m, grp in _fm_df_raw.groupby("motif")]
+                )
+                for (gval, motif), grp in _fm_fft_groups:
+                    sub = (grp[
+                        (grp["insert_size"] >= _fm_fft_is_min) &
+                        (grp["insert_size"] <= _fm_fft_is_max)
+                    ].sort_values("insert_size"))
+                    if len(sub) < 20:
+                        continue
+                    is_vals   = sub["insert_size"].values
+                    freq_vals = sub["freq"].values
+                    grid   = np.arange(is_vals[0], is_vals[-1] + 1)
+                    signal = np.interp(grid, is_vals, freq_vals)
+                    signal -= signal.mean()
+                    signal *= np.hanning(len(signal))
+                    power  = np.abs(np.fft.rfft(signal)) ** 2
+                    freqs  = np.fft.rfftfreq(len(grid), d=1.0)
+                    for f, p in zip(freqs[1:], power[1:]):
+                        period = 1.0 / f
+                        if 5.0 <= period <= 50.0:
+                            rec = {"motif": motif, "period_bp": round(period, 3), "power": p}
+                            if gval is not None:
+                                rec[_fm_group_dim] = gval
+                            _fm_fft_records.append(rec)
+
+                if _fm_fft_records:
+                    _fm_fft_df = pd.DataFrame(_fm_fft_records)
+                    _fm_fft_encode = dict(
+                        x=alt.X("period_bp:Q", title="Period (bp)"),
+                        y=alt.Y("power:Q",     title="Power"),
+                        tooltip=[
+                            alt.Tooltip("motif:N",     title="Motif"),
+                            alt.Tooltip("period_bp:Q", title="Period (bp)", format=".2f"),
+                            alt.Tooltip("power:Q",     title="Power",       format=".3e"),
+                        ],
+                    )
+                    if _fm_group_dim:
+                        _fm_fft_encode["color"] = alt.Color(f"{_fm_group_dim}:N", title=_fm_group_label)
+                        _fm_fft_encode["tooltip"].insert(0, alt.Tooltip(f"{_fm_group_dim}:N", title=_fm_group_label))
+
+                    _fm_fft_facet_width = max(80, (700 // _fm_columns) - 20)
+                    _fm_fft_line  = alt.Chart(_fm_fft_df).mark_line().encode(**_fm_fft_encode)
+                    _fm_fft_rule  = (
+                        alt.Chart(_fm_fft_df)
+                        .mark_rule(color="red", strokeDash=[4, 2])
+                        .encode(x=alt.datum(10.5))
+                    )
+                    _fm_fft_chart = (
+                        alt.layer(_fm_fft_line, _fm_fft_rule)
+                        .properties(width=_fm_fft_facet_width, height=120)
+                        .facet(
+                            facet=alt.Facet("motif:N", title=f"{_fm_end} end motif",
+                                            sort=_fm_top_motifs),
+                            columns=_fm_columns,
+                        )
+                        .resolve_scale(y="independent")
+                    )
+                    st.altair_chart(_fm_fft_chart, use_container_width=True)
+                else:
+                    st.info("Not enough data in the selected insert size range for FFT.")
+
+                # ── End-motif by GC content ────────────────────────────────────
+                st.subheader("End-motif frequency by GC content")
+                st.caption(
+                    "4-mer end-motif frequency across fragment GC content bins. "
+                    "Fraction is normalized within each GC bin."
+                )
+
+                _fm_gc_c1, _fm_gc_c2, _fm_gc_c3 = st.columns([1, 1, 1])
+                with _fm_gc_c1:
+                    _fm_gc_bin = st.select_slider(
+                        "GC bin size", options=[0.01, 0.02, 0.05, 0.10], value=0.05,
+                        key="fm_gc_bin",
+                    )
+                with _fm_gc_c2:
+                    _fm_gc_smooth = st.slider(
+                        "Smoothing window (bins)", 1, 11, 3, step=2, key="fm_gc_smooth",
+                    )
+                with _fm_gc_c3:
+                    _fm_gc_columns = st.slider("Columns", 1, 8, 4, key="fm_gc_columns")
+
+                _fm_gc_where = _fm_where + " AND gc_content IS NOT NULL"
+
+                with _timed("fm_gc_query"):
+                    if _fm_group_dim:
+                        _fm_gc_df = con.execute(f"""
+                            WITH counts AS (
+                                SELECT
+                                    {_fm_group_dim},
+                                    {_fm_motif_col}                              AS motif,
+                                    ROUND(gc_content / {_fm_gc_bin}) * {_fm_gc_bin} AS gc_bin,
+                                    COUNT(*)                                     AS n
+                                FROM fragments
+                                WHERE {_fm_gc_where}
+                                  AND {_fm_motif_col} IN ({_fm_motif_list})
+                                GROUP BY {_fm_group_dim}, motif, gc_bin
+                            )
+                            SELECT
+                                {_fm_group_dim}, motif, gc_bin, n,
+                                n * 1.0 / SUM(n) OVER (PARTITION BY {_fm_group_dim}, gc_bin) AS freq
+                            FROM counts
+                            ORDER BY {_fm_group_dim}, gc_bin, motif
+                        """).df()
+                    else:
+                        _fm_gc_df = con.execute(f"""
+                            WITH counts AS (
+                                SELECT
+                                    {_fm_motif_col}                              AS motif,
+                                    ROUND(gc_content / {_fm_gc_bin}) * {_fm_gc_bin} AS gc_bin,
+                                    COUNT(*)                                     AS n
+                                FROM fragments
+                                WHERE {_fm_gc_where}
+                                  AND {_fm_motif_col} IN ({_fm_motif_list})
+                                GROUP BY motif, gc_bin
+                            )
+                            SELECT
+                                motif, gc_bin, n,
+                                n * 1.0 / SUM(n) OVER (PARTITION BY gc_bin) AS freq
+                            FROM counts
+                            ORDER BY gc_bin, motif
+                        """).df()
+
+                if _fm_gc_df.empty:
+                    st.info("No fragments with GC content data match the current filters.")
+                else:
+                    _fm_gc_sort_cols = ([_fm_group_dim, "motif", "gc_bin"] if _fm_group_dim
+                                        else ["motif", "gc_bin"])
+                    _fm_gc_group_cols = [_fm_group_dim, "motif"] if _fm_group_dim else ["motif"]
+                    if _fm_gc_smooth > 1:
+                        _fm_gc_df = (
+                            _fm_gc_df.sort_values(_fm_gc_sort_cols)
+                            .assign(freq=lambda d: d.groupby(_fm_gc_group_cols)["freq"]
+                                    .transform(lambda s: s.rolling(_fm_gc_smooth, center=True,
+                                                                   min_periods=1).mean()))
+                        )
+
+                    _fm_gc_encode = dict(
+                        x=alt.X("gc_bin:Q", title="GC content",
+                                scale=alt.Scale(domain=[0, 1]),
+                                axis=alt.Axis(format=".0%")),
+                        y=alt.Y("freq:Q", title="Fraction"),
+                        tooltip=[
+                            alt.Tooltip("motif:N",  title="Motif"),
+                            alt.Tooltip("gc_bin:Q", title="GC bin", format=".2f"),
+                            alt.Tooltip("freq:Q",   title="Fraction", format=".4f"),
+                            alt.Tooltip("n:Q",      title="Count"),
+                        ],
+                    )
+                    if _fm_group_dim:
+                        _fm_gc_encode["color"] = alt.Color(f"{_fm_group_dim}:N", title=_fm_group_label)
+                        _fm_gc_encode["tooltip"].insert(0, alt.Tooltip(f"{_fm_group_dim}:N", title=_fm_group_label))
+
+                    _fm_gc_facet_width = max(80, (700 // _fm_gc_columns) - 20)
+                    _fm_gc_chart = (
+                        alt.Chart(_fm_gc_df)
+                        .mark_line()
+                        .encode(**_fm_gc_encode)
+                        .properties(width=_fm_gc_facet_width, height=120)
+                        .facet(
+                            facet=alt.Facet("motif:N", title=f"{_fm_end} end motif",
+                                            sort=_fm_top_motifs),
+                            columns=_fm_gc_columns,
+                        )
+                        .resolve_scale(y="independent")
+                    )
+
+                    st.altair_chart(_fm_gc_chart, use_container_width=True)
+
+                # ── Fragment GC content distribution ──────────────────────────
+                st.subheader("Fragment GC content distribution")
+                st.caption(
+                    "Distribution of fragment-level GC content (computed from the reference "
+                    "over the full fragment span). Useful for assessing library prep GC bias "
+                    "and cfDNA GC enrichment. Note: the end-motif by GC plot above is "
+                    "reference-confounded; this plot shows real sequencing data."
+                )
+
+                _fm_fgc_bin = st.select_slider(
+                    "Bin size", options=[0.01, 0.02, 0.05], value=0.02,
+                    key="fm_frag_gc_bin",
+                )
+
+                with _timed("fm_frag_gc_query"):
+                    if _fm_group_dim:
+                        _fm_fgc_df = con.execute(f"""
+                            SELECT
+                                {_fm_group_dim},
+                                ROUND(gc_content / {_fm_fgc_bin}) * {_fm_fgc_bin} AS gc_bin,
+                                COUNT(*) AS n
+                            FROM fragments
+                            WHERE {_fm_where} AND gc_content IS NOT NULL
+                            GROUP BY {_fm_group_dim}, gc_bin
+                            ORDER BY {_fm_group_dim}, gc_bin
+                        """).df()
+                    else:
+                        _fm_fgc_df = con.execute(f"""
+                            SELECT
+                                ROUND(gc_content / {_fm_fgc_bin}) * {_fm_fgc_bin} AS gc_bin,
+                                COUNT(*) AS n
+                            FROM fragments
+                            WHERE {_fm_where} AND gc_content IS NOT NULL
+                            GROUP BY gc_bin
+                            ORDER BY gc_bin
+                        """).df()
+
+                if not _fm_fgc_df.empty:
+                    _fm_fgc_encode = dict(
+                        x=alt.X("gc_bin:Q", title="GC content",
+                                scale=alt.Scale(domain=[0, 1]),
+                                axis=alt.Axis(format=".0%")),
+                        y=alt.Y("n:Q", title="Fragment count"),
+                        tooltip=[
+                            alt.Tooltip("gc_bin:Q", title="GC bin",   format=".2f"),
+                            alt.Tooltip("n:Q",      title="Fragments", format=","),
+                        ],
+                    )
+                    if _fm_group_dim:
+                        _fm_fgc_encode["color"]   = alt.Color(f"{_fm_group_dim}:N", title=_fm_group_label)
+                        _fm_fgc_encode["opacity"] = alt.value(0.5)
+                        _fm_fgc_encode["tooltip"].insert(0, alt.Tooltip(f"{_fm_group_dim}:N", title=_fm_group_label))
+
+                    _fm_fgc_chart = (
+                        alt.Chart(_fm_fgc_df)
+                        .mark_area(opacity=0.5 if not _fm_group_dim else 0.35, line=True)
+                        .encode(**_fm_fgc_encode)
+                        .properties(height=250)
+                    )
+                    st.altair_chart(_fm_fgc_chart, use_container_width=True)
 
 # ── Query timing debug panel ───────────────────────────────────────────────────
 # Write into the placeholder reserved directly below the checkbox so the table
