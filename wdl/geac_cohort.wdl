@@ -38,12 +38,10 @@ version 1.0
 ##   include_supplementary   - include supplementary alignments (FLAG 0x800); default false
 ##   reads_output            - also write per-read detail Parquets and merge into alt_reads table (default false)
 ##   input_checksum_sha256   - compute SHA-256 for each input BAM/CRAM during collect (default false)
-##   run_fragments           - also run geac fragments in parallel and register fragment Parquets
-##                             as an external view in the cohort DuckDB (default false).
+##   run_fragments           - also run geac fragments in parallel and ingest the fragment Parquets
+##                             into the cohort DuckDB as a table (default false).
 ##                             Note: requires a second BAM pass per sample (parallel, not sequential).
 ##                             Fragment Parquets are large for WGS — increase fragments_disk_gb accordingly.
-##                             The DuckDB view references the GCS paths of the fragment Parquets; do not
-##                             move or delete them after the merge or the view will break.
 ##   cohort_name             - Base name for the output DuckDB file (default: cohort)
 ##   docker_image            - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##
