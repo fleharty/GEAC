@@ -109,7 +109,7 @@ const TABLE_SPECS: &[TableSpec] = &[
         suffix: Some(".fragments.parquet"),
         index_sql: None,
         rebuild_samples_summary: false,
-        view_only: true,
+        view_only: false,
     },
 ];
 
