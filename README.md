@@ -433,10 +433,9 @@ Key flags:
 | `--read-type` | `duplex` | raw / simplex / duplex |
 | `--pipeline` | `fgbio` | fgbio / dragen / raw |
 
-The output Parquet is registered as an **external DuckDB view** (not ingested) by
-`geac merge` when its filename ends in `.fragments.parquet`.  This keeps the DuckDB file
-small while allowing DuckDB's Parquet pushdown to query large WGS fragment files
-efficiently.
+The output Parquet is ingested as a `fragments` table by `geac merge` when its filename
+ends in `.fragments.parquet`, producing a self-contained DuckDB that works anywhere
+without needing the original Parquet files alongside it.
 
 Alt-allele annotation and local depth context are available via post-hoc joins against
 the `alt_bases` and `coverage` tables:
@@ -571,6 +570,34 @@ Features:
     same cohort: locus concordance summary tiles and stacked bar; VAF density overlay;
     VAF correlation scatter with Pearson r; strand balance density; SBS96 side-by-side
     spectrum; and a unique-loci table filtered by read type
+  - *Fragmentomics* (DuckDB only, requires `fragments` table from `geac fragments`) —
+    cfDNA fragmentomics analysis across the cohort. Three plots, each supporting
+    **Totals / Sample / Batch** grouping and respecting the sidebar chromosome, batch,
+    label, and timepoint filters:
+    - **End-motif frequency by insert size** — faceted line chart (one facet per top-N
+      4-mer end motif, ranked by total frequency) showing per-insert-size frequency on
+      the y-axis. Controls: which end (5′ or 3′), number of top motifs to show, insert
+      size range, smoothing window (Gaussian rolling mean), columns per row. End motifs
+      are extracted centered on the cut site (positions [cut−2, cut+2)) and the 3′ motif
+      is reported as the reverse complement, matching the Jiang et al. 2020 cfDNA
+      end-motif convention. A nucleosome periodicity (~10.5 bp) is often visible by eye
+      in the mononucleosomal range.
+    - **Power spectrum (FFT) of end-motif frequency** — Fourier power spectrum of the
+      unsmoothed end-motif frequency signal along the insert-size axis, computed
+      per-motif with a Hann window and mean subtraction. A red reference line marks
+      10.5 bp (one helical turn). A peak near 10.5 bp confirms rotational nucleosome
+      positioning signal. Controls: insert size range for FFT (default 100–300 bp,
+      the mononucleosomal range). Uses pre-smoothing data so the smoothing window
+      setting does not affect the result.
+    - **End-motif frequency by GC content** — faceted line chart of per-GC-bin motif
+      frequency, useful for assessing whether end-motif preferences track with fragment
+      GC composition. Note: because both end motifs and GC content are derived from the
+      reference sequence, patterns here reflect reference sequence composition and are
+      highly reproducible across samples; they are not purely a biological signal.
+    - **Fragment GC content distribution** — area chart of fragment-level GC content
+      (computed from the reference over the full fragment span), unconfounded by
+      end-motif identity. Useful for assessing library prep GC bias and cfDNA GC
+      enrichment patterns.
 - **Per-read filters** (DuckDB only, requires `--reads-output`) — when an `alt_reads`
   table is present, a "Per-read filters" section appears in the sidebar with four
   range sliders. All filters use include-only (BETWEEN) semantics:

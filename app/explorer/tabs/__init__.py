@@ -2,6 +2,7 @@ from . import ai_plot_builder
 from . import cohort
 from . import duplex_simplex
 from . import error_spectrum
+from . import fragmentomics
 from . import panel_of_normals
 from . import pipeline_comparison
 from . import read_type_comparison
@@ -25,6 +26,7 @@ TAB_PANEL_OF_NORMALS = panel_of_normals
 TAB_PIPELINE_COMPARISON = pipeline_comparison
 TAB_READ_TYPE_COMPARISON = read_type_comparison
 TAB_AI_PLOT_BUILDER = ai_plot_builder
+TAB_FRAGMENTOMICS = fragmentomics
 
 TAB_MODULES = (
     TAB_SUMMARY,
@@ -39,4 +41,5 @@ TAB_MODULES = (
     TAB_PIPELINE_COMPARISON,
     TAB_READ_TYPE_COMPARISON,
     TAB_AI_PLOT_BUILDER,
+    TAB_FRAGMENTOMICS,
 )

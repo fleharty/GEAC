@@ -136,6 +136,8 @@ class DataSource:
                 row[0]
                 for row in self.con.execute(
                     "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+                    " UNION ALL "
+                    "SELECT table_name FROM information_schema.views WHERE table_schema = 'main'"
                 ).fetchall()
             }
             if self.table_name not in self.available_tables:

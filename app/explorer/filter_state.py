@@ -195,6 +195,21 @@ MAIN_FILTER_STATE = FilterState(
         "cosmic_add_penalty": 0.05,
         "cosmic_remove_penalty": 0.01,
         "cosmic_connected_sigs": True,
+        # Fragmentomics tab
+        "fm_end": "5′",
+        "fm_top_n": 16,
+        "fm_is_min": 50,
+        "fm_is_max": 400,
+        "fm_smooth": 11,
+        "fm_columns": 4,
+        "fm_by_sample": "Totals",
+        "fm_fft_is_min": 100,
+        "fm_fft_is_max": 300,
+        "fm_gc_bin": 0.05,
+        "fm_frag_gc_bin": 0.02,
+        "fm_gc_smooth": 3,
+        "fm_gc_columns": 4,
+        "fm_samples": [],
     },
 )
 
