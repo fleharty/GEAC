@@ -160,3 +160,63 @@ fn reverse_complement(seq: &str) -> String {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_motif_basic() {
+        let seq = b"ACGTACGTAC";
+        assert_eq!(extract_motif(seq, 0, 4).as_deref(), Some("ACGT"));
+        assert_eq!(extract_motif(seq, 2, 4).as_deref(), Some("GTAC"));
+        assert_eq!(extract_motif(seq, 6, 4).as_deref(), Some("GTAC"));
+    }
+
+    #[test]
+    fn extract_motif_out_of_bounds_returns_none() {
+        let seq = b"ACGT";
+        assert!(extract_motif(seq, 1, 4).is_none());
+        assert!(extract_motif(seq, 4, 1).is_none());
+    }
+
+    #[test]
+    fn extract_motif_rejects_non_acgt() {
+        let seq = b"ACNT";
+        assert!(extract_motif(seq, 0, 4).is_none());
+        let lower = b"acgt";
+        assert!(extract_motif(lower, 0, 4).is_none());
+    }
+
+    #[test]
+    fn reverse_complement_basic() {
+        assert_eq!(reverse_complement("ACGT"), "ACGT");
+        assert_eq!(reverse_complement("AAAA"), "TTTT");
+        assert_eq!(reverse_complement("ATCG"), "CGAT");
+        assert_eq!(reverse_complement("CCGG"), "CCGG");
+    }
+
+    #[test]
+    fn reverse_complement_is_involution() {
+        for motif in ["ACGT", "TTGA", "CCGA", "GATC", "AAAT"] {
+            assert_eq!(reverse_complement(&reverse_complement(motif)), motif);
+        }
+    }
+
+    #[test]
+    fn end_motif_3p_orientation_matches_jiang_convention() {
+        // Reference (+ strand) around a fragment 3' cut site: ...AATT|CGGC...
+        // (cut between positions 3 and 4 on this snippet)
+        // The + strand reads 5'-AATTCGGC-3'.
+        // The − strand at the cut site reads 5'-GCCG AATT-3' (reverse complement).
+        // The 3' end motif as the nuclease "sees" it on the − strand
+        // (centered on cut, [cut-2, cut+2)) is the 4-mer at the 5' end of the
+        // − strand fragment, i.e. revcomp of the + strand bases [cut-2, cut+2).
+        let seq = b"AATTCGGC";
+        // cut at index 4 → [2, 6) = b"TTCG" on + strand
+        let plus = extract_motif(seq, 2, 4).unwrap();
+        assert_eq!(plus, "TTCG");
+        // 3' motif (reported in 5'→3' of − strand) = reverse complement
+        assert_eq!(reverse_complement(&plus), "CGAA");
+    }
+}
