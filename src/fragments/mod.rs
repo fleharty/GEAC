@@ -53,13 +53,16 @@ pub fn collect_fragments(args: &FragmentsArgs, writer: &mut FragmentsWriter) -> 
         for record in bam.records() {
             let record = record.context("error reading BAM record")?;
 
-            // Only process R1 of proper pairs; skip duplicates, unmapped, secondary, supplementary
+            // Process the leftmost read of each proper pair (positive TLEN). By
+            // SAM spec, exactly one read per pair has positive TLEN — the
+            // leftmost one — and in FR libraries it is on the + strand
+            // regardless of whether it is R1 or R2. Filtering on `is_first_in_template`
+            // would drop pairs where R1 maps to the − strand (~half of all pairs).
             if record.is_duplicate()
                 || record.is_unmapped()
                 || record.is_mate_unmapped()
                 || !record.is_paired()
                 || !record.is_proper_pair()
-                || !record.is_first_in_template()
                 || record.is_secondary()
                 || record.is_supplementary()
                 || (record.mapq() as u8) < args.min_map_qual

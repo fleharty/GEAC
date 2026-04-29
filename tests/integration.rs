@@ -4,8 +4,8 @@ use common::{
     assert_geac_success, count_bam_reads, duckdb_columns, duckdb_count, duckdb_table_exists,
     parquet_columns, parquet_count, parquet_query_f32, parquet_query_i32, parquet_query_i64,
     parquet_query_opt_str, parquet_query_str, write_bam, write_bed, write_coverage_bam,
-    write_cycle_bam, write_paired_bam, write_reference, write_reference_with_base, CovRead,
-    CycleTestRead,
+    write_cycle_bam, write_fragments_bam, write_paired_bam, write_reference,
+    write_reference_with_base, CovRead, CycleTestRead, FragmentPair,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -2210,4 +2210,59 @@ fn merged_duckdb_tables_match_schema_manifest() {
     assert_schema_columns_present(&duckdb_columns(&db, "alt_reads"), "alt_reads");
     assert_schema_columns_present(&duckdb_columns(&db, "geac_metadata"), "geac_metadata");
     assert_schema_columns_present(&duckdb_columns(&db, "geac_inputs"), "geac_inputs");
+}
+
+/// Regression test for the `is_first_in_template` strand bug.
+///
+/// In FR libraries R1 is randomly assigned to either strand, so half of
+/// proper pairs have R1 on the − strand (rightmost). The previous filter
+/// `!record.is_first_in_template()` dropped those pairs entirely, halving
+/// fragment yield. The correct selector is positive TLEN — by SAM spec
+/// exactly one read per pair (the leftmost) carries it.
+#[test]
+fn fragments_emits_record_for_both_r1_strand_orientations() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 500);
+    let bam = write_fragments_bam(
+        dir.path(),
+        "frag_strand.bam",
+        "sample1",
+        500,
+        vec![
+            FragmentPair {
+                left_pos: 100,
+                insert_size: 150,
+                r1_on_plus: true,
+            },
+            FragmentPair {
+                left_pos: 300,
+                insert_size: 150,
+                r1_on_plus: false,
+            },
+        ],
+        50,
+    );
+    let out = dir.path().join("frag_strand.fragments.parquet");
+
+    assert_geac_success(&[
+        "fragments",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
+    ]);
+
+    assert_eq!(
+        parquet_count(&out),
+        2,
+        "both R1-on-+ and R1-on-− proper pairs must produce a fragment record"
+    );
+    assert_eq!(parquet_query_i64(&out, "frag_start", "frag_start = 100"), 100);
+    assert_eq!(parquet_query_i64(&out, "frag_start", "frag_start = 300"), 300);
 }

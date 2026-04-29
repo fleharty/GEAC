@@ -411,6 +411,127 @@ pub fn write_paired_bam(
     sorted
 }
 
+// ── Fragments test BAM ────────────────────────────────────────────────────────
+
+/// One proper-pair fragment for `write_fragments_bam`.
+///
+/// `left_pos` is the 0-based reference position of the leftmost read.
+/// `insert_size` is the absolute fragment length (TLEN). The right read starts
+/// at `left_pos + insert_size - read_len`.
+/// `r1_on_plus = true` makes R1 the leftmost (+ strand) read (flags 99/147).
+/// `r1_on_plus = false` makes R1 the rightmost (− strand) read (flags 163/83) —
+/// this is the case the `is_first_in_template` filter used to drop.
+pub struct FragmentPair {
+    pub left_pos: i64,
+    pub insert_size: i32,
+    pub r1_on_plus: bool,
+}
+
+/// Write a coordinate-sorted, indexed BAM containing proper-pair fragments.
+///
+/// Each pair has both reads of length `read_len`, all-A sequence, mapq 60,
+/// CIGAR `{read_len}M`, and the SAM flags appropriate for an FR proper pair
+/// with R1 on either the + or − strand.
+pub fn write_fragments_bam(
+    dir: &Path,
+    filename: &str,
+    sample_id: &str,
+    ref_len: usize,
+    pairs: Vec<FragmentPair>,
+    read_len: usize,
+) -> PathBuf {
+    let bam_path = dir.join(filename);
+
+    let mut header = bam::header::Header::new();
+    let mut hd = bam::header::HeaderRecord::new(b"HD");
+    hd.push_tag(b"VN", "1.6");
+    hd.push_tag(b"SO", "coordinate");
+    header.push_record(&hd);
+
+    let mut sq = bam::header::HeaderRecord::new(b"SQ");
+    sq.push_tag(b"SN", "chr1");
+    sq.push_tag(b"LN", ref_len as i32);
+    header.push_record(&sq);
+
+    let mut rg = bam::header::HeaderRecord::new(b"RG");
+    rg.push_tag(b"ID", "rg1");
+    rg.push_tag(b"SM", sample_id);
+    header.push_record(&rg);
+
+    let mut writer = bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
+    let seq = vec![b'A'; read_len];
+    let quals = vec![40u8; read_len];
+    let cigar = CigarString(vec![Cigar::Match(read_len as u32)]);
+
+    // Flags: paired=0x1, proper=0x2, read_rev=0x10, mate_rev=0x20, R1=0x40, R2=0x80
+    // Leftmost on + strand, mate on − strand:
+    let r1_plus_left: u16 = 0x1 | 0x2 | 0x20 | 0x40; // 99
+    let r2_minus_right: u16 = 0x1 | 0x2 | 0x10 | 0x80; // 147
+    // Leftmost on + strand is R2; rightmost on − strand is R1:
+    let r2_plus_left: u16 = 0x1 | 0x2 | 0x20 | 0x80; // 163
+    let r1_minus_right: u16 = 0x1 | 0x2 | 0x10 | 0x40; // 83
+
+    for (i, p) in pairs.iter().enumerate() {
+        let right_pos = p.left_pos + p.insert_size as i64 - read_len as i64;
+        let isize_left = p.insert_size as i64;
+        let isize_right = -(p.insert_size as i64);
+
+        let (left_flags, right_flags) = if p.r1_on_plus {
+            (r1_plus_left, r2_minus_right)
+        } else {
+            (r2_plus_left, r1_minus_right)
+        };
+
+        let qname = format!("frag_{i}");
+
+        let mut left = Record::new();
+        left.set(qname.as_bytes(), Some(&cigar), &seq, &quals);
+        left.set_flags(left_flags);
+        left.set_tid(0);
+        left.set_pos(p.left_pos);
+        left.set_mapq(60);
+        left.set_mtid(0);
+        left.set_mpos(right_pos);
+        left.set_insert_size(isize_left);
+        left.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+        writer.write(&left).unwrap();
+
+        let mut right = Record::new();
+        right.set(qname.as_bytes(), Some(&cigar), &seq, &quals);
+        right.set_flags(right_flags);
+        right.set_tid(0);
+        right.set_pos(right_pos);
+        right.set_mapq(60);
+        right.set_mtid(0);
+        right.set_mpos(p.left_pos);
+        right.set_insert_size(isize_right);
+        right.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+        writer.write(&right).unwrap();
+    }
+
+    drop(writer);
+
+    let sorted = dir.join(format!("{filename}.sorted.bam"));
+    let status = std::process::Command::new("samtools")
+        .args([
+            "sort",
+            "-o",
+            sorted.to_str().unwrap(),
+            bam_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("samtools sort failed");
+    assert!(status.success(), "samtools sort failed");
+
+    let status = std::process::Command::new("samtools")
+        .args(["index", sorted.to_str().unwrap()])
+        .status()
+        .expect("samtools index failed");
+    assert!(status.success(), "samtools index failed");
+
+    sorted
+}
+
 // ── Cycle-number test BAM ─────────────────────────────────────────────────────
 
 /// Specification for a single read in `write_cycle_bam`.

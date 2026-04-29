@@ -1053,3 +1053,33 @@ Added a `reverse_complement` helper in `src/fragments/mod.rs`.
 reverse-complement the + strand reference sequence to get the motif in the biologically
 meaningful 5′→3′ orientation. The 5′ motif needs no transformation because R1 already
 reads in the + strand direction.
+
+---
+
+### `geac fragments` dropped half of all fragments by filtering on `is_first_in_template`
+
+**Symptom:** Fragment counts from `geac fragments` were ~50% lower than expected for
+standard FR paired-end libraries — every other proper pair was missing from the output
+Parquet.
+
+**Root cause:** The fragment-collection loop required both `record.is_first_in_template()`
+(R1) AND `record.insert_size() > 0` to select one read per pair. In FR libraries R1 is
+randomly assigned to either strand, so half of all proper pairs have R1 on the −
+strand (the rightmost read with negative TLEN). Those pairs satisfied neither side of
+the conjunction in a way that mattered: the rightmost R1 had negative TLEN (rejected by
+the TLEN check), and the leftmost R2 was not first-in-template (rejected by the R1
+check). Net effect: only ~half of pairs (those with R1 on +) were emitted.
+
+**Fix:** Removed the `is_first_in_template()` filter entirely. By the SAM spec, exactly
+one read per pair has positive TLEN — the leftmost — and in FR libraries it is on the
++ strand regardless of R1/R2 status. The TLEN-positive check alone is the correct
+selector. (`src/fragments/mod.rs`)
+
+**Regression test:** `fragments_emits_record_for_both_r1_strand_orientations` constructs
+a BAM with one R1-on-+ pair (flags 99/147) and one R1-on-− pair (flags 83/163) and
+asserts both produce a fragment record.
+
+**Lesson:** Don't conflate "R1" with "leftmost / + strand" in paired-end data. R1/R2
+designates the order in the FASTQ pair, not the strand. Use TLEN sign or alignment
+strand flags (`0x10`, `0x20`) to reason about strand; use `0x40`/`0x80` only when you
+need to distinguish the two reads of a pair without regard to position.
