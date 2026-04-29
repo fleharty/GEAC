@@ -107,7 +107,10 @@ const TABLE_SPECS: &[TableSpec] = &[
     TableSpec {
         table: "fragments",
         suffix: Some(".fragments.parquet"),
-        index_sql: None,
+        index_sql: Some(
+            "CREATE INDEX IF NOT EXISTS idx_fragments_locus \
+             ON fragments (sample_id, chrom, midpoint);",
+        ),
         rebuild_samples_summary: false,
         view_only: false,
     },

@@ -577,7 +577,7 @@ Features:
     - **End-motif frequency by insert size** — faceted line chart (one facet per top-N
       4-mer end motif, ranked by total frequency) showing per-insert-size frequency on
       the y-axis. Controls: which end (5′ or 3′), number of top motifs to show, insert
-      size range, smoothing window (Gaussian rolling mean), columns per row. End motifs
+      size range, smoothing window (centered rolling mean), columns per row. End motifs
       are extracted centered on the cut site (positions [cut−2, cut+2)) and the 3′ motif
       is reported as the reverse complement, matching the Jiang et al. 2020 cfDNA
       end-motif convention. A nucleosome periodicity (~10.5 bp) is often visible by eye
