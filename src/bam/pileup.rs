@@ -371,6 +371,11 @@ pub(super) fn tally_pileup(
                 overlap_depth += 1;
                 total_depth += 1;
 
+                // Strand for overlap positions tracks R1's mapping orientation
+                // (sequencing-orientation bias), not the leftmost read's strand.
+                // For FR proper pairs the leftmost read is always on +, so a
+                // genomic-orientation split would be uninformative; R1-strand
+                // catches library-prep artifacts that affect R1 vs R2 differently.
                 let r1_is_rev = if r1.is_first_in_pair {
                     r1.is_reverse
                 } else {
