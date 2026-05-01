@@ -418,6 +418,8 @@ struct BinAccumulator {
     sample_id: String,
     read_type: crate::record::ReadType,
     pipeline: crate::record::Pipeline,
+    subject_id: Option<String>,
+    sample_type: Option<String>,
     batch: Option<String>,
     label1: Option<String>,
     label2: Option<String>,
@@ -463,6 +465,8 @@ impl BinAccumulator {
             sample_id: String::new(),
             read_type: crate::record::ReadType::Duplex,
             pipeline: crate::record::Pipeline::Fgbio,
+            subject_id: None,
+            sample_type: None,
             batch: None,
             label1: None,
             label2: None,
@@ -528,6 +532,8 @@ impl BinAccumulator {
         self.sample_id = r.sample_id.clone();
         self.read_type = r.read_type;
         self.pipeline = r.pipeline;
+        self.subject_id = r.subject_id.clone();
+        self.sample_type = r.sample_type.clone();
         self.batch = r.batch.clone();
         self.label1 = r.label1.clone();
         self.label2 = r.label2.clone();
@@ -649,6 +655,8 @@ impl BinAccumulator {
             exon_number: self.exon_number,
             read_type: self.read_type,
             pipeline: self.pipeline,
+            subject_id: self.subject_id.clone(),
+            sample_type: self.sample_type.clone(),
             batch: self.batch.clone(),
             label1: self.label1.clone(),
             label2: self.label2.clone(),
@@ -780,6 +788,8 @@ impl IntervalAccumulator {
             },
             read_type: args.read_type,
             pipeline: args.pipeline,
+            subject_id: args.subject_id.clone(),
+            sample_type: args.sample_type.clone(),
             batch: args.batch.clone(),
             label1: args.label1.clone(),
             label2: args.label2.clone(),
@@ -1044,6 +1054,8 @@ fn build_record(
         exon_number,
         read_type: args.read_type,
         pipeline: args.pipeline,
+        subject_id: args.subject_id.clone(),
+        sample_type: args.sample_type.clone(),
         batch: args.batch.clone(),
         label1: args.label1.clone(),
         label2: args.label2.clone(),
@@ -1098,6 +1110,8 @@ fn build_zero_record(
         exon_number,
         read_type: args.read_type,
         pipeline: args.pipeline,
+        subject_id: args.subject_id.clone(),
+        sample_type: args.sample_type.clone(),
         batch: args.batch.clone(),
         label1: args.label1.clone(),
         label2: args.label2.clone(),

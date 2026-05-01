@@ -58,6 +58,18 @@ pub struct CollectArgs {
     #[arg(short, long)]
     pub sample_id: Option<String>,
 
+    /// Biological subject identifier — groups samples (e.g. multiple timepoints
+    /// or tissue types) that come from the same person/animal/study subject.
+    /// Used by `geac compare` to scope longitudinal and replicate analyses.
+    #[arg(long)]
+    pub subject_id: Option<String>,
+
+    /// Sample substrate type (free-text). Standard values: cfDNA, urine_cfDNA,
+    /// tumor_tissue, normal_tissue, buffy_coat, lymphocytes. Unrecognized
+    /// values are preserved but skipped by mode-aware downstream tooling.
+    #[arg(long)]
+    pub sample_type: Option<String>,
+
     /// Optional batch label stored as a column in the output Parquet.
     /// Use this to tag samples with a processing group name so cohorts
     /// processed in separate runs can be filtered or compared in the Explorer.
@@ -320,6 +332,16 @@ pub struct CoverageArgs {
     #[arg(short, long)]
     pub sample_id: Option<String>,
 
+    /// Biological subject identifier — groups samples (e.g. multiple timepoints
+    /// or tissue types) that come from the same person/animal/study subject.
+    #[arg(long)]
+    pub subject_id: Option<String>,
+
+    /// Sample substrate type (free-text). Standard values: cfDNA, urine_cfDNA,
+    /// tumor_tissue, normal_tissue, buffy_coat, lymphocytes.
+    #[arg(long)]
+    pub sample_type: Option<String>,
+
     /// Optional batch label stored as a column in the output Parquet
     #[arg(long)]
     pub batch: Option<String>,
@@ -429,6 +451,16 @@ pub struct FragmentsArgs {
     /// If omitted, the SM tag from the BAM/CRAM read group header is used.
     #[arg(short, long)]
     pub sample_id: Option<String>,
+
+    /// Biological subject identifier — groups samples (e.g. multiple timepoints
+    /// or tissue types) that come from the same person/animal/study subject.
+    #[arg(long)]
+    pub subject_id: Option<String>,
+
+    /// Sample substrate type (free-text). Standard values: cfDNA, urine_cfDNA,
+    /// tumor_tissue, normal_tissue, buffy_coat, lymphocytes.
+    #[arg(long)]
+    pub sample_type: Option<String>,
 
     /// Optional batch label stored as a column in the output Parquet
     #[arg(long)]

@@ -14,6 +14,8 @@ version 1.0
 ##   read_type            - duplex | simplex | raw
 ##   pipeline             - fgbio | dragen | raw
 ##   sample_id            - (optional) override sample ID; defaults to BAM SM tag
+##   subject_id           - (optional) biological subject identifier (e.g. patient or animal)
+##   sample_type          - (optional) sample substrate type (e.g. cfDNA, tumor_tissue)
 ##   batch                - (optional) batch/group label stored as a column in the output
 ##   label1               - (optional) free-text sample label 1 (e.g. tissue type)
 ##   label2               - (optional) free-text sample label 2 (e.g. library prep method)
@@ -62,6 +64,8 @@ workflow GeacCollect {
         String pipeline
 
         String? sample_id
+        String? subject_id
+        String? sample_type
         String? batch
         String? label1
         String? label2
@@ -103,6 +107,8 @@ workflow GeacCollect {
             read_type             = read_type,
             pipeline              = pipeline,
             sample_id             = sample_id,
+            subject_id            = subject_id,
+            sample_type           = sample_type,
             batch                 = batch,
             label1                = label1,
             label2                = label2,
@@ -151,6 +157,8 @@ task Collect {
         String pipeline
 
         String? sample_id
+        String? subject_id
+        String? sample_type
         String? batch
         String? label1
         String? label2
@@ -201,6 +209,8 @@ task Collect {
             --min-base-qual    ~{min_base_qual} \
             --min-map-qual     ~{min_map_qual} \
             ~{"--sample-id "        + sample_id} \
+            ~{"--subject-id "       + subject_id} \
+            ~{"--sample-type "      + sample_type} \
             ~{"--batch "            + batch} \
             ~{"--label1 "           + label1} \
             ~{"--label2 "           + label2} \

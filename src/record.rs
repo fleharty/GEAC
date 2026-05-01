@@ -95,6 +95,14 @@ pub struct AltBase {
     // Provenance
     pub read_type: ReadType,
     pub pipeline: Pipeline,
+    /// Biological subject identifier — groups samples (e.g. multiple timepoints
+    /// or tissue types) that come from the same person/animal/study subject.
+    /// Used by `geac compare` to scope longitudinal and replicate analyses.
+    pub subject_id: Option<String>,
+    /// Sample substrate type. Standard values: cfDNA, urine_cfDNA, tumor_tissue,
+    /// normal_tissue, buffy_coat, lymphocytes. Free-text; unrecognized values
+    /// are preserved but ignored by mode-aware downstream tooling.
+    pub sample_type: Option<String>,
     pub batch: Option<String>,
     /// Generic sample label 1 (user-defined; e.g. tissue type).
     pub label1: Option<String>,
@@ -180,6 +188,8 @@ pub struct NormalEvidence {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SampleMetricsRecord {
     pub sample_id: String,
+    pub subject_id: Option<String>,
+    pub sample_type: Option<String>,
     pub batch: Option<String>,
     pub read_type: ReadType,
     pub pipeline: Pipeline,
@@ -284,6 +294,8 @@ pub struct CoverageRecord {
     // ── Provenance ─────────────────────────────────────────────────────────────
     pub read_type: ReadType,
     pub pipeline: Pipeline,
+    pub subject_id: Option<String>,
+    pub sample_type: Option<String>,
     pub batch: Option<String>,
     /// Generic sample label 1 (user-defined; e.g. tissue type).
     pub label1: Option<String>,
@@ -307,6 +319,8 @@ pub struct AltRead {
     pub alt_allele: String,
     pub read_type: ReadType,
     pub pipeline: Pipeline,
+    pub subject_id: Option<String>,
+    pub sample_type: Option<String>,
     pub batch: Option<String>,
     pub label1: Option<String>,
     pub label2: Option<String>,
@@ -375,6 +389,8 @@ pub struct FragmentRecord {
     pub map_qual: i32,
     pub read_type: ReadType,
     pub pipeline: Pipeline,
+    pub subject_id: Option<String>,
+    pub sample_type: Option<String>,
     pub batch: Option<String>,
     pub label1: Option<String>,
     pub label2: Option<String>,
@@ -425,6 +441,8 @@ pub struct IntervalRecord {
     // ── Provenance ────────────────────────────────────────────────────────────
     pub read_type: ReadType,
     pub pipeline: Pipeline,
+    pub subject_id: Option<String>,
+    pub sample_type: Option<String>,
     pub batch: Option<String>,
     pub label1: Option<String>,
     pub label2: Option<String>,

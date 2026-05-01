@@ -37,6 +37,8 @@ workflow GeacFragments {
         Array[File]    input_bams
         Array[File]    input_bam_indices
         Array[String]? sample_ids
+        Array[String]? subject_ids
+        Array[String]? sample_types
         Array[String]? batches
         Array[String]? labels1
         Array[String]? labels2
@@ -63,6 +65,12 @@ workflow GeacFragments {
 
         if (defined(sample_ids)) {
             String this_sample_id = select_first([sample_ids])[i]
+        }
+        if (defined(subject_ids)) {
+            String this_subject_id = select_first([subject_ids])[i]
+        }
+        if (defined(sample_types)) {
+            String this_sample_type = select_first([sample_types])[i]
         }
         if (defined(batches)) {
             String this_batch = select_first([batches])[i]
@@ -91,6 +99,8 @@ workflow GeacFragments {
                 read_type             = this_read_type,
                 pipeline              = this_pipeline,
                 sample_id             = this_sample_id,
+                subject_id            = this_subject_id,
+                sample_type           = this_sample_type,
                 batch                 = this_batch,
                 label1                = this_label1,
                 label2                = this_label2,
@@ -123,6 +133,8 @@ task Fragments {
         String pipeline
 
         String? sample_id
+        String? subject_id
+        String? sample_type
         String? batch
         String? label1
         String? label2
@@ -151,6 +163,8 @@ task Fragments {
             --pipeline         ~{pipeline} \
             --min-map-qual     ~{min_map_qual} \
             ~{"--sample-id "   + sample_id} \
+            ~{"--subject-id "  + subject_id} \
+            ~{"--sample-type " + sample_type} \
             ~{"--batch "       + batch} \
             ~{"--label1 "      + label1} \
             ~{"--label2 "      + label2} \

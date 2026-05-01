@@ -79,6 +79,8 @@ fn fragments_schema() -> Arc<Schema> {
         Field::new("map_qual", DataType::Int32, false),
         Field::new("read_type", DataType::Utf8, false),
         Field::new("pipeline", DataType::Utf8, false),
+        Field::new("subject_id", DataType::Utf8, true),
+        Field::new("sample_type", DataType::Utf8, true),
         Field::new("batch", DataType::Utf8, true),
         Field::new("label1", DataType::Utf8, true),
         Field::new("label2", DataType::Utf8, true),
@@ -130,6 +132,18 @@ fn records_to_batch(records: &[FragmentRecord], schema: Arc<Schema>) -> Result<R
     let pipeline: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.pipeline.to_string()),
     ));
+    let subject_id: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.subject_id.as_deref())
+            .collect::<Vec<_>>(),
+    ));
+    let sample_type: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.sample_type.as_deref())
+            .collect::<Vec<_>>(),
+    ));
     let batch: ArrayRef = Arc::new(StringArray::from(
         records.iter().map(|r| r.batch.as_deref()).collect::<Vec<_>>(),
     ));
@@ -162,8 +176,8 @@ fn records_to_batch(records: &[FragmentRecord], schema: Arc<Schema>) -> Result<R
         schema,
         vec![
             sample_id, chrom, frag_start, frag_end, midpoint, insert_size, gc_content,
-            end_motif_5p, end_motif_3p, map_qual, read_type, pipeline, batch, label1, label2,
-            label3, timepoint,
+            end_motif_5p, end_motif_3p, map_qual, read_type, pipeline, subject_id, sample_type,
+            batch, label1, label2, label3, timepoint,
         ],
     )
     .context("failed to create Arrow record batch")

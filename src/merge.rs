@@ -374,14 +374,21 @@ fn merge_parquet_group(
         "reading Parquet files"
     );
 
-    let first_escaped = escape_path(inputs[0]);
+    // Build the table schema as the union of every input file's columns so
+    // older Parquets (missing newly-added columns) and newer ones can coexist
+    // — INSERT … BY NAME would otherwise reject sources with extra columns.
+    let path_list = inputs
+        .iter()
+        .map(|p| format!("'{}'", escape_path(p)))
+        .collect::<Vec<_>>()
+        .join(",");
     conn.execute_batch(&format!(
-        "CREATE TABLE {} AS SELECT * FROM read_parquet('{first_escaped}');",
+        "CREATE TABLE {} AS SELECT * FROM read_parquet([{path_list}], union_by_name=true) WHERE FALSE;",
         spec.table
     ))
-    .with_context(|| format!("failed to create {} table from first file", spec.table))?;
+    .with_context(|| format!("failed to create {} table schema from inputs", spec.table))?;
 
-    for (idx, path) in inputs[1..].iter().enumerate() {
+    for (idx, path) in inputs.iter().enumerate() {
         let escaped = escape_path(path);
         info!(
             table = spec.table,

@@ -33,6 +33,8 @@
         "pipeline"
       ],
       "optional_columns": [
+        "subject_id",
+        "sample_type",
         "batch",
         "label1",
         "label2",
@@ -70,6 +72,8 @@
       "optional_columns": [
         "read_type",
         "pipeline",
+        "subject_id",
+        "sample_type",
         "batch",
         "label1",
         "label2",
@@ -147,6 +151,8 @@
       ],
       "optional_columns": [
         "bin_n",
+        "subject_id",
+        "sample_type",
         "batch",
         "label1",
         "label2",
@@ -195,6 +201,8 @@
         "n_target_positions_covered"
       ],
       "optional_columns": [
+        "subject_id",
+        "sample_type",
         "batch",
         "input_checksum_sha256",
         "mean_target_depth_covered",
@@ -247,6 +255,8 @@
         "gc_content",
         "end_motif_5p",
         "end_motif_3p",
+        "subject_id",
+        "sample_type",
         "batch",
         "label1",
         "label2",

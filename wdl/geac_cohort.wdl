@@ -12,6 +12,8 @@ version 1.0
 ##   input_bams              - BAM or CRAM files (localized by Cromwell for geac collect)
 ##   input_bam_indices       - Corresponding .bai / .crai indices
 ##   sample_ids              - (optional) override sample IDs; defaults to SM tag per BAM
+##   subject_ids             - (optional) per-sample biological subject identifier
+##   sample_types            - (optional) per-sample sample substrate type (e.g. cfDNA, tumor_tissue)
 ##   variants_tsvs           - (optional) per-sample variant TSV files
 ##   vcfs                    - (optional) per-sample VCF/BCF files for variant annotation
 ##   vcf_indices             - (optional) per-sample .tbi / .csi indices; required when vcfs provided
@@ -59,6 +61,8 @@ workflow GeacCohort {
         Array[File]    input_bams
         Array[File]    input_bam_indices
         Array[String]? sample_ids          # optional; if provided must be same length as input_bams
+        Array[String]? subject_ids         # optional; if provided must be same length as input_bams
+        Array[String]? sample_types        # optional; if provided must be same length as input_bams
         Array[File]?   variants_tsvs       # optional; if provided must be same length as input_bams
         Array[File]?   vcfs                # optional; if provided must be same length as input_bams
         Array[File]?   vcf_indices         # optional; required when vcfs is provided
@@ -113,6 +117,12 @@ workflow GeacCohort {
         if (defined(sample_ids)) {
             String this_sample_id    = select_first([sample_ids])[i]
         }
+        if (defined(subject_ids)) {
+            String this_subject_id   = select_first([subject_ids])[i]
+        }
+        if (defined(sample_types)) {
+            String this_sample_type  = select_first([sample_types])[i]
+        }
         if (defined(variants_tsvs)) {
             File   this_variants_tsv = select_first([variants_tsvs])[i]
         }
@@ -154,6 +164,8 @@ workflow GeacCohort {
                 label3                = this_label3,
                 timepoint             = this_timepoint,
                 sample_id             = this_sample_id,
+                subject_id            = this_subject_id,
+                sample_type           = this_sample_type,
                 variants_tsv          = this_variants_tsv,
                 vcf                   = this_vcf,
                 vcf_index             = this_vcf_index,
@@ -188,6 +200,8 @@ workflow GeacCohort {
                     read_type             = this_read_type,
                     pipeline              = this_pipeline,
                     sample_id             = this_sample_id,
+                    subject_id            = this_subject_id,
+                    sample_type           = this_sample_type,
                     batch                 = this_batch,
                     label1                = this_label1,
                     label2                = this_label2,
@@ -241,6 +255,8 @@ task Collect {
         String pipeline
 
         String? sample_id
+        String? subject_id
+        String? sample_type
         String? batch
         String? label1
         String? label2
@@ -288,6 +304,8 @@ task Collect {
             --min-base-qual    ~{min_base_qual} \
             --min-map-qual     ~{min_map_qual} \
             ~{"--sample-id "        + sample_id} \
+            ~{"--subject-id "       + subject_id} \
+            ~{"--sample-type "      + sample_type} \
             ~{"--batch "            + batch} \
             ~{"--label1 "           + label1} \
             ~{"--label2 "           + label2} \
@@ -369,6 +387,8 @@ task Fragments {
         String pipeline
 
         String? sample_id
+        String? subject_id
+        String? sample_type
         String? batch
         String? label1
         String? label2
@@ -397,6 +417,8 @@ task Fragments {
             --pipeline         ~{pipeline} \
             --min-map-qual     ~{min_map_qual} \
             ~{"--sample-id "   + sample_id} \
+            ~{"--subject-id "  + subject_id} \
+            ~{"--sample-type " + sample_type} \
             ~{"--batch "       + batch} \
             ~{"--label1 "      + label1} \
             ~{"--label2 "      + label2} \

@@ -99,6 +99,8 @@ fn intervals_schema() -> Arc<Schema> {
         // Provenance
         Field::new("read_type", DataType::Utf8, false),
         Field::new("pipeline", DataType::Utf8, false),
+        Field::new("subject_id", DataType::Utf8, true),
+        Field::new("sample_type", DataType::Utf8, true),
         Field::new("batch", DataType::Utf8, true),
         Field::new("label1", DataType::Utf8, true),
         Field::new("label2", DataType::Utf8, true),
@@ -203,6 +205,18 @@ fn records_to_batch(records: &[IntervalRecord], schema: Arc<Schema>) -> Result<R
     let pipeline: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.pipeline.to_string()),
     ));
+    let subject_id: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.subject_id.as_deref())
+            .collect::<Vec<_>>(),
+    ));
+    let sample_type: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.sample_type.as_deref())
+            .collect::<Vec<_>>(),
+    ));
     let batch: ArrayRef = Arc::new(StringArray::from(
         records
             .iter()
@@ -265,6 +279,8 @@ fn records_to_batch(records: &[IntervalRecord], schema: Arc<Schema>) -> Result<R
             mean_insert_size,
             read_type,
             pipeline,
+            subject_id,
+            sample_type,
             batch,
             label1,
             label2,

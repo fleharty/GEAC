@@ -36,6 +36,8 @@ pub fn write_parquet(records: &[SampleMetricsRecord], output: &Path) -> Result<(
 fn sample_metrics_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("sample_id", DataType::Utf8, false),
+        Field::new("subject_id", DataType::Utf8, true),
+        Field::new("sample_type", DataType::Utf8, true),
         Field::new("batch", DataType::Utf8, true),
         Field::new("read_type", DataType::Utf8, false),
         Field::new("pipeline", DataType::Utf8, false),
@@ -53,6 +55,18 @@ fn sample_metrics_schema() -> Arc<Schema> {
 fn records_to_batch(records: &[SampleMetricsRecord], schema: Arc<Schema>) -> Result<RecordBatch> {
     let sample_id: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.sample_id.as_str()),
+    ));
+    let subject_id: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.subject_id.as_deref())
+            .collect::<Vec<_>>(),
+    ));
+    let sample_type: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.sample_type.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let batch: ArrayRef = Arc::new(StringArray::from(
         records
@@ -113,6 +127,8 @@ fn records_to_batch(records: &[SampleMetricsRecord], schema: Arc<Schema>) -> Res
         schema,
         vec![
             sample_id,
+            subject_id,
+            sample_type,
             batch,
             read_type,
             pipeline,

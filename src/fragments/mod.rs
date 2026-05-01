@@ -123,6 +123,8 @@ pub fn collect_fragments(args: &FragmentsArgs, writer: &mut FragmentsWriter) -> 
                 map_qual,
                 read_type: args.read_type,
                 pipeline: args.pipeline,
+                subject_id: args.subject_id.clone(),
+                sample_type: args.sample_type.clone(),
                 batch: args.batch.clone(),
                 label1: args.label1.clone(),
                 label2: args.label2.clone(),

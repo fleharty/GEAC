@@ -47,6 +47,8 @@ workflow GeacCoverage {
         Array[File]    input_bams
         Array[File]    input_bam_indices
         Array[String]? sample_ids    # optional; if provided must be same length as input_bams
+        Array[String]? subject_ids   # optional; per-sample biological subject identifier
+        Array[String]? sample_types  # optional; per-sample sample substrate type
         Array[String]? batches       # optional; per-sample batch/group label
         Array[String]? labels1       # optional; per-sample free-text label 1
         Array[String]? labels2       # optional; per-sample free-text label 2
@@ -86,6 +88,12 @@ workflow GeacCoverage {
         if (defined(sample_ids)) {
             String this_sample_id = select_first([sample_ids])[i]
         }
+        if (defined(subject_ids)) {
+            String this_subject_id = select_first([subject_ids])[i]
+        }
+        if (defined(sample_types)) {
+            String this_sample_type = select_first([sample_types])[i]
+        }
         if (defined(batches)) {
             String this_batch = select_first([batches])[i]
         }
@@ -113,6 +121,8 @@ workflow GeacCoverage {
                 read_type             = this_read_type,
                 pipeline              = this_pipeline,
                 sample_id             = this_sample_id,
+                subject_id            = this_subject_id,
+                sample_type           = this_sample_type,
                 batch                 = this_batch,
                 label1                = this_label1,
                 label2                = this_label2,
@@ -169,6 +179,8 @@ task Coverage {
         String pipeline
 
         String? sample_id
+        String? subject_id
+        String? sample_type
         String? batch
         String? label1
         String? label2
@@ -214,6 +226,8 @@ task Coverage {
             --bin-size         ~{bin_size} \
             ~{if fill_zeros then "--fill-zeros" else ""} \
             ~{"--sample-id "        + sample_id} \
+            ~{"--subject-id "       + subject_id} \
+            ~{"--sample-type "      + sample_type} \
             ~{"--batch "            + batch} \
             ~{"--label1 "           + label1} \
             ~{"--label2 "           + label2} \

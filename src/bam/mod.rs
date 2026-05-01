@@ -303,6 +303,8 @@ pub fn collect_alt_bases(
     let sample_metrics = if let (Some(ti), Some(acc)) = (target_intervals, sample_metrics_acc) {
         Some(acc.build(
             &sample_id,
+            args.subject_id.clone(),
+            args.sample_type.clone(),
             args.batch.clone(),
             args.read_type,
             args.pipeline,
@@ -389,6 +391,8 @@ impl SampleMetricsAccumulator {
     fn build(
         mut self,
         sample_id: &str,
+        subject_id: Option<String>,
+        sample_type: Option<String>,
         batch: Option<String>,
         read_type: crate::record::ReadType,
         pipeline: crate::record::Pipeline,
@@ -434,6 +438,8 @@ impl SampleMetricsAccumulator {
 
         SampleMetricsRecord {
             sample_id: sample_id.to_string(),
+            subject_id,
+            sample_type,
             batch,
             read_type,
             pipeline,
