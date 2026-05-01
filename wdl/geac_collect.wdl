@@ -40,7 +40,7 @@ version 1.0
 ##   include_supplementary - include supplementary alignments (FLAG 0x800); default false
 ##   reads_output         - also write per-read detail Parquet (default false)
 ##   input_checksum_sha256 - compute SHA-256 for the input BAM/CRAM and store it in output Parquet provenance columns (default false)
-##   threads              - CPU threads for geac (default 4)
+##   threads              - VM CPU count (default 1); controls Terra VM sizing only — geac does not accept a --threads flag and uses its own internal parallelism
 ##   docker_image         - geac Docker image, e.g. ghcr.io/fleharty/geac:0.3.7
 ##   memory_gb            - memory in GB (default 8)
 ##   disk_gb              - disk space in GB (default 100)
@@ -89,7 +89,7 @@ workflow GeacCollect {
         Boolean include_secondary     = false
         Boolean include_supplementary = false
         Boolean reads_output   = false
-        Boolean input_checksum_sha256 = true
+        Boolean input_checksum_sha256 = false
         Int     threads        = 1
 
         String docker_image
@@ -222,8 +222,7 @@ task Collect {
             ~{if defined(gnomad) then "--gnomad-af-field " + gnomad_af_field else ""} \
             ~{"--targets "          + targets} \
             ~{"--gene-annotations " + gene_annotations} \
-            ~{"--region "           + region} \
-            ~{"--region "           + region_bed} \
+            ~{if defined(region) then "--region " + select_first([region]) else if defined(region_bed) then "--region " + select_first([region_bed]) else ""} \
             --repeat-window ~{repeat_window} \
             ~{if include_duplicates    then "--include-duplicates"    else ""} \
             ~{if include_secondary     then "--include-secondary"     else ""} \

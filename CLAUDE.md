@@ -73,7 +73,8 @@ Releases are gated on Rust/pipeline changes, not Explorer UI changes. UI improve
 ship in whatever version is current. To cut a release:
 1. Bump `version` in `Cargo.toml`
 2. Bump `GEAC_VERSION` in `app/explorer/schema.py`
-3. Tag the commit (`git tag v0.X.Y && git push --tags`)
+3. Bump the version in `VERSION` (used by `scripts/build_docker.sh` and the `run_*.sh` explorer launch scripts to tag/pull Docker images)
+4. Tag the commit (`git tag v0.X.Y && git push --tags`)
 
 ## Sensitive data
 

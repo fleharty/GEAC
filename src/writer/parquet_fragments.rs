@@ -73,12 +73,12 @@ fn fragments_schema() -> Arc<Schema> {
         Field::new("frag_end", DataType::Int64, false),
         Field::new("midpoint", DataType::Int64, false),
         Field::new("insert_size", DataType::Int32, false),
-        Field::new("gc_content", DataType::Float32, true),
-        Field::new("end_motif_5p", DataType::Utf8, true),
-        Field::new("end_motif_3p", DataType::Utf8, true),
         Field::new("map_qual", DataType::Int32, false),
         Field::new("read_type", DataType::Utf8, false),
         Field::new("pipeline", DataType::Utf8, false),
+        Field::new("gc_content", DataType::Float32, true),
+        Field::new("end_motif_5p", DataType::Utf8, true),
+        Field::new("end_motif_3p", DataType::Utf8, true),
         Field::new("subject_id", DataType::Utf8, true),
         Field::new("sample_type", DataType::Utf8, true),
         Field::new("batch", DataType::Utf8, true),
@@ -175,8 +175,8 @@ fn records_to_batch(records: &[FragmentRecord], schema: Arc<Schema>) -> Result<R
     RecordBatch::try_new(
         schema,
         vec![
-            sample_id, chrom, frag_start, frag_end, midpoint, insert_size, gc_content,
-            end_motif_5p, end_motif_3p, map_qual, read_type, pipeline, subject_id, sample_type,
+            sample_id, chrom, frag_start, frag_end, midpoint, insert_size, map_qual, read_type,
+            pipeline, gc_content, end_motif_5p, end_motif_3p, subject_id, sample_type,
             batch, label1, label2, label3, timepoint,
         ],
     )
