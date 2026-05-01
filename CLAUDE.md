@@ -52,6 +52,9 @@ streamlit run app/geac_coverage_explorer.py
 | `wdl/geac_cohort.wdl` | Terra WDL for full cohort pipeline |
 | `Cargo.toml` | Rust version — bump here when releasing |
 | `CHALLENGES.md` | Log of non-obvious bugs and multi-attempt fixes |
+| `TODO.md` | Active backlog — only unchecked, actionable items |
+| `ROADMAP.md` | Release theme history and forward milestones |
+| `docs/DEVELOPMENT_LOG.md` | Archive of completed work and design notes |
 
 ## Rules of thumb
 
@@ -74,7 +77,24 @@ ship in whatever version is current. To cut a release:
 1. Bump `version` in `Cargo.toml`
 2. Bump `GEAC_VERSION` in `app/explorer/schema.py`
 3. Bump the version in `VERSION` (used by `scripts/build_docker.sh` and the `run_*.sh` explorer launch scripts to tag/pull Docker images)
-4. Tag the commit (`git tag v0.X.Y && git push --tags`)
+4. Update `ROADMAP.md` — mark the new version's row as released and update "Current state" if the theme has shifted
+5. Tag the commit (`git tag v0.X.Y && git push --tags`)
+
+### When completing a TODO item
+1. Remove the item from `TODO.md` (don't leave a `[x]` — `TODO.md` is for unchecked work only)
+2. If the work is non-trivial, has a useful design rationale, or the *why* is
+   non-obvious, append a short entry to `docs/DEVELOPMENT_LOG.md` under the
+   appropriate section. Trivial fixes don't need an entry — the commit message
+   covers them.
+3. If the item was a multi-step design (like the per-read detail table or coverage
+   work), move the design context block into `docs/DEVELOPMENT_LOG.md` rather than
+   discarding it.
+
+### When starting forward work
+1. Check `ROADMAP.md` to see which milestone the work belongs to.
+2. Check `docs/DEVELOPMENT_LOG.md` for prior context — many features have design
+   notes that explain constraints or rejected alternatives.
+3. Add an actionable entry to `TODO.md` under the appropriate area heading.
 
 ## Sensitive data
 
@@ -95,10 +115,21 @@ the following are present:
 When in doubt, **stop and ask** rather than committing. It is much easier to add
 something later than to scrub it from git history after the fact.
 
-## CHALLENGES.md
+## Project memory files
 
-Append non-obvious bugs and fixes that required multiple attempts to `CHALLENGES.md`
-as they occur. This prevents re-discovering the same pitfalls.
+Four append-mostly markdown files capture different slices of project history.
+Pick the right one when recording something:
+
+- **`CHALLENGES.md`** — non-obvious bugs and fixes that required multiple attempts.
+  Append as they occur to prevent re-discovering the same pitfalls.
+- **`docs/DEVELOPMENT_LOG.md`** — completed features, shipped design decisions,
+  and rejected alternatives ("won't do, because..."). Append when finishing a
+  non-trivial item from `TODO.md`.
+- **`TODO.md`** — only *unchecked*, actionable backlog items. When an item is
+  done, move its useful context to `docs/DEVELOPMENT_LOG.md` and remove it from
+  `TODO.md`.
+- **`ROADMAP.md`** — release theme history and forward milestones. Update when
+  cutting a release or when the next-version theme changes.
 
 ## Branch workflow
 

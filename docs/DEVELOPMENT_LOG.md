@@ -1,0 +1,729 @@
+# GEAC — Development Log
+
+Historical record of completed work and design notes that shaped the project.
+The active backlog lives in [TODO.md](../TODO.md); the milestone roadmap lives in
+[ROADMAP.md](../ROADMAP.md). Non-obvious bugs and multi-attempt fixes are tracked
+separately in [CHALLENGES.md](../CHALLENGES.md).
+
+This file is append-mostly. New entries go at the bottom of their section. The goal
+is to preserve the *why* behind decisions that aren't obvious from the code.
+
+---
+
+## Original "Coverage complete" plan (v0.4.0)
+
+Captured 2026-04-01. All three gating items shipped in v0.4.0.
+
+1. **Gene annotation extensions** — `feature_type` and `exon_number` added to
+   GTF/GFF3/genePred lookup; propagated through coverage records and Parquet schema.
+2. **BEDGraph annotation tracks** — `src/track.rs` with `AnnotationTrack`/`TrackSet`;
+   binary-search lookup; chr-prefix bridging; `--track NAME:FILE` repeatable flag;
+   dynamic Arrow schema columns in coverage Parquet.
+3. **Read-type comparison view** — `tab_read_type` in Explorer: locus concordance
+   tiles + stacked bar, VAF density overlay, VAF correlation scatter, strand balance
+   density, SBS96 side-by-side, unique-loci table.
+
+---
+
+## Rust / CLI — completed
+
+- `geac qc` subcommand — per-sample summary of error rates by substitution type,
+  strand bias metrics, and overlap concordance.
+- `geac cohort` subcommand — per-locus artifact frequencies across samples (flag
+  positions seen in N% of samples); outputs TSV or Parquet.
+- On-target annotation — `--targets` BED/Picard interval list flag; records
+  `on_target bool?` column in Parquet.
+- Gene annotation — `--gene-annotations` flag; accepts GFF3, GTF, or UCSC genePred
+  (.txt/.txt.gz); records `gene string?` column.
+- Locus repetitiveness metrics — `homopolymer_len`, `str_period`, `str_len` columns;
+  `--repeat-window` flag (default 10 bp).
+- Trinucleotide context — `trinuc_context` column computed from reference at each
+  SNV locus.
+- Variant annotation — `--vcf` and `--variants-tsv` flags; annotates `variant_called`
+  / `variant_filter` columns.
+- Fragment overlap metrics — `overlap_alt_agree`, `overlap_alt_disagree`,
+  `overlap_ref_agree` columns for read-pair concordance.
+- Integration tests — synthetic-BAM end-to-end suite under `tests/integration.rs`.
+- Audit `alt_count` double-counting — resolved: `total_depth`, `alt_count`, and
+  `ref_count` are now fragment-level counts. Each overlapping pair contributes 1 to
+  `total_depth` regardless of how many reads cover the position. See `tally_pileup`
+  doc comment for full classification rules.
+- Fix N-base handling in overlap tally — in `tally_pileup` (`src/bam/mod.rs`), if
+  one read of an overlapping pair has an `N` at the position, `overlap_alt_disagree`
+  is incorrectly incremented for the other read's alt base. An `N` is uninformative
+  and should not count as a disagreement. Fix: skip the overlap agreement/disagreement
+  logic when either base is `N`, and exclude `N` bases from `total_depth` and alt
+  tallies entirely.
+- Re-examine N-base handling before v0.3.0 — resolved as part of the fragment-level
+  depth overhaul. See `tally_pileup` doc comment for the full classification table
+  including N cases.
+
+---
+
+## Per-read detail table (two-table design) — shipped v0.3.2
+
+**Motivation:** Read-end proximity and family size are inherently per-read properties.
+Aggregating them into the locus table (e.g. `mean_dist_from_end`) loses distributional
+information needed for principled artifact filtering. The most correct design stores
+per-read detail in a second table linked to the existing locus table.
+
+### Design
+
+Two output files per sample from `geac collect`:
+- `{sample}.parquet` — existing locus-level table (one row per alt locus per sample); unchanged
+- `{sample}.reads.parquet` — new per-read table (one row per alt-supporting read); columns:
+  - `sample_id`, `chrom`, `pos`, `alt_allele` — foreign key back to locus table
+  - `dist_from_read_start` — 0-based position of the alt base within the read
+  - `dist_from_read_end` — distance from the alt base to the 3' end of the read
+  - `read_length` — total read length after soft-clipping
+  - `ab_count` — top-strand family size (fgbio `cD` tag or equivalent)
+  - `ba_count` — bottom-strand family size
+  - `family_size` — ab_count + ba_count
+  - `base_qual` — base quality at the alt position
+  - `map_qual` — mapping quality of the read
+  - `insert_size` — SAM TLEN (insert size); null when 0 (unpaired / mate unmapped)
+
+### Pros
+- Enables principled per-read filtering (e.g. "alt reads where family_size >= 3 AND dist_from_read_end > 10")
+- Joint filters are natural SQL: no need to pre-compute every possible aggregate
+- Supports future analyses not yet anticipated
+- Locus table remains unchanged — no migration of existing Parquet files
+- DuckDB handles multi-table joins efficiently with Parquet pushdown
+- Per-read drill-down in Explorer at a specific locus becomes very rich
+- Only alt-supporting reads are stored, so table is much smaller than total read count
+
+### Cons
+- `geac collect` must write two files instead of one — more complex output handling
+- WDL workflows need to propagate and merge both file types
+- `geac merge` needs a second merge step for the reads table
+- Explorer must be aware of the optional reads table (graceful fallback if absent)
+- Larger total storage footprint per sample
+- Adds implementation complexity to the Rust BAM processing loop
+
+### Implementation steps (all completed)
+- Step 1: Define `AltRead` struct in `src/record.rs` with the columns listed above.
+- Step 2: Populate `AltRead` records during BAM pileup in `src/bam/mod.rs`; parse
+  fgbio/DRAGEN family size tags (`cD`/`cE` or `RX`/`MI`) per pipeline.
+- Step 3: Add `src/writer/parquet_reads.rs` — write `AltRead` records to
+  `{stem}.reads.parquet`.
+- Step 4: Update `geac collect` CLI to emit both files; add `--reads-output` flag
+  (optional; if omitted, reads table is not written).
+- Step 5: Update `geac merge` to accept and merge reads Parquets into a second
+  DuckDB table (`alt_reads`) alongside `alt_bases`.
+- Step 6: Update WDL workflows to handle the optional reads Parquet output from
+  `Collect` and pass it to `Merge`.
+- Step 7: Explorer — in the position drill-down, JOIN `alt_reads` on
+  `(sample_id, chrom, pos, alt_allele)` to show per-read detail (dist from end,
+  family size, base qual) when reads table is present.
+- Step 8: Explorer — sidebar filters for `family_size`, `dist_from_read_end`, and
+  `map_qual` with include/exclude toggles; `alt_count` and `vaf` re-aggregated from
+  reads when filters are active.
+- `alt_reads` schema v2: `is_read1` + `cycle` rename — bundled two breaking schema
+  changes into a single re-collect:
+  - **Add `is_read1`** — `is_first_in_pair` (BAM flag 0x40) is tracked internally
+    during pileup but never written to `AltRead`. Adding it as a boolean column
+    enables R1/R2-stratified artefact analysis (e.g. R2-biased substitution patterns).
+  - **Rename `dist_from_read_start` → `cycle`** (1-based: `qpos + 1`) and **drop
+    `dist_from_read_end`** (derivable as `read_length - cycle`). Unifies the column
+    name with the "Cycle number" label used in the Explorer sidebar and Reads tab.
+  - **Invert sidebar filter direction**: change from "min dist_from_read_end" to
+    "max cycle" slider (same artefact-rejection intent; cycle > threshold excludes
+    end-of-read reads).
+  - Changes spanned: `AltRead` struct (`src/record.rs`), Parquet schema
+    (`src/writer/parquet_reads.rs`), both collection sites in `src/bam/mod.rs`
+    (SNV and indel paths), and Explorer (`app/geac_explorer.py`) filter +
+    visualization.
+  - Required re-running `geac collect --reads-output` — shipped in v0.3.9.
+
+---
+
+## Intra-sample comparison (read-type) — shipped v0.4.0
+
+Read-type comparison view in Explorer — locus concordance, VAF density overlay,
+VAF correlation scatter, strand balance density, SBS96 side-by-side, unique-loci
+table. DuckDB only; gated on ≥2 distinct `read_type` values.
+
+---
+
+## Per-read filter validation
+
+- **Terra cohort test with reads output** — validated on Terra using `geac:0.3.2`
+  with `reads_output = true`; both `.locus.parquet` and `.reads.parquet` outputs
+  confirmed per sample; cohort DuckDB contains `alt_bases` + `alt_reads` tables;
+  per-read filters work in Explorer.
+
+---
+
+## Reads tab (Explorer) — completed plots
+
+Requires `alt_reads` table (data collected with `--reads-output`). Tab is hidden
+when the table is absent. All plots are gated on the current locus-level filters
+so they reflect only the records visible in the main table.
+
+- **Family size histogram** — distribution of `family_size` across all alt-supporting
+  reads for the current filtered locus set; overlay per-sample curves or show cohort
+  aggregate. A true variant should have a family size distribution similar to
+  background depth; artefacts are enriched in singletons (family_size = 1).
+- **Read position bias histogram** — distribution of `dist_from_read_end` for
+  alt-supporting reads; a spike near 0 is a red flag for alignment artefacts or
+  damaged bases at read ends.
+- **Base qual vs dist from read end scatter** — one point per alt read; low base
+  qual + near read end = likely artefact. Color by family_size or sample.
+- **Family size vs VAF scatter** — one point per locus; x = mean family_size of alt
+  reads, y = VAF. True low-VAF variants should have reasonable family sizes;
+  artefacts at low VAF tend to cluster at low family size.
+- **Mapping quality distribution** — histogram of `map_qual` for alt reads, split
+  by repetitiveness (homopolymer ≥ 5 or STR length ≥ 6 vs non-repetitive);
+  characterises which artefact classes are driven by mapping uncertainty.
+- **Cohort artefact family size comparison** — for loci seen in many samples vs
+  few samples, compare mean family size of alt reads via boxplot; cohort artefacts
+  (sequencing noise) should show lower mean family size than recurrent true
+  variants.
+- **N-rich supporting loci** — added "N-rich supporting loci" section to the Reads
+  tab (row 3c, after N-asymmetry). Enabled by checkbox; computes per-locus metrics
+  via GROUP BY on `alt_reads`: `frac_reads_with_any_n`, `frac_reads_with_trailing_n`,
+  `mean_trailing_n_run_len`, `mean_total_n_frac`. Threshold slider filters to loci
+  above a minimum N-read fraction. Table sorted descending by
+  `frac_reads_with_any_n`; IGV buttons for the full set. Cached on filter +
+  threshold strings.
+
+---
+
+## Per-read filter fixes (from audit) — completed
+
+Audit document: [`docs/per-read-filter-audit.md`](per-read-filter-audit.md).
+
+**Bugs:**
+- Re-aggregation COALESCE gives original count instead of 0 (bug #1) — in
+  re-aggregation mode (`recompute_vaf=True`), a SNV locus where ALL reads fail the
+  filter has no row in the `ar_agg` subquery; `COALESCE(NULL, ab.alt_count)` falls
+  back to the original count instead of 0. Fix: use
+  `COUNT(*) FILTER (WHERE ...)` and `COUNT(*) AS has_reads` in a single pass so the
+  code can distinguish "no reads in alt_reads" (indels → preserve original count)
+  from "reads exist but none pass" (SNVs → show 0).
+- Warning banner text is wrong in locus-inclusion mode (bug #2) — the warning
+  always said "alt_count and VAF are re-aggregated from reads passing the filter"
+  regardless of whether `recompute_vaf` is True or False. In the default
+  locus-inclusion mode they are not re-aggregated.
+- Insert size filter missing from warning banner (bug #3) — `_active_parts` in
+  the warning construction omitted insert size; activating only the insert size
+  filter produced "Per-read filters active ()".
+- Family-size stratified spectrum bypasses per-read filters (bug #4) — the
+  `locus_fs` CTE in the family-size stratified SBS96 spectrum queried `alt_reads`
+  without `_reads_where`, so the singleton/multi classification ignored the active
+  per-read filters.
+
+**Polish / labelling:**
+- "Cycle number" label mismatch (semantic #6) — bundled into the `alt_reads`
+  schema v2 item above (`is_read1` + `cycle` rename). Renaming
+  `dist_from_read_start` → `cycle` and dropping `dist_from_read_end` resolved this
+  at the schema level.
+- Insert size filter: add exclude mode and document NULL behaviour (pitfall #11) —
+  `insert_size BETWEEN x AND y` silently dropped all unpaired reads
+  (`insert_size IS NULL`). Added an exclude-mode toggle (consistent with family
+  size / MAPQ) and a sidebar caption noting that activating the filter excludes
+  unpaired reads.
+
+**Efficiency:**
+- Cache slider bound MAX queries (efficiency #8) — `_reads_maxes` was computed on
+  every Streamlit rerun from a full `alt_reads` scan. Gated behind a session_state
+  check so it only runs once per session (the database is read-only).
+
+---
+
+## Explorer (Streamlit) — completed features
+
+- IGV session download — manifest-driven BAM tracks + BED positions zip, capped at
+  5 samples.
+- IGV sample picker — verified: BED file correctly contains only positions from
+  selected samples. The SQL query always includes a `sample_id IN (...)` clause
+  before fetching `igv_df`; `make_bed` and `make_igv_session` both operate on that
+  already-filtered dataframe.
+- BED file deletion-locus fix — deletion loci now span the full deleted region
+  `[pos, pos+del_len)`.
+- Position-level drill-down — click a locus and see all samples/alleles at that
+  position.
+- Export filtered data to CSV — handled by Streamlit's built-in dataframe toolbar
+  download button.
+- On-target filter — sidebar selectbox "Target bases": All / On target / Off target.
+- Gene filter — sidebar text input with partial match (ILIKE); depends on `gene`
+  column being populated.
+- Repeat filter — sidebar range sliders for `homopolymer_len` and `str_len`.
+- Strand bias plot — dashed y=x diagonal + 95% binomial CI band; gene name in
+  hover tooltip.
+- Strand bias click drill-down — click/shift-click to select points; shows table
+  of selected loci and IGV session with correct BAMs and BED.
+- Strand bias selection: confirmed `toggle="event.shiftKey"` works in the current
+  Altair/Vega-Lite version; the only blocker was a `pos_display` KeyError in the
+  drill-down query (fixed).
+- Strand bias selection: cast `pos` to int before building SQL WHERE clauses
+  (Altair returned float, causing silent failures).
+- SNV trinucleotide spectrum (SBS96) — 3×2 grid of per-mutation-type panels with
+  shared y-axis; click drill-down.
+- Cohort comparison view (5 steps complete):
+  - Per-sample summary table — one row per sample_id with n_snv, n_insertion,
+    n_deletion, mean_depth, mean_vaf, strand_balance, overlap_concordance; clicking
+    a row filters all other tabs to that sample.
+  - VAF distribution overlay — all samples on one plot as density curves, colored
+    by sample; highlights shifted VAF distributions.
+  - Strand balance scatter — one dot per sample (x = mean strand balance, y = mean
+    VAF); outliers immediately visible.
+  - SNV count bar chart — n_snv per sample, stacked/colored by SBS6 substitution
+    type breakdown.
+  - SBS96 heatmap — samples as rows, 96 trinucleotide contexts as columns,
+    color = normalized count; reveals samples with unusual mutational profiles.
+- NMF decomposition — fit the per-sample SBS96 spectrum against COSMIC reference
+  signatures using NNLS; show the largest contributing signatures and their
+  weights.
+- Save/load filter state — JSON export/import of the full sidebar filter state,
+  covering all locus-level and per-read filters.
+- Pipeline comparison tab (DuckDB only) (5 steps complete) — side-by-side analysis
+  of the same sample processed through two different pipelines (e.g. fgbio vs
+  dragen). Workflow: run `geac collect` twice with different `--pipeline` and the
+  same `--sample-id`, then `geac merge` both Parquets into one DuckDB. Steps:
+  - Locus concordance summary (counts unique-A / unique-B / shared, by variant type).
+  - VAF correlation scatter with Pearson r.
+  - Unique-to-pipeline loci table.
+  - SBS96 spectrum side-by-side.
+  - Depth comparison scatter (`total_depth` per locus, A vs B).
+- Bait-bias analysis — replaced second-BAM-pass `--emit-ref-sites` / `ref_bases`
+  approach with gnomAD ~50% AF het-site depth-retention analysis using
+  `sample_metrics.median_target_depth_all` as per-sample baseline; IQR boxplot
+  comparing SNVs, insertions, and deletions; no second pass required.
+
+---
+
+## Coverage Analysis — design and shipped work (v0.4.0)
+
+**Motivation:** `geac collect` only records positions where an alt base was observed.
+`geac coverage` fills the denominator — depth at every covered position — enabling
+true per-base error rates and identification of systematically undercovered sites
+across a cohort.
+
+Coverage has three confounders that must be measured, not just controlled for:
+
+1. **Mappability** — a region may appear undercovered because reads cannot be
+   placed uniquely. Without a mappability signal, low coverage and multi-mapping
+   are indistinguishable from genuine dropout (GC bias, FFPE degradation, probe
+   failure).
+2. **Duplicates** — PCR duplicates inflate raw read counts but represent the same
+   original molecule. Per-region duplication rates reveal library complexity
+   problems and can differ substantially between GC-rich and GC-poor targets.
+3. **Fragment overlap** — when paired reads are longer than the insert, both reads
+   cover the same bases but provide only one independent observation. High overlap
+   inflates apparent depth while providing no additional evidence. The fraction of
+   overlapping fragments is itself a useful QC signal (short inserts relative to
+   read length).
+
+### CLI
+
+```
+geac coverage \
+  --input          sample.bam \
+  --reference      ref.fa \
+  --output         sample.coverage.parquet \
+  [--targets       targets.bed]                  # BED or Picard interval list
+  [--region        chr1:1-50000]                 # alternative to --targets for a single region
+  [--track         NAME:file.bedgraph]           # pre-computed annotation track (repeatable)
+  [--gene-annotations genes.gtf]                 # GTF or GFF3; annotates gene, feature_type, exon_number
+  [--sample-id     override]
+  [--read-type     raw|simplex|duplex]
+  [--pipeline      fgbio|dragen|raw]
+  [--min-map-qual  20]
+  [--min-base-qual 20]                           # threshold for frac_low_bq; default 20
+  [--gc-window     100]                          # bp window for GC content (centred on position)
+  [--min-depth     0]                            # suppress positions with total_depth below this
+  [--bin-size      1]                            # aggregate N bp into one row (1 = per-position)
+  [--summarize-intervals]                        # emit one row per target interval instead of per position
+  [--threads       1]
+```
+
+`--targets` is strongly recommended — it bounds output size and ensures zero-depth
+positions are still recorded (complete dropout is important to capture). Without
+`--targets` or `--region`, the whole BAM is scanned; fine for targeted panels,
+impractical for WGS without `--bin-size`.
+
+`--track` can be repeated for multiple annotation tracks (e.g. mappability at two
+k-mer lengths, a CpG density track, a GC content track). Each `NAME` becomes a
+column in the output Parquet. Common sources: ENCODE GEM tracks (150-mer), genmap,
+Umap, custom BEDGraph from any tool.
+
+### Output schema (`CoverageRecord`)
+
+One row per position (or per bin). Positions are 0-based.
+
+```
+sample_id:        String
+chrom:            String
+pos:              i64          # 0-based start
+end:              i64          # pos+1 normally; pos+bin_size when --bin-size > 1
+
+# ── Fragment depth ────────────────────────────────────────────────────────────
+# "Fragment depth" counts unique fragments, not raw reads:
+#   - Duplicate reads (BAM flag 0x400) are excluded
+#   - Overlapping read pairs (same qname, both covering this position) count as 1
+
+total_depth:      i32          # unique fragments passing --min-map-qual
+fwd_depth:        i32          # forward-strand fragments
+rev_depth:        i32          # reverse-strand fragments
+
+# ── Duplicate metrics ─────────────────────────────────────────────────────────
+# Computed over all reads at this position before any quality filter.
+# High frac_dup indicates PCR over-amplification or poor library complexity at this locus.
+
+raw_read_depth:   i32          # all reads including duplicates and low-MAPQ
+frac_dup:         f32          # fraction of raw reads marked BAM_FDUP (0x400)
+
+# ── Overlap metrics ───────────────────────────────────────────────────────────
+# Computed over non-duplicate reads passing --min-map-qual.
+# High frac_overlap means inserts are shorter than 2× read length; depth is inflated.
+# overlap_depth counts fragment pairs (not reads), so it is always <= total_depth / 2.
+
+overlap_depth:    i32          # number of fragment pairs where both reads cover this position
+frac_overlap:     f32          # overlap_depth / fragment_count at this position
+
+# ── BAM-derived mappability signals ──────────────────────────────────────────
+# Computed over all non-duplicate reads before the --min-map-qual filter.
+# Costs nothing since we are already iterating reads for depth counting.
+
+mean_mapq:        f32          # mean MAPQ of all (non-dup) reads at this position
+frac_mapq0:       f32          # fraction with MAPQ = 0 (definitive multi-mappers)
+frac_low_mapq:    f32          # fraction with MAPQ < --min-map-qual
+
+# ── Base quality signals ──────────────────────────────────────────────────────
+# Computed over bases at this position that pass the --min-map-qual filter.
+# Systematically low base quality at a site reduces effective depth just as low
+# read depth does — a site with total_depth=50 but frac_low_bq=0.8 has only ~10
+# usable bases. min/max capture the spread; a wide range is a different problem
+# from uniformly low quality.
+# --min-base-qual defaults to 20 (same default as geac collect).
+
+mean_base_qual:   f32          # mean base quality across all bases at this position
+min_base_qual:    u8           # lowest base quality observed (Phred 0–93)
+max_base_qual:    u8           # highest base quality observed
+frac_low_bq:      f32          # fraction of bases below --min-base-qual (default 20)
+
+# ── Soft-clipping signal ──────────────────────────────────────────────────────
+# Computed over non-duplicate reads passing --min-map-qual.
+# Heavy soft-clipping at a position indicates reads that partially align — a sign
+# of structural variation, probe edge effects, or adapter contamination.
+# frac_soft_clipped is the fraction of reads where the query position falls within
+# a soft-clipped region of the CIGAR (i.e. the base is present in the read but
+# not contributing to the alignment at this reference position).
+
+frac_soft_clipped: f32        # fraction of reads soft-clipped at this position
+
+# ── Insert size distribution ──────────────────────────────────────────────────
+# Computed from properly paired, non-duplicate reads passing --min-map-qual.
+# Insert size = TLEN (template length) from the BAM record; only meaningful for
+# paired-end reads where both mates are mapped (FLAG: properly paired, 0x2).
+# Short inserts relative to read length explain high frac_overlap and reduced
+# effective depth. High variance indicates a heterogeneous library.
+# Unpaired or single-end reads contribute 0 usable insert size observations;
+# n_insert_size_obs records how many paired reads contributed to these stats.
+
+mean_insert_size:     f32     # mean insert size across paired reads at this position
+median_insert_size:   f32     # median insert size (requires buffering; see note below)
+min_insert_size:      i32     # smallest insert size observed
+max_insert_size:      i32     # largest insert size observed
+n_insert_size_obs:    i32     # number of properly paired reads contributing
+
+# Note on median_insert_size: computing a true median requires storing all insert
+# sizes seen at each position, which is memory-intensive for deep coverage. Use
+# reservoir sampling (e.g. keep up to 1000 values) or an approximate algorithm
+# (e.g. t-digest) to keep memory bounded. The median is more robust to outliers
+# (e.g. chimeric read pairs) than the mean.
+
+# ── GC content ────────────────────────────────────────────────────────────────
+# Computed directly from the reference FASTA (already required as --reference).
+# No external track needed. Window size is configurable via --gc-window (default:
+# 100 bp centred on the position). GC content is the primary explainer of
+# amplification/capture dropout that is independent of mappability.
+
+gc_content:       f32         # fraction of G+C bases in --gc-window around this position
+
+# ── Pre-computed annotation tracks ───────────────────────────────────────────
+# One column per --track NAME:file entry. Column name = NAME, type = Float32, nullable.
+# Example: --track gem150:gem_150mer.bedgraph  →  column "gem150"
+#          --track umap50:umap_k50.bedgraph    →  column "umap50"
+# Requires dynamic Arrow schema construction at runtime (not a fixed Rust struct).
+
+<track_name>:     Option<f32>  # 0.0–1.0 score from the named BEDGraph track
+
+# ── Gene / feature annotation ─────────────────────────────────────────────────
+# Populated when --gene-annotations is provided.
+# feature_type and exon_number extend the existing GeneAnnotations infrastructure.
+
+gene:             Option<String>   # gene name
+feature_type:     Option<String>   # "exon", "intron", "5UTR", "3UTR", "CDS"
+exon_number:      Option<i32>      # exon number within the transcript (from GTF/GFF3 attribute)
+
+# ── Optional target annotation ────────────────────────────────────────────────
+on_target:        Option<bool>     # populated when --targets is given
+
+# ── Provenance ────────────────────────────────────────────────────────────────
+read_type:        ReadType
+pipeline:         Pipeline
+```
+
+### Read counting semantics
+
+The three-layer decomposition at each position:
+
+```
+All reads
+  └─ subtract BAM_FDUP reads       → raw_read_depth, frac_dup
+       └─ subtract low-MAPQ reads  → mean_mapq, frac_mapq0, frac_low_mapq
+            └─ collapse same-qname pairs as 1 fragment  → total_depth, overlap_depth, frac_overlap
+```
+
+This means `total_depth` is directly comparable to the `total_depth` in `alt_bases`
+from `geac collect`, which uses the same duplicate-exclusion and overlap-collapsing
+logic.
+
+### Mappability diagnostic table
+
+| `frac_mapq0` | track score | `total_depth` | Interpretation |
+|---|---|---|---|
+| High | Low | Low | Classic multi-mapping — expected, filter confidently |
+| High | High | Low | Unexpected low MAPQ — SV, misassembly, or aligner artifact |
+| Low | Low | Low | Genuine dropout (GC bias, FFPE, probe failure) |
+| Low | Low | Normal | Mappability track k-mer length may not match read length |
+
+### Per-interval summary mode (`--summarize-intervals`)
+
+When `--summarize-intervals` is given alongside `--targets`, `geac coverage` emits
+one row per target interval instead of one row per position. This is the natural
+output format for the customer-facing Coverage Explorer — customers want to know
+"exon 3 of BRCA1: mean depth 45x, 94% at ≥30x", not a table of 200 individual
+positions.
+
+The per-interval schema adds aggregated columns and drops the position-level ones:
+
+```
+sample_id:           String
+chrom:               String
+start:               i64          # 0-based interval start (from targets file)
+end:                 i64          # 0-based interval end
+interval_name:       Option<String>  # name field from BED col 4 / Picard interval name
+gene:                Option<String>
+feature_type:        Option<String>
+exon_number:         Option<i32>
+
+# Depth summary across all positions in the interval
+mean_depth:          f32
+median_depth:        f32
+min_depth:           i32
+max_depth:           i32
+frac_at_1x:          f32          # fraction of bases with total_depth >= 1
+frac_at_10x:         f32
+frac_at_20x:         f32
+frac_at_30x:         f32
+frac_at_50x:         f32
+frac_at_100x:        f32
+n_bases:             i32          # total number of positions in the interval
+
+# Aggregated signals (means across positions in the interval)
+mean_gc_content:     f32
+mean_mapq:           f32
+mean_frac_mapq0:     f32
+mean_frac_dup:       f32
+mean_frac_overlap:   f32
+mean_frac_soft_clipped: f32
+mean_base_qual:      f32
+mean_insert_size:    f32
+
+read_type:           ReadType
+pipeline:            Pipeline
+```
+
+The depth threshold columns (`frac_at_Nx`) use fixed thresholds rather than a
+configurable value so that interval summaries from different runs are directly
+comparable. The customer explorer can then filter by whichever threshold is
+meaningful for that panel.
+
+Per-interval and per-position outputs are written to separate Parquet files:
+`{sample}.coverage.parquet` (per-position) and `{sample}.coverage.intervals.parquet`
+(per-interval). `geac merge` inserts both into the DuckDB as `coverage` and
+`coverage_intervals` tables respectively.
+
+### Pre-computed annotation tracks (`--track`)
+
+**Format**: BEDGraph (chrom, start, end, score). Covers ENCODE GEM, genmap, Umap,
+and any custom track. bigWig support can be added later if needed.
+
+**Multiple tracks** are useful in practice: e.g. mappability at the experiment's
+read length alongside a GC-content track lets you disentangle GC bias from
+repeat-element dropout.
+
+**Implementation**: each track is loaded into a sorted `Vec<(i64, i64, f32)>` per
+chromosome. Lookup at each pileup position uses binary search (O(log n)). For
+targeted panels this fits comfortably in memory. For WGS without `--targets`, a
+streaming approach (advance through the sorted track in lock-step with the sorted
+pileup) avoids loading the full ~2 GB track.
+
+Because the number of tracks is not known until runtime, `CoverageRecord` cannot
+be a plain Rust struct with fixed fields. Instead, the Arrow `Schema` and
+`RecordBatch` are constructed dynamically in `src/writer/parquet_coverage.rs`
+based on the track names provided.
+
+### Gene annotation extensions
+
+`--gene-annotations` reuses `src/gene_annotations.rs` but extends it to also store
+`feature_type` (exon / intron / UTR / CDS) and `exon_number` from the GTF/GFF3
+attribute field. This enables Explorer queries like:
+
+```sql
+-- Coverage of BRCA1 exon 1 across all samples
+SELECT sample_id, pos, total_depth, frac_mapq0, gem150
+FROM coverage
+WHERE gene = 'BRCA1' AND feature_type = 'exon' AND exon_number = 1
+ORDER BY pos;
+```
+
+### DuckDB integration
+
+`geac coverage` outputs `{sample}.coverage.parquet`. `geac merge` detects these
+by schema (presence of `frac_dup`; absence of `alt_allele`) and inserts into a
+`coverage` table in the cohort DuckDB alongside `alt_bases`.
+
+```sql
+-- Systematically undercovered positions across the cohort
+SELECT chrom, pos, gene, exon_number,
+       COUNT(DISTINCT sample_id)  AS n_samples,
+       AVG(total_depth)           AS mean_depth,
+       AVG(frac_dup)              AS mean_frac_dup,
+       AVG(frac_mapq0)            AS mean_frac_mapq0,
+       AVG(gem150)                AS mean_mappability   -- if track was provided
+FROM coverage
+GROUP BY chrom, pos, gene, exon_number
+HAVING AVG(total_depth) < 20
+ORDER BY mean_depth;
+
+-- Alt bases in low-mappability, low-coverage context
+SELECT a.*, c.mean_depth, c.frac_mapq0, c.gem150
+FROM alt_bases a
+JOIN (
+    SELECT chrom, pos, AVG(total_depth) AS mean_depth,
+           AVG(frac_mapq0) AS frac_mapq0, AVG(gem150) AS gem150
+    FROM coverage GROUP BY chrom, pos
+) c ON a.chrom = c.chrom AND a.pos = c.pos
+WHERE c.frac_mapq0 > 0.3;
+```
+
+### Implementation steps (Steps 1–10 completed; Step 11 in TODO.md)
+
+- Step 1: Extend `src/gene_annotations.rs` — add `feature_type` and `exon_number`
+  to the annotation lookup result; update GTF/GFF3 parser to extract the
+  `exon_number` attribute.
+- Step 2: Add `src/track.rs` — `AnnotationTrack` struct; BEDGraph loader;
+  binary-search lookup; `TrackSet` holding multiple named tracks; chr-prefix
+  bridging; `--track NAME:FILE` repeatable flag in `CoverageArgs`; dynamic Arrow
+  schema columns in `CoverageWriter`.
+- Step 3: Add `CoverageArgs` to `src/cli.rs`; add `Command::Coverage` variant.
+- Step 4: Add `src/coverage/mod.rs` — pileup loop with three-layer read counting
+  (raw → de-dup → de-overlap → total_depth); all BAM-derived signals (mapq, base
+  qual, insert size, GC content, overlap, dup fraction); zero-depth fill-in for
+  target positions; `compute_gc_content` from reference cache.
+- Step 5: Add per-interval aggregation pass in `src/coverage/mod.rs` — after the
+  per-position pass, group positions by target interval and compute the interval
+  summary schema; emit as a separate `Vec<IntervalRecord>`.
+- Step 6: Add `src/writer/parquet_coverage.rs` — fixed Arrow schema matching
+  `CoverageRecord`; Float32 columns for fractional signals.
+- Step 7: Update `src/main.rs` to handle `Command::Coverage`.
+- Step 8: Update `src/merge.rs` — detect `.coverage.parquet` by suffix; insert
+  into `coverage` DuckDB table; index on `(sample_id, chrom, pos)`.
+- Step 9: Add `wdl/geac_coverage.wdl` — scatter `geac coverage` over a cohort,
+  merge all `.coverage.parquet` files into a `coverage` table in the cohort
+  DuckDB.
+- Step 10: Integration tests — 9 new tests covering all core coverage signals:
+  `coverage_basic_depth`, `coverage_frac_dup_excludes_duplicates`,
+  `coverage_mapq0_tracked_and_excluded`, `coverage_gc_content_computed_from_reference`,
+  `coverage_gc_content_zero_for_all_a_reference`,
+  `coverage_targets_emits_zero_depth_positions`,
+  `coverage_no_targets_skips_zero_depth`,
+  `coverage_insert_size_from_paired_reads`,
+  `merge_routes_coverage_parquet_to_coverage_table` (all passing).
+
+---
+
+## Customer-facing Coverage Explorer (`app/geac_coverage_explorer.py`) — done
+
+- App scaffold: file-path text input, `DataSource.open_coverage()`, version-mismatch warning.
+- Sidebar filters: samples, chromosome, gene partial-match, on-target.
+- Sidebar IGV integration: manifest path input, `load_manifest`, GCS OAuth token.
+- Sidebar Advanced expander: `geac_metadata` and `geac_inputs` display.
+- Tab 1 — Summary: per-sample depth table, mean-depth bar chart, QC-fractions grouped bar.
+- Tab 2 — Depth distribution: per-sample depth histogram, fraction-at-threshold table.
+- Tab 3 — GC bias: mean depth vs GC bin (5% bins) per sample; frac_mapq0 overlay expander.
+- Tab 4 — Low coverage: undercovered positions table (depth + fraction-of-samples sliders),
+  gene bar chart with click-to-drill-down, IGV locus link on row select.
+- Tab 5 — IGV: embedded IGV.js viewer; BAM/CRAM tracks from manifest; per-track height slider; GCS OAuth.
+- Tab 6 — Intervals (DuckDB + coverage_intervals only):
+  - Undercovered intervals table (depth threshold + fraction-of-samples sliders).
+  - GC bias scatter: mean_gc_content vs mean_depth per interval, colored by mean_frac_mapq0.
+  - Per-exon heatmap: genes × intervals, color = frac_at_30x; sort and top-N controls.
+- `geac_config.py`: TOML config loader for pre-populating paths (data, manifest, genome, etc.).
+- `geac_metadata` and `geac_inputs` DuckDB tables (provenance) — written by `geac merge`.
+
+---
+
+## Fragmentomics — context
+
+**Motivation:** Cell-free DNA (cfDNA) derived from tumour cells has distinct
+fragmentation patterns compared to normal cfDNA. Capturing fragment-level features
+enables nucleosome positioning analysis and cancer detection via fragmentation
+signatures — without requiring additional sequencing.
+
+All required infrastructure is already in place: `RefCache` for reference access,
+`insert_size` in the reads schema, and read start/end positions. `frag_gc` is
+already implemented in `alt_reads`.
+
+### ~~Medium-term: `frag_midpoint` on `alt_reads`~~ — won't do
+
+`dist_from_read_end` (cycle) already serves artefact detection on `alt_reads`.
+Nucleosome positioning — the other use case for midpoint — requires the full
+fragment population, not just alt-supporting reads. The `fragments` table already
+has `midpoint` for every fragment, making this the correct foundation for
+nucleosome positioning work. Adding `frag_midpoint` to `alt_reads` would be a
+biased, low-value duplicate.
+
+### Long-term: all-reads end-motif table (forward work, see TODO.md)
+
+End motifs (the k-mer at the fragment cut site) are only meaningful as a
+comparison between alt-supporting and reference-supporting reads. Since
+`alt_reads` only covers alt-supporting reads, adding `frag_end_motif` there has
+no reference baseline to compare against.
+
+The correct approach is a new table (separate from `alt_reads`) that captures,
+for every read at a pileup position: the 4-mer cut-site motif and whether the
+read supports alt or ref. The motif should be **reference-based**
+(`seq[frag_start-2..frag_start+2]`, centered on the cleavage point — 2 bases
+outside the fragment, 2 inside) to avoid hard-clip ambiguity. The Explorer would
+then compare motif distributions between alt-supporting and reference-supporting
+reads as a bait-bias signal.
+
+Forward work items live in `TODO.md` under **Fragmentomics**.
+
+---
+
+## CI / Release — completed
+
+- GitHub Actions release workflow — on push of a `v*.*.*` tag, builds native
+  amd64 (ubuntu-latest) and arm64 (ubuntu-22.04-arm) images, pushes by digest,
+  then merges into a multi-platform manifest at `ghcr.io/fleharty/geac:<version>`
+  and `:latest`. Uses `GITHUB_TOKEN` — no external credentials needed.
+
+---
+
+## WDL / Terra — completed
+
+- WDL task wrapping `geac collect` — single-sample workflow in
+  `wdl/geac_collect.wdl`.
+- Terra-compatible Docker image — multi-stage `docker/Dockerfile` with htslib +
+  geac binary.
+- WDL workflow — scatter `geac collect` across a sample list, then gather with
+  `geac merge` (`wdl/geac_cohort.wdl`).
+- WDL task wrapping `geac merge` — standalone workflow in `wdl/geac_merge.wdl`.
+- Test on Terra with a small cohort — v0.3.0 successfully run on a cohort of
+  samples.
