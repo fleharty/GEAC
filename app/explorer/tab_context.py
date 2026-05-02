@@ -76,3 +76,4 @@ class TabContext:
     query_records: Callable[..., pd.DataFrame]
     igv_buttons: Callable[..., Any]
     sql_str: Callable[[str], str]
+    has_data: Callable[[str], bool]   # True iff column exists in schema AND has non-null values
