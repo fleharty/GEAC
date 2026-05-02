@@ -55,7 +55,14 @@ from igv_helpers import (
     resolve_index_uri,
 )
 import geac_config
-from explorer import GEAC_VERSION, MAIN_FILTER_KEYS, MAIN_FILTER_STATE, DataSource
+from explorer import (
+    GEAC_VERSION,
+    MAIN_FILTER_KEYS,
+    MAIN_FILTER_STATE,
+    DataSource,
+    PerReadFilters,
+    TabContext,
+)
 from explorer.data_source import sort_chroms, parse_region
 from explorer.main_table import (
     render_position_drilldown,
@@ -1624,95 +1631,55 @@ def _build_active_filter_provenance(
     return pd.DataFrame(rows, columns=["section", "name", "value"])
 
 
+# ── Tab dispatch context ──────────────────────────────────────────────────────
+# Built once per render. Each tab's render(ctx) reads from this rather than
+# reaching back into module globals — that's what makes tabs extractable.
+ctx = TabContext(
+    con=con,
+    table_expr=table_expr,
+    where=where,
+    schema_cols=_schema_cols,
+    has_alt_reads=_has_alt_reads,
+    stats=stats,
+    pct_called=pct_called,
+    total_count=total_count,
+    table_cols=_table_cols,
+    reads=PerReadFilters(
+        active=_reads_active,
+        recompute_vaf=recompute_vaf,
+        read_strand_sel=read_strand_sel,
+        fs_has_data=_fs_has_data,
+        fs_lo=_fs_lo,
+        fs_hi=_fs_hi,
+        fs_max=_fs_max,
+        cycle_lo=_cycle_lo,
+        cycle_hi=_cycle_hi,
+        cycle_max=_cycle_max,
+        mq_lo=_mq_lo,
+        mq_hi=_mq_hi,
+        mq_max=_mq_max,
+        n_total_has_data=_n_total_has_data,
+        n_total_lo=_n_total_lo,
+        n_total_hi=_n_total_hi,
+        n_total_max=_n_total_max,
+        is_has_data=_is_has_data,
+        is_lo=_is_lo,
+        is_hi=_is_hi,
+        is_min=_IS_MIN,
+        is_max=_IS_MAX,
+        gc_has_data=_gc_has_data,
+        gc_lo=_gc_lo,
+        gc_hi=_gc_hi,
+    ),
+    timed=_timed,
+    query_records=query_records,
+    igv_buttons=igv_buttons,
+    sql_str=_sql_str,
+)
+
+
 if _active_main_tab == TAB_SUMMARY.LABEL:
-    # ── Summary stats display ──────────────────────────────────────────────────────
-    fstats = con.execute(f"""
-        SELECT
-            COUNT(*)                                            AS n_records,
-            COUNT(DISTINCT sample_id)                           AS n_samples,
-            COALESCE(SUM(alt_count), 0)                         AS total_alt_bases,
-            COALESCE(ROUND(AVG(alt_count * 1.0 / total_depth), 4), 0) AS mean_vaf,
-            COALESCE(ROUND(AVG(total_depth), 1), 0)             AS mean_depth,
-            COUNT(*) FILTER (WHERE variant_called IS NOT NULL)  AS n_annotated,
-            COUNT(*) FILTER (WHERE variant_called = true)       AS n_called
-        FROM {table_expr}
-        WHERE {where}
-    """).df()
-
-    fn_annotated = int(fstats["n_annotated"][0])
-    fn_called    = int(fstats["n_called"][0])
-    fpct_called  = f"{100 * fn_called / fn_annotated:.1f}%" if fn_annotated > 0 else "N/A"
-
-    render_summary_metrics(stats, fstats, pct_called, fpct_called)
-
-    st.info(f"**{total_count:,}** records match the current filters.", icon="✅")
-
-    _reads_banner = st.empty()
-    if _reads_active:
-        _active_parts = []
-        if _fs_has_data and (_fs_lo > 0 or _fs_hi < _fs_max):
-            _active_parts.append(f"family size: {_fs_lo}–{_fs_hi}")
-        if _cycle_lo > 1 or _cycle_hi < _cycle_max:
-            _active_parts.append(f"cycle number: {_cycle_lo}–{_cycle_hi}")
-        if _mq_lo > 0 or _mq_hi < _mq_max:
-            _active_parts.append(f"map qual: {_mq_lo}–{_mq_hi}")
-        if _n_total_has_data and (_n_total_lo > 0 or _n_total_hi < _n_total_max):
-            _active_parts.append(f"N in read: {_n_total_lo}–{_n_total_hi}")
-        if _is_has_data and (_is_lo > _IS_MIN or _is_hi < _IS_MAX):
-            _active_parts.append(f"insert size: {_is_lo}–{_is_hi}")
-        if _gc_has_data and (_gc_lo > 0.0 or _gc_hi < 1.0):
-            _active_parts.append(f"frag GC: {_gc_lo:.2f}–{_gc_hi:.2f}")
-        if read_strand_sel != "All":
-            _active_parts.append(read_strand_sel.lower())
-        _reads_banner.warning(
-            f"**Per-read filters active** ({'; '.join(_active_parts)}). "
-            f"{per_read_warning_note(recompute_vaf)}"
-        )
-
-
-    # ── Data table ────────────────────────────────────────────────────────────────
-    _tbl_limit_options = [100, 500, 1000, 5000, 10000, 50000, "All"]
-    _tbl_limit_sel = st.selectbox(
-        "Table row limit",
-        _tbl_limit_options,
-        index=1,
-        key="table_limit_sel",
-        help="Limits rows shown in the data table below. Has no effect on plots — they always use the full filtered dataset.",
-    )
-    _tbl_limit = None if _tbl_limit_sel == "All" else int(_tbl_limit_sel)
-
-    with _timed("main_table_query"):
-        df = query_records(limit=_tbl_limit)
-
-    _tbl_event = render_records_table(
-        df,
-        total_count,
-        _table_cols,
-        igv_buttons=igv_buttons,
-        key="main",
-    )
-
-    # ── Position-level drill-down ──────────────────────────────────────────────────
-    _selected_rows = (_tbl_event.selection or {}).get("rows", [])
-    if _selected_rows:
-        _row = df.iloc[_selected_rows[0]]
-        _new_locus = (str(_row["chrom"]), int(_row["pos"]), str(_row["alt_allele"]))
-        if st.session_state.get("_drill_locus") != _new_locus:
-            st.session_state["_drill_locus"] = _new_locus
-
-    if "_drill_locus" in st.session_state:
-        _chrom, _pos, _selected_alt = st.session_state["_drill_locus"]
-        render_position_drilldown(
-            con=con,
-            table_expr=table_expr,
-            schema_cols=_schema_cols,
-            chrom=_chrom,
-            pos=_pos,
-            selected_alt=_selected_alt,
-            has_alt_reads=_has_alt_reads,
-            sql_str=_sql_str,
-            igv_buttons=igv_buttons,
-        )
+    TAB_SUMMARY.render(ctx)
 
 if _active_main_tab == TAB_VAF_DISTRIBUTION.LABEL:
     for vtype, color in [

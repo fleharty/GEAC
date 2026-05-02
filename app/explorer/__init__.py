@@ -8,6 +8,7 @@ from .filter_state import (
     FilterState,
 )
 from .schema import GEAC_VERSION, load_schema_manifest
+from .tab_context import PerReadFilters, TabContext
 
 __all__ = [
     "COVERAGE_FILTER_KEYS",
@@ -18,5 +19,7 @@ __all__ = [
     "MAIN_FILTER_KEYS",
     "MAIN_FILTER_STATE",
     "MAIN_TAB_UI_KEYS",
+    "PerReadFilters",
+    "TabContext",
     "load_schema_manifest",
 ]
