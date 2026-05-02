@@ -17,6 +17,8 @@ from typing import Any, Callable
 import duckdb
 import pandas as pd
 
+from explorer.data_source import DataSource
+
 
 @dataclass(frozen=True)
 class PerReadFilters:
@@ -57,8 +59,10 @@ class PerReadFilters:
 class TabContext:
     # Database / query primitives
     con: duckdb.DuckDBPyConnection
+    data_source: DataSource       # underlying source (Parquet or DuckDB) — exposes is_duckdb, distinct_values, etc.
     table_expr: str               # may be a CTE wrapping per-read joins
     where: str                    # WHERE clause for the active filter set
+    conditions: list[str]         # individual WHERE-clause fragments before AND-joining; needed by comparison tabs that re-build the WHERE
     schema_cols: set[str]
     has_alt_reads: bool
     has_normal_evidence: bool     # True iff normal_evidence table is present
@@ -66,12 +70,16 @@ class TabContext:
     path: str                     # source DB or parquet path (e.g. for ".duckdb" suffix gating)
     r_join: str                   # SQL join expression connecting alt_reads to the filtered locus set
     reads_where: str              # SQL WHERE fragment for active per-read filters; "" if reads.active is False
+    has_fragments: bool           # True iff fragments table/view is present
+    fragments_where_parts: list[str]  # pre-built sidebar-filter SQL fragments against fragments table (chrom, midpoint, batch, label1/2/3, timepoint)
 
     # Pre-computed summaries
     stats: pd.DataFrame
     pct_called: str
     total_count: int
     table_cols: list[str]
+    alt_reads_cols: set[str]      # column names of the alt_reads table (empty set if absent)
+    cfg: dict                     # parsed config.toml (e.g. anthropic_api_key for AI Plot Builder)
 
     # Per-read filter state
     reads: PerReadFilters
@@ -83,3 +91,4 @@ class TabContext:
     sql_str: Callable[[str], str]
     has_data: Callable[[str], bool]      # True iff column exists in schema AND has non-null values
     alt_reads_has: Callable[[str], bool]  # True iff column exists in alt_reads table
+    build_provenance: Callable[..., pd.DataFrame]  # captures sidebar-filter state for signature-discovery downloads
