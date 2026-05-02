@@ -851,9 +851,10 @@ docker run --rm \
 ### Cutting a release
 
 ```bash
-# 1. Bump version in Cargo.toml
+# 1. Bump version in Cargo.toml and VERSION
 # 2. Update GEAC_VERSION in app/explorer/schema.py
-# 3. Commit, push, then tag:
+# 3. Ensure Cargo.lock reflects the package version
+# 4. Commit, push, then tag:
 git tag v0.X.Y && git push origin v0.X.Y
 ```
 
