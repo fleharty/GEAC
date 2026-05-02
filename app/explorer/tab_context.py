@@ -61,6 +61,8 @@ class TabContext:
     where: str                    # WHERE clause for the active filter set
     schema_cols: set[str]
     has_alt_reads: bool
+    has_normal_evidence: bool     # True iff normal_evidence table is present
+    has_pon_evidence: bool        # True iff pon_evidence table is present
     path: str                     # source DB or parquet path (e.g. for ".duckdb" suffix gating)
     r_join: str                   # SQL join expression connecting alt_reads to the filtered locus set
     reads_where: str              # SQL WHERE fragment for active per-read filters; "" if reads.active is False
