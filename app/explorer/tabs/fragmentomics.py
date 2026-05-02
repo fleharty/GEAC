@@ -51,8 +51,7 @@ def render(ctx: TabContext) -> None:
         n_columns = st.slider("Columns", 1, 8, 4, key="fm_columns")
     with cols[6]:
         group_by = st.radio("Group by", ["Totals", "Sample", "Batch"], key="fm_by_sample")
-        group_dim = {"Totals": None, "Sample": "sample_id", "Batch": "batch"}[group_by]
-        group_label = group_by
+        group_dim, group_label = _group_dim_for(group_by)
 
     motif_col = "end_motif_5p" if end == "5′" else "end_motif_3p"
 
@@ -106,6 +105,16 @@ def render(ctx: TabContext) -> None:
     )
 
     _render_fragment_gc_distribution(ctx, where_sql, group_dim, group_label)
+
+
+def _group_dim_for(group_by: str) -> tuple[str | None, str]:
+    if group_by == "Totals":
+        return None, group_by
+    if group_by == "Sample":
+        return "sample_id", group_by
+    if group_by == "Batch":
+        return "batch", group_by
+    raise ValueError(f"Unknown grouping mode: {group_by}")
 
 
 def _query_motif_by_insert_size(

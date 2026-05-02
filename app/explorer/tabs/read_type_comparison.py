@@ -51,12 +51,8 @@ def render(ctx: TabContext) -> None:
         "Read type B", _rt_b_opts, index=0, key="rt_cmp_b"
     )
 
-    _rt_wa = " AND ".join(
-        ctx.conditions + [f"read_type = '{ctx.sql_str(str(_rt_a))}'"]
-    ) if ctx.conditions else f"read_type = '{ctx.sql_str(str(_rt_a))}'"
-    _rt_wb = " AND ".join(
-        ctx.conditions + [f"read_type = '{ctx.sql_str(str(_rt_b))}'"]
-    ) if ctx.conditions else f"read_type = '{ctx.sql_str(str(_rt_b))}'"
+    _rt_wa = _with_read_type(ctx, _rt_a)
+    _rt_wb = _with_read_type(ctx, _rt_b)
 
     _rt_df = _build_or_get_join_df(ctx, _rt_wa, _rt_wb)
 
@@ -90,8 +86,8 @@ def _build_or_get_join_df(ctx: TabContext, wa: str, wb: str) -> pd.DataFrame:
     # bodies on every rerun, so without caching this runs on every
     # widget interaction anywhere in the app.
     _cache_key = ("rt_df", wa, wb)
-    if st.session_state.get("_rt_cache_key") != _cache_key:
-        st.session_state["_rt_cache_key"] = _cache_key
+    if _rt_cache_get("key") != _cache_key:
+        _rt_cache_set("key", _cache_key)
         with ctx.timed("rt_df FULL OUTER JOIN [cache miss]"):
             _result = ctx.con.execute(f"""
                 WITH a AS (
@@ -139,8 +135,23 @@ def _build_or_get_join_df(ctx: TabContext, wa: str, wb: str) -> pd.DataFrame:
                     AND a.pos        = b.pos
                     AND a.alt_allele = b.alt_allele
             """).df()
-        st.session_state["_rt_df_cache"] = _result
-    return st.session_state["_rt_df_cache"]
+        _rt_cache_set("df", _result)
+    return _rt_cache_get("df")
+
+
+def _with_read_type(ctx: TabContext, read_type: str) -> str:
+    read_filter = f"read_type = '{ctx.sql_str(str(read_type))}'"
+    if not ctx.conditions:
+        return read_filter
+    return " AND ".join(ctx.conditions + [read_filter])
+
+
+def _rt_cache_get(name: str):
+    return st.session_state.get(f"_rt_{name}_cache")
+
+
+def _rt_cache_set(name: str, value) -> None:
+    st.session_state[f"_rt_{name}_cache"] = value
 
 
 def _render_concordance_summary(_rt_df: pd.DataFrame, rt_a, rt_b) -> None:
