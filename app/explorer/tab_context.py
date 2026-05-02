@@ -61,6 +61,9 @@ class TabContext:
     where: str                    # WHERE clause for the active filter set
     schema_cols: set[str]
     has_alt_reads: bool
+    path: str                     # source DB or parquet path (e.g. for ".duckdb" suffix gating)
+    r_join: str                   # SQL join expression connecting alt_reads to the filtered locus set
+    reads_where: str              # SQL WHERE fragment for active per-read filters; "" if reads.active is False
 
     # Pre-computed summaries
     stats: pd.DataFrame
@@ -76,4 +79,5 @@ class TabContext:
     query_records: Callable[..., pd.DataFrame]
     igv_buttons: Callable[..., Any]
     sql_str: Callable[[str], str]
-    has_data: Callable[[str], bool]   # True iff column exists in schema AND has non-null values
+    has_data: Callable[[str], bool]      # True iff column exists in schema AND has non-null values
+    alt_reads_has: Callable[[str], bool]  # True iff column exists in alt_reads table
