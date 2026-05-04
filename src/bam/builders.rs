@@ -208,6 +208,7 @@ impl LocusContext {
             leading_n_run_len: detail.leading_n_run_len as i32,
             trailing_n_run_len: detail.trailing_n_run_len as i32,
             input_checksum_sha256: self.input_checksum_sha256.clone(),
+            fragment_id: detail.fragment_id as i64,
         }
     }
 

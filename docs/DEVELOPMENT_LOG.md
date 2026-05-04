@@ -727,3 +727,52 @@ Forward work items live in `TODO.md` under **Fragmentomics**.
 - WDL task wrapping `geac merge` — standalone workflow in `wdl/geac_merge.wdl`.
 - Test on Terra with a small cohort — v0.3.0 successfully run on a cohort of
   samples.
+
+---
+
+## MNV detection (Steps 1–4) — 2026-05-04
+
+**Goal:** Identify multi-nucleotide variants (MNVs) — pairs of nearby substitutions
+that co-occur on the same DNA fragment, distinguishing true MNVs from coincidental
+independent SNVs at neighbouring positions.
+
+**Approach:** Hash each read's `qname` (FNV-1a 64-bit, inline — no new dependency)
+to produce a stable `fragment_id`. Both reads of a pair share the same qname, so
+the hash is a stable per-fragment identifier. Store it in `alt_reads` as `Int64`.
+The MNV candidate query is a self-join on `fragment_id` within `alt_reads`, restricted
+to pairs within a configurable distance.
+
+**Why FNV-1a inline rather than a crate:** The hash is 3 lines and has no dependencies.
+The collision probability over typical cohort sizes is negligible. Adding a hash crate
+for this would be premature.
+
+**Key files changed:**
+- `src/bam/pileup.rs` — `fnv1a_64`, `fragment_id` on `LocusRead` and `ReadDetail`
+- `src/bam/indel.rs` — same for the indel `ReadDetail` construction path
+- `src/record.rs` — `fragment_id: i64` on `AltRead`
+- `src/bam/builders.rs` — propagated into `build_alt_read`
+- `src/writer/parquet_reads.rs` — `fragment_id` column in Parquet schema and batch
+- `schema/geac_schema.json` — added to `alt_reads.required_columns`
+- `app/explorer/tabs/mnv_candidates.py` — new tab with distance/min-co-count sliders,
+  candidates table, IGV drill-down for selected pairs, dinucleotide context bar chart
+
+**MNV candidate query design:**
+```sql
+WITH filtered_reads AS (
+    SELECT fragment_id, sample_id, chrom, pos, alt_allele
+    FROM alt_reads [joined to loci passing sidebar filters]
+),
+co_occurring AS (
+    SELECT a.sample_id, a.chrom, a.pos AS pos1, a.alt_allele AS alt_allele1,
+           b.pos AS pos2, b.alt_allele AS alt_allele2, COUNT(*) AS co_count
+    FROM filtered_reads a
+    JOIN filtered_reads b
+        ON a.fragment_id = b.fragment_id AND a.sample_id = b.sample_id
+        AND a.chrom = b.chrom AND a.pos < b.pos AND (b.pos - a.pos) <= :max_dist
+    GROUP BY ... HAVING COUNT(*) >= :min_co
+)
+-- join back to locus table for ref_allele, alt_count, frac_cooccurring
+```
+
+**Remaining:** Step 5 — integration test with a synthetic BAM containing reads
+carrying substitutions at two adjacent positions.

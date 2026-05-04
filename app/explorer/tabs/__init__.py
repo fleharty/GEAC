@@ -3,6 +3,8 @@ from . import cohort
 from . import duplex_simplex
 from . import error_spectrum
 from . import fragmentomics
+from . import mnv_candidates
+from . import overlap_agreement
 from . import panel_of_normals
 from . import pipeline_comparison
 from . import read_type_comparison
@@ -25,6 +27,8 @@ TAB_TUMOR_NORMAL = tumor_normal
 TAB_PANEL_OF_NORMALS = panel_of_normals
 TAB_PIPELINE_COMPARISON = pipeline_comparison
 TAB_READ_TYPE_COMPARISON = read_type_comparison
+TAB_OVERLAP_AGREEMENT = overlap_agreement
+TAB_MNV_CANDIDATES = mnv_candidates
 TAB_AI_PLOT_BUILDER = ai_plot_builder
 TAB_FRAGMENTOMICS = fragmentomics
 
@@ -40,6 +44,8 @@ TAB_MODULES = (
     TAB_PANEL_OF_NORMALS,
     TAB_PIPELINE_COMPARISON,
     TAB_READ_TYPE_COMPARISON,
+    TAB_OVERLAP_AGREEMENT,
+    TAB_MNV_CANDIDATES,
     TAB_AI_PLOT_BUILDER,
     TAB_FRAGMENTOMICS,
 )

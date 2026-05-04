@@ -217,12 +217,11 @@ serial samples from the same patient or cohort.
 
 GEAC processes one reference position at a time (standard pileup model). MNVs — adjacent
 substitutions on the same haplotype, e.g. `AG→TC` — are therefore split into individual
-SNV records, one per position. There is no way to distinguish a true MNV from two
-independent SNVs at neighbouring positions using only the locus table. Identifying MNVs
-requires read-level phasing: checking whether both substitutions appear on the same read.
-This is not currently implemented in the Explorer. The per-read detail table (produced by
-`--reads-output`) provides the data needed: join the locus table to the reads table and
-check whether the same read supports substitutions at adjacent positions.
+SNV records, one per position. From v0.4.25, `geac collect --reads-output` writes a
+`fragment_id` column (FNV-1a 64-bit hash of the read name) to the per-read table. Both
+reads of a pair share the same `fragment_id`, making it a stable per-fragment identifier.
+The Explorer's **MNV candidates** tab uses a cross-locus self-join on `fragment_id` to
+find substitution pairs that co-occur on the same fragment, surfacing likely true MNVs.
 
 #### Soft-clipped bases
 
@@ -598,6 +597,20 @@ Features:
       (computed from the reference over the full fragment span), unconfounded by
       end-motif identity. Useful for assessing library prep GC bias and cfDNA GC
       enrichment patterns.
+  - *Overlap agreement* (requires `overlap_alt_agree` / `overlap_alt_disagree` columns) —
+    scatter of per-locus overlapping-pair agreement vs disagreement counts; a locus where
+    both reads of a pair consistently call the same alt base falls on the x-axis (high
+    agree, zero disagree); a locus where reads frequently disagree is an artifact signal.
+    Linear/log1p scale toggle; color by variant type, sample, on-target, or called status;
+    click/shift-click to select points and drill down to a data table and IGV session.
+    Concordance distribution histogram below the scatter.
+  - *MNV candidates* (requires `--reads-output` with v0.4.25+ `fragment_id` column) —
+    cross-locus self-join on `fragment_id` to find substitution pairs that co-occur on
+    the same fragment. Controls: max distance between substitutions (1–20 bp), min
+    co-occurring reads. Output: ranked candidates table with `pos1`, `ref1→alt1`,
+    `pos2`, `ref2→alt2`, co-occurrence count, fraction co-occurring, dinucleotide
+    context (`ref1+ref2 → alt1+alt2`), and distance; row selection with IGV navigation
+    to both loci; dinucleotide context bar chart.
 - **Per-read filters** (DuckDB only, requires `--reads-output`) — when an `alt_reads`
   table is present, a "Per-read filters" section appears in the sidebar with four
   range sliders. All filters use include-only (BETWEEN) semantics:

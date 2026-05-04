@@ -82,6 +82,8 @@ from explorer.tabs import (
     TAB_PANEL_OF_NORMALS,
     TAB_PIPELINE_COMPARISON,
     TAB_READ_TYPE_COMPARISON,
+    TAB_OVERLAP_AGREEMENT,
+    TAB_MNV_CANDIDATES,
     TAB_AI_PLOT_BUILDER,
     TAB_FRAGMENTOMICS,
 )
@@ -1803,19 +1805,6 @@ if _active_main_tab == TAB_SUMMARY.LABEL:
 if _active_main_tab == TAB_VAF_DISTRIBUTION.LABEL:
     TAB_VAF_DISTRIBUTION.render(ctx)
 
-# ── SBS96 helpers (shared by Error Spectrum, Cohort, Duplex/Simplex tabs) ─────
-from explorer.sbs96 import (
-    SBS_COLORS as _SBS_COLORS,
-    SBS_ETIOLOGY as _SBS_ETIOLOGY,
-    SBS_MUT_TYPES as _SBS_MUT_TYPES,
-    SBS_ORDER as _SBS_ORDER,
-    load_cosmic as _load_cosmic,
-    sbs_label as _sbs_label,
-    strat_sbs96_chart as _strat_sbs96_chart,
-    to_spec96_strat as _to_spec96_strat,
-)
-
-
 if _active_main_tab == TAB_ERROR_SPECTRUM.LABEL:
     TAB_ERROR_SPECTRUM.render(ctx)
 
@@ -1851,6 +1840,14 @@ if _active_main_tab == TAB_PIPELINE_COMPARISON.LABEL:
 # ──────────────────────────────────────────────────────────────────────────────
 if _active_main_tab == TAB_READ_TYPE_COMPARISON.LABEL:
     TAB_READ_TYPE_COMPARISON.render(ctx)
+
+# ── Overlap agreement ─────────────────────────────────────────────────────────
+if _active_main_tab == TAB_OVERLAP_AGREEMENT.LABEL:
+    TAB_OVERLAP_AGREEMENT.render(ctx)
+
+# ── MNV candidates ─────────────────────────────────────────────────────────────
+if _active_main_tab == TAB_MNV_CANDIDATES.LABEL:
+    TAB_MNV_CANDIDATES.render(ctx)
 
 # ── AI Plot Builder ────────────────────────────────────────────────────────────
 if _active_main_tab == TAB_AI_PLOT_BUILDER.LABEL:

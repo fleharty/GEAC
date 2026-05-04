@@ -66,6 +66,7 @@ fn alt_read_schema() -> Arc<Schema> {
         Field::new("leading_n_run_len", DataType::Int32, false),
         Field::new("trailing_n_run_len", DataType::Int32, false),
         Field::new("input_checksum_sha256", DataType::Utf8, true),
+        Field::new("fragment_id", DataType::Int64, false),
     ]))
 }
 
@@ -161,6 +162,9 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
             .map(|r| r.input_checksum_sha256.as_deref())
             .collect::<Vec<_>>(),
     ));
+    let fragment_id: ArrayRef = Arc::new(Int64Array::from_iter_values(
+        records.iter().map(|r| r.fragment_id),
+    ));
 
     RecordBatch::try_new(
         schema,
@@ -195,6 +199,7 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
             leading_n_run_len,
             trailing_n_run_len,
             input_checksum_sha256,
+            fragment_id,
         ],
     )
     .context("failed to create Arrow record batch")

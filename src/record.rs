@@ -363,6 +363,11 @@ pub struct AltRead {
     pub trailing_n_run_len: i32,
     /// SHA-256 of the input BAM/CRAM when collect was run with --input-checksum-sha256.
     pub input_checksum_sha256: Option<String>,
+    /// FNV-1a 64-bit hash of the read's qname, cast to i64 for Parquet Int64 compatibility.
+    /// Both reads of a pair share the same qname, so this is a stable per-fragment ID.
+    /// Used for MNV detection: a cross-locus self-join on fragment_id finds reads that
+    /// carry substitutions at two different positions.
+    pub fragment_id: i64,
 }
 
 /// One record per fragment (read pair) produced by `geac fragments`.

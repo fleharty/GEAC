@@ -4,7 +4,7 @@ use rust_htslib::bam::pileup::Indel;
 
 use crate::record::{Pipeline, VariantType};
 
-use super::pileup::{family_size_tags, hard_clip_counts, read_context_metrics, ReadDetail};
+use super::pileup::{family_size_tags, fnv1a_64, hard_clip_counts, read_context_metrics, ReadDetail};
 
 /// Per-indel-allele tally at a pileup position.
 pub(super) struct IndelCount {
@@ -83,6 +83,7 @@ pub(super) fn tally_indels(
         let is_reverse = record.is_reverse();
         let is_first_in_pair = record.flags() & 0x40 != 0;
         let qname = record.qname().to_vec();
+        let fragment_id = fnv1a_64(&qname);
 
         let allele: IndelAllele = match alignment.indel() {
             Indel::Ins(len) => {
@@ -148,6 +149,7 @@ pub(super) fn tally_indels(
             Some(ReadDetail {
                 qpos,
                 read_len: record.seq_len(),
+                fragment_id,
                 is_first_in_pair,
                 is_reverse,
                 hard_clip_before,

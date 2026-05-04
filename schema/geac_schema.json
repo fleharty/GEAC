@@ -67,7 +67,8 @@
         "read_length",
         "is_read1",
         "base_qual",
-        "map_qual"
+        "map_qual",
+        "fragment_id"
       ],
       "optional_columns": [
         "read_type",

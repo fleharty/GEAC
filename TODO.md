@@ -15,25 +15,10 @@ Conventions:
 
 ## Rust / CLI
 
-- [ ] **MNV detection** *(low priority — no user demand yet)*. Adjacent substitutions
-  on the same haplotype (e.g. `AG→TC`) are currently emitted as two independent SNV
-  records. Distinguishing true MNVs from coincidental neighbouring SNVs requires
-  read-level phasing via a stable fragment identifier. Strategy: hash `qname` to a
-  64-bit `fragment_id`, store on `AltRead`, then detect MNVs via a cross-locus join
-  in the Explorer. Full design in `docs/DEVELOPMENT_LOG.md` (see "MNV Detection
-  design notes" below if/when added — currently this is the only MNV reference).
-  - Step 1: Add `fragment_id: i64` to `ReadDetail` and `AltRead` (`src/bam/pileup.rs`,
-    `src/bam/mod.rs`, `src/record.rs`); hash via FNV-1a 64-bit or xxHash64.
-  - Step 2: Write `fragment_id` to Parquet (`src/writer/parquet_reads.rs`); add to
-    `schema/geac_schema.json`. Type `Int64`, not nullable. Bumps `GEAC_VERSION` and
-    requires a re-collect with `--reads-output`.
-  - Step 3: Explorer — implement the cross-locus join as a cached DuckDB query;
-    gate on `fragment_id` presence with a graceful fallback message.
-  - Step 4: Explorer — MNV candidates table/tab with chrom, pos1, ref1→alt1, pos2,
-    ref2→alt2, co_count, frac_cooccurring, dinucleotide context, IGV drill-down.
-  - Step 5: Integration test — synthetic BAM with reads carrying substitutions at
-    two adjacent positions vs reads carrying only one; verify `fragment_id` matches
-    and the candidate query returns correct `co_count` / `frac_cooccurring`.
+- [ ] **MNV detection — Step 5: Integration test** — synthetic BAM with reads carrying
+  substitutions at two adjacent positions vs reads carrying only one; verify `fragment_id`
+  matches and the MNV candidates query returns correct `co_count` / `frac_cooccurring`.
+  Steps 1–4 are complete (see `docs/DEVELOPMENT_LOG.md`).
 
 ---
 

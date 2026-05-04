@@ -3,11 +3,19 @@ use std::collections::HashMap;
 use crate::record::Pipeline;
 use rust_htslib::bam;
 
+pub(super) fn fnv1a_64(bytes: &[u8]) -> u64 {
+    const OFFSET: u64 = 14695981039346656037;
+    const PRIME: u64 = 1099511628211;
+    bytes.iter().fold(OFFSET, |h, &b| (h ^ b as u64).wrapping_mul(PRIME))
+}
+
 /// Per-read detail collected during tallying, used to build AltRead records.
 #[derive(Clone)]
 pub(super) struct ReadDetail {
     pub(super) qpos: usize,
     pub(super) read_len: usize,
+    /// FNV-1a 64-bit hash of the read's qname. See `LocusRead::fragment_id`.
+    pub(super) fragment_id: u64,
     pub(super) is_first_in_pair: bool,
     /// True when the read is on the reverse strand (BAM flag 0x10).
     pub(super) is_reverse: bool,
@@ -74,6 +82,9 @@ struct LocusRead {
     hard_clip_before: usize,
     base_qual: u8,
     map_qual: u8,
+    /// FNV-1a 64-bit hash of the read's qname. Both reads in a pair share the
+    /// same qname, so this serves as a stable fragment identifier for MNV detection.
+    fragment_id: u64,
     /// fgbio aD tag: AB (top-strand) raw read count
     ab_count: Option<i32>,
     /// fgbio bD tag: BA (bottom-strand) raw read count
@@ -279,8 +290,10 @@ pub(super) fn tally_pileup(
             (None, None, None, None)
         };
 
+        let qname = record.qname().to_vec();
+        let fragment_id = fnv1a_64(&qname);
         by_qname
-            .entry(record.qname().to_vec())
+            .entry(qname)
             .or_default()
             .push(LocusRead {
                 base,
@@ -291,6 +304,7 @@ pub(super) fn tally_pileup(
                 hard_clip_before,
                 base_qual,
                 map_qual,
+                fragment_id,
                 ab_count,
                 ba_count,
                 family_size,
@@ -323,6 +337,7 @@ pub(super) fn tally_pileup(
                 read_details.entry($b).or_default().push(ReadDetail {
                     qpos: $r.qpos,
                     read_len: $r.read_len,
+                    fragment_id: $r.fragment_id,
                     is_first_in_pair: $r.is_first_in_pair,
                     is_reverse: $r.is_reverse,
                     hard_clip_before: $r.hard_clip_before,
@@ -672,6 +687,7 @@ mod tests {
         ReadDetail {
             qpos: 0,
             read_len: 0,
+            fragment_id: 0,
             is_first_in_pair: true,
             is_reverse: false,
             hard_clip_before: 0,
