@@ -774,5 +774,9 @@ co_occurring AS (
 -- join back to locus table for ref_allele, alt_count, frac_cooccurring
 ```
 
-**Remaining:** Step 5 — integration test with a synthetic BAM containing reads
-carrying substitutions at two adjacent positions.
+**Step 5 — Integration test (2026-05-04):** `reads_fragment_id_enables_mnv_detection`
+in `tests/integration.rs`. Uses `write_mnv_bam` (added to `tests/common/mod.rs`): 3
+fragments carry both T@pos50 and G@pos51, 2 carry only T@pos50, 2 carry only G@pos51,
+5 carry ref. Asserts `co_count=3` and `frac_cooccurring=0.6` via a direct DuckDB
+self-join on `fragment_id`; also verifies that single-substitution fragments do not
+appear in the co-occurring set.

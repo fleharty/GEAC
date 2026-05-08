@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import altair as alt
+import hashlib
 import numpy as np
 import streamlit as st
 
@@ -149,11 +150,12 @@ def render(ctx: TabContext) -> None:
         )
     )
 
+    _oa_data_key = hashlib.md5(ctx.where.encode()).hexdigest()[:8]
     _oa_event = st.altair_chart(
         (_diag + _scatter).resolve_scale(color="independent"),
         width="stretch",
         on_select="rerun",
-        key="oa_scatter",
+        key=f"oa_scatter_{_oa_data_key}",
     )
 
     _sel_pts = (_oa_event.selection or {}).get("oa_select", [])

@@ -11,7 +11,7 @@ import duckdb
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from igv_helpers import query_distinct_samples, resolve_index_uri
+from igv_helpers import make_bed, query_distinct_samples, resolve_index_uri
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -118,3 +118,71 @@ class TestResolveIndexUri:
     def test_infers_absolute_variant_index_when_track_path_is_absolute(self, tmp_path):
         track = str((tmp_path / "refs" / "gnomad.vcf.gz").resolve())
         assert resolve_index_uri(track, None) == track + ".tbi"
+
+
+class TestMakeBed:
+    """Verify BED coordinate generation, especially the deletion off-by-one.
+
+    GEAC coordinate convention for deletions:
+        pos       = anchor (0-based reference base before the deletion, VCF style)
+        alt_allele = "-" + deleted_bases  (e.g. "-ACG" for a 3-base deletion)
+
+    The deleted bases span pos+1 .. pos+del_len (0-based).
+    The correct BED interval to cover anchor + all deleted bases is:
+        [pos,  pos + len(alt_allele))
+    which equals [pos, pos + 1 + del_len) — the '-' prefix in the alt allele
+    length coincidentally supplies the +1 needed for the half-open BED end.
+
+    BED start is always pos (the anchor), matching VCF POS convention.
+    In IGV, the deletion gap in reads starts at pos+1 (one base after the anchor).
+    """
+
+    def _row(self, chrom, pos, alt_allele, variant_type="SNV"):
+        import pandas as pd
+        return pd.DataFrame([{
+            "chrom": chrom,
+            "pos": pos,
+            "alt_allele": alt_allele,
+            "variant_type": variant_type,
+        }])
+
+    def test_snv_single_base_interval(self):
+        bed = make_bed(self._row("chr1", 100, "T", "SNV"))
+        assert bed == "chr1\t100\t101\n"
+
+    def test_deletion_3bp(self):
+        # pos=100 (anchor), deleted bases ACG at positions 101-103 (0-based)
+        # BED end = 100 + len("-ACG") = 100 + 4 = 104 (exclusive)
+        bed = make_bed(self._row("chr1", 100, "-ACG", "deletion"))
+        assert bed == "chr1\t100\t104\n"
+
+    def test_deletion_1bp(self):
+        # Single-base deletion: anchor at pos, one deleted base at pos+1
+        # BED end = pos + len("-A") = pos + 2
+        bed = make_bed(self._row("chr1", 500, "-A", "deletion"))
+        assert bed == "chr1\t500\t502\n"
+
+    def test_deletion_covers_anchor_and_all_deleted_bases(self):
+        # Verify interval width: anchor (1) + deleted bases (del_len) = len(alt)
+        import pandas as pd
+        pos, alt = 200, "-TTTTTT"  # 6-base deletion
+        df = self._row("chr1", pos, alt, "deletion")
+        bed = make_bed(df)
+        parts = bed.strip().split("\t")
+        start, end = int(parts[1]), int(parts[2])
+        del_len = len(alt) - 1  # exclude the '-' prefix
+        assert start == pos
+        assert end == pos + del_len + 1  # exclusive end covers through last deleted base
+        assert end - start == len(alt)   # interval width = anchor + del_len
+
+    def test_multi_locus_sorted_output(self):
+        import pandas as pd
+        df = pd.DataFrame([
+            {"chrom": "chr1", "pos": 300, "alt_allele": "G",    "variant_type": "SNV"},
+            {"chrom": "chr1", "pos": 100, "alt_allele": "-AC",  "variant_type": "deletion"},
+            {"chrom": "chr2", "pos": 50,  "alt_allele": "T",    "variant_type": "SNV"},
+        ])
+        lines = make_bed(df).strip().split("\n")
+        assert lines[0] == "chr1\t100\t103"  # deletion: 100 + len("-AC") = 103
+        assert lines[1] == "chr1\t300\t301"  # SNV
+        assert lines[2] == "chr2\t50\t51"    # SNV

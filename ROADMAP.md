@@ -6,7 +6,7 @@ Historical context, completed-work archives, and design notes live in
 
 ## Current state
 
-- **Released:** v0.4.25 — `fragment_id` in `alt_reads` for MNV detection; MNV candidates and Overlap agreement Explorer tabs.
+- **Released:** v0.4.26 — MNV integration test; IGV session fixes (manifest relative paths, index resolution, sample multiselect); `make_bed` moved to `igv_helpers` with unit tests.
 - **Branch policy:** all work goes directly to `main`.
 - **Releases are gated on Rust/pipeline changes**, not Explorer UI changes. UI improvements
   ship in whatever version is current.
@@ -20,7 +20,8 @@ Historical context, completed-work archives, and design notes live in
 | v0.4.0     | Coverage                    | `geac coverage` command; coverage Explorer tab; WDL coverage workflow                                                                                                                                                                         |
 | v0.4.23–24 | Sample annotations + refactor | `subject_id` and `sample_type` schema annotations; Explorer tab decomposition into `app/explorer/tabs/`                                                                                                                                   |
 | v0.4.25    | MNV detection               | `fragment_id` (FNV-1a hash of qname) in `alt_reads`; MNV candidates tab; Overlap agreement tab                                                                                                                                            |
-| **v0.5.0** | Analysis (next)             | MNV integration test; remaining customer-facing Coverage Explorer items; Reads tab review; trailing-N investigation                                                                                                                        |
+| v0.4.26    | MNV integration test + IGV  | MNV integration test (`reads_fragment_id_enables_mnv_detection`); IGV session fixes (manifest relative-path resolution, index existence check, always-visible sample multiselect); `make_bed` tested via `igv_helpers`                     |
+| **v0.5.0** | Analysis (next)             | Remaining customer-facing Coverage Explorer items; Reads tab review; trailing-N investigation                                                                                                                                              |
 | v0.6.0     | External beta               | First release shared with external users for feedback; documentation polished; onboarding guide                                                                                                                                               |
 | v1.0.0     | Stable                      | Feedback from beta incorporated; API/schema stable; production-ready                                                                                                                                                                          |
 

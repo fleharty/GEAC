@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import altair as alt
+import hashlib
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -208,11 +209,12 @@ def render(ctx: TabContext) -> None:
         .add_params(_sb_point_sel)
         .properties(title=_sb_title, height=350)
     )
+    _sb_data_key = hashlib.md5(ctx.where.encode()).hexdigest()[:8]
     sb_event = st.altair_chart(
         (ci_lower + ci_upper + diag_line + scatter).resolve_scale(color="independent"),
         width="stretch",
         on_select="rerun",
-        key="strand_bias_scatter",
+        key=f"strand_bias_scatter_{_sb_data_key}",
     )
 
     sb_pts = (sb_event.selection or {}).get("sb_select", [])

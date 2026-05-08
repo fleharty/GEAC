@@ -4,7 +4,7 @@ use common::{
     assert_geac_success, count_bam_reads, duckdb_columns, duckdb_count, duckdb_table_exists,
     parquet_columns, parquet_count, parquet_query_f32, parquet_query_i32, parquet_query_i64,
     parquet_query_opt_str, parquet_query_str, write_bam, write_bed, write_coverage_bam,
-    write_cycle_bam, write_fragments_bam, write_paired_bam, write_reference,
+    write_cycle_bam, write_fragments_bam, write_mnv_bam, write_paired_bam, write_reference,
     write_reference_with_base, CovRead, CycleTestRead, FragmentPair,
 };
 use serde_json::Value;
@@ -2210,6 +2210,144 @@ fn merged_duckdb_tables_match_schema_manifest() {
     assert_schema_columns_present(&duckdb_columns(&db, "alt_reads"), "alt_reads");
     assert_schema_columns_present(&duckdb_columns(&db, "geac_metadata"), "geac_metadata");
     assert_schema_columns_present(&duckdb_columns(&db, "geac_inputs"), "geac_inputs");
+}
+
+// ── MNV detection ─────────────────────────────────────────────────────────────
+
+/// fragment_id enables MNV detection: a self-join on fragment_id finds reads that
+/// carry substitutions at two adjacent positions on the same fragment.
+///
+/// BAM layout (pos1=50 T, pos2=51 G, all 0-based):
+///   3 reads carry BOTH alts ("mnv_*")    → same fragment_id at pos1 and pos2
+///   2 reads carry ONLY T at pos1         → appear in alt_reads at pos1 only
+///   2 reads carry ONLY G at pos2         → appear in alt_reads at pos2 only
+///   5 reads carry ref at both positions
+///
+/// Expected MNV query result:
+///   co_count         = 3  (3 fragments share both loci)
+///   frac_cooccurring = 3 / (3 + 2) = 0.6  (pos1 alt_count = 5)
+#[test]
+fn reads_fragment_id_enables_mnv_detection() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 200);
+    let bam = write_mnv_bam(
+        dir.path(),
+        "mnv.bam",
+        "sample1",
+        200,
+        50,  // pos1 (0-based)
+        b'T',
+        51,  // pos2 (0-based)
+        b'G',
+        3,   // n_mnv
+        2,   // n_pos1_only
+        2,   // n_pos2_only
+        5,   // n_ref
+        20,  // read_len
+    );
+
+    let out_stem = dir.path().join("mnv.parquet");
+    assert_geac_success(&[
+        "collect",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        out_stem.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
+        "--reads-output",
+    ]);
+
+    let locus_pq = dir.path().join("mnv.locus.parquet");
+    let reads_pq = dir.path().join("mnv.reads.parquet");
+    assert!(locus_pq.exists(), "locus parquet not created");
+    assert!(reads_pq.exists(), "reads parquet not created");
+
+    // Both positions should appear as alt loci.
+    assert_eq!(parquet_count(&locus_pq), 2, "expected 2 alt loci (pos 50 and 51)");
+    assert_eq!(parquet_query_i32(&locus_pq, "alt_count", "pos = 50"), 5);
+    assert_eq!(parquet_query_i32(&locus_pq, "alt_count", "pos = 51"), 5);
+
+    // alt_reads must contain the fragment_id column.
+    let reads_cols = parquet_columns(&reads_pq);
+    assert!(
+        reads_cols.contains(&"fragment_id".to_string()),
+        "fragment_id column missing from alt_reads"
+    );
+
+    // Merge to DuckDB and run the MNV self-join.
+    let db = dir.path().join("mnv.duckdb");
+    assert_geac_success(&[
+        "merge",
+        "--output",
+        db.to_str().unwrap(),
+        locus_pq.to_str().unwrap(),
+        reads_pq.to_str().unwrap(),
+    ]);
+
+    let conn = duckdb::Connection::open(&db).unwrap();
+
+    // co_count: fragments carrying both T@50 and G@51.
+    let co_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*)
+             FROM alt_reads a
+             JOIN alt_reads b
+               ON  a.fragment_id = b.fragment_id
+               AND a.sample_id   = b.sample_id
+               AND a.chrom       = b.chrom
+               AND a.pos < b.pos
+               AND (b.pos - a.pos) <= 3
+             WHERE a.pos = 50 AND b.pos = 51",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(co_count, 3, "co_count: expected 3 fragments carrying both alts");
+
+    // frac_cooccurring = co_count / alt_count at pos1.
+    let alt_count_pos1: i64 = conn
+        .query_row(
+            "SELECT alt_count FROM alt_bases WHERE pos = 50",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let frac: f64 = co_count as f64 / alt_count_pos1 as f64;
+    assert!(
+        (frac - 0.6).abs() < 1e-9,
+        "frac_cooccurring should be 0.6, got {frac}"
+    );
+
+    // Reads carrying only one alt must NOT appear as co-occurring.
+    // Verify that each "p1_*" fragment_id appears only in pos=50, not in pos=51.
+    let spillover: i64 = conn
+        .query_row(
+            "SELECT COUNT(*)
+             FROM alt_reads a
+             JOIN alt_reads b
+               ON  a.fragment_id = b.fragment_id
+               AND a.pos < b.pos
+             WHERE a.pos = 50 AND b.pos = 51
+               AND a.alt_allele = 'T'
+               AND b.alt_allele = 'G'
+               AND a.fragment_id NOT IN (
+                   SELECT fragment_id FROM alt_reads WHERE pos = 50 AND alt_allele = 'T'
+                   INTERSECT
+                   SELECT fragment_id FROM alt_reads WHERE pos = 51 AND alt_allele = 'G'
+               )",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        spillover, 0,
+        "no single-substitution fragment should appear in the MNV self-join"
+    );
 }
 
 /// Regression test for the `is_first_in_template` strand bug.

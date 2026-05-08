@@ -7,6 +7,54 @@ importing the Streamlit runtime or any visualisation libraries.
 from __future__ import annotations
 
 import duckdb
+import pandas as pd
+
+
+def make_bed(df: pd.DataFrame) -> str:
+    """Build a BED string from a DataFrame of alt_bases rows.
+
+    Coordinate convention (GEAC uses 0-based positions, BED is 0-based half-open):
+
+    SNV / insertion:
+        BED [pos, pos+1) — single-base interval at the variant position.
+
+    Deletion (alt_allele starts with '-', e.g. "-ACG"):
+        pos       = anchor position (the reference base before the deletion;
+                    same VCF-convention anchor that GEAC stores for every indel).
+        del_len   = number of deleted bases = len(alt_allele) - 1
+        BED start = pos      (anchor — one base before the deletion gap)
+        BED end   = pos + len(alt_allele)
+                  = pos + 1 + del_len   (exclusive, covers anchor + all deleted bases)
+
+    The '-' prefix in alt_allele has length 1, which happens to cancel the +1
+    needed for the half-open BED end, so `pos + len(alt_allele)` is the correct
+    exclusive end without any separate adjustment.
+
+    Where multiple records share the same (chrom, pos), the largest end coordinate
+    is used so that the longest deletion at a locus is fully covered.
+    """
+    def _end(row) -> int:
+        alt = str(row["alt_allele"])
+        if row["variant_type"] == "deletion" and alt.startswith("-"):
+            # pos is the anchor; deleted bases span pos+1 .. pos+(len(alt)-1).
+            # BED exclusive end to include the last deleted base:
+            #   pos + (len(alt)-1) + 1 = pos + len(alt)
+            return int(row["pos"]) + len(alt)
+        return int(row["pos"]) + 1
+
+    tmp = df.copy()
+    tmp["bed_end"] = tmp.apply(_end, axis=1)
+    positions = (
+        tmp.groupby(["chrom", "pos"])["bed_end"]
+        .max()
+        .reset_index()
+        .sort_values(["chrom", "pos"])
+    )
+    lines = [
+        f"{row.chrom}\t{int(row.pos)}\t{int(row.bed_end)}"
+        for row in positions.itertuples(index=False)
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def insert_size_active_part(

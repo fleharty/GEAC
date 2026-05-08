@@ -13,15 +13,6 @@ Conventions:
 
 ---
 
-## Rust / CLI
-
-- [ ] **MNV detection — Step 5: Integration test** — synthetic BAM with reads carrying
-  substitutions at two adjacent positions vs reads carrying only one; verify `fragment_id`
-  matches and the MNV candidates query returns correct `co_count` / `frac_cooccurring`.
-  Steps 1–4 are complete (see `docs/DEVELOPMENT_LOG.md`).
-
----
-
 ## Per-read filter validation
 
 - [ ] **Single-site read-level filter test** — run `geac collect --reads-output

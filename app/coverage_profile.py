@@ -27,43 +27,24 @@ def profile_position_count(
     return int(result) if result else 0
 
 
-# Keep old name as an alias so the explorer import doesn't break.
-expanded_profile_position_count = profile_position_count
-
-
-def max_bin_width(
-    con: duckdb.DuckDBPyConnection,
-    table_expr: str,
-    where_clause: str,
-) -> int:
-    """Return the largest bin width in the region, used as display step."""
-    result = con.execute(
-        f'SELECT MAX("end" - pos) FROM {table_expr} {where_clause}'
-    ).fetchone()[0]
-    return int(result) if result and result > 0 else 1
-
-
 def load_expanded_depth_profile(
     con: duckdb.DuckDBPyConnection,
     table_expr: str,
     where_clause: str,
-    display_step: int = 1,
 ) -> pd.DataFrame:
     """Load cross-sample depth profile statistics.
 
     Bins are aggregated using bin_n-weighted averages so wider bins contribute
     proportionally to the display. Two-level aggregation:
-      1. Collapse to one weighted value per (display_bin, sample_id) so each
-         sample contributes equally regardless of the number of coverage bins.
+      1. Collapse to one weighted value per (pos, sample_id).
       2. Compute cross-sample statistics (mean, IQR, min/max) over per-sample values.
     """
     w = _bin_width()
-    pos_expr = f"FLOOR(pos / {display_step}) * {display_step}" if display_step > 1 else "pos"
     return con.execute(
         f"""
         WITH per_sample AS (
             SELECT
-                {pos_expr}                              AS pos,
+                pos,
                 sample_id,
                 SUM(total_depth * {w}) / SUM({w})       AS depth,
                 SUM(mean_mapq   * {w}) / SUM({w})       AS mean_mapq,
@@ -72,7 +53,7 @@ def load_expanded_depth_profile(
                 SUM(gc_content  * {w}) / SUM({w})       AS gc_content
             FROM {table_expr}
             {where_clause}
-            GROUP BY {pos_expr}, sample_id
+            GROUP BY pos, sample_id
         )
         SELECT
             pos,
@@ -98,20 +79,18 @@ def load_expanded_sample_profile(
     con: duckdb.DuckDBPyConnection,
     table_expr: str,
     where_clause: str,
-    display_step: int = 1,
 ) -> pd.DataFrame:
     """Load per-sample depth values for profile overlays."""
     w = _bin_width()
-    pos_expr = f"FLOOR(pos / {display_step}) * {display_step}" if display_step > 1 else "pos"
     return con.execute(
         f"""
         SELECT
-            {pos_expr}                              AS pos,
+            pos,
             sample_id,
             SUM(total_depth * {w}) / SUM({w})       AS depth
         FROM {table_expr}
         {where_clause}
-        GROUP BY {pos_expr}, sample_id
-        ORDER BY {pos_expr}, sample_id
+        GROUP BY pos, sample_id
+        ORDER BY pos, sample_id
         """
     ).df()

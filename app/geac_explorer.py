@@ -50,6 +50,7 @@ warnings.filterwarnings(
 )
 
 from igv_helpers import (
+    make_bed,
     query_distinct_samples,
     per_read_warning_note,
     resolve_index_uri,
@@ -167,6 +168,45 @@ def _timed(label: str):
 
 
 st.set_page_config(page_title="GEAC Explorer", layout="wide")
+
+# Preserve scroll position across reruns (sidebar filter changes reset scroll otherwise).
+import streamlit.components.v1 as _stc
+_stc.html(
+    """
+    <script>
+    (function () {
+        var KEY = 'geac_scroll_y';
+        try {
+            var win = window.parent;
+            var doc = win.document;
+            var main = doc.querySelector('section.main') ||
+                       doc.querySelector('[data-testid="stMain"]') ||
+                       doc.querySelector('.main');
+            if (!main) return;
+
+            // Save scroll position on every scroll event (attach once per element).
+            if (!main._geac_scroll_attached) {
+                main._geac_scroll_attached = true;
+                main.addEventListener('scroll', function () {
+                    win.localStorage.setItem(KEY, main.scrollTop);
+                }, { passive: true });
+            }
+
+            // Restore after Streamlit finishes updating the DOM.
+            var saved = parseInt(win.localStorage.getItem(KEY) || '0', 10);
+            if (saved > 0) {
+                win.requestAnimationFrame(function () {
+                    win.requestAnimationFrame(function () {
+                        main.scrollTop = saved;
+                    });
+                });
+            }
+        } catch (e) {}
+    })();
+    </script>
+    """,
+    height=0,
+)
 
 _LOGO = Path(__file__).parent / "geac-logo.svg"
 _LOGO_COMPACT = Path(__file__).parent / "geac-logo-compact.svg"
@@ -782,6 +822,7 @@ else:
     insert_size_range = (0, 0)
     frag_gc_range = (0.0, 1.0)
     read_strand_sel = "All"
+    recompute_vaf = False
     _fs_has_data = False
     _is_has_data = False
     _gc_has_data = False
@@ -940,14 +981,27 @@ def load_manifest(p: str) -> dict:
     the same sample run on multiple pipelines can resolve to different BAMs.
     Both key styles may coexist: rows without a ``pipeline`` value (or from a
     manifest without the column) use the plain ``sample_id`` key.
+
+    Relative paths in the BAM/index columns are resolved against the manifest
+    file's directory so that IGV session files (written to a temp dir) receive
+    absolute paths that IGV can actually open.
     """
+    manifest_dir = _os.path.dirname(_os.path.abspath(p.strip()))
+
+    def _abs(val: str | None) -> str | None:
+        if val is None:
+            return None
+        if not _os.path.isabs(val) and not val.startswith(("gs://", "s3://", "https://", "http://")):
+            return _os.path.normpath(_os.path.join(manifest_dir, val))
+        return val
+
     mdf = pd.read_csv(p.strip(), sep="\t")
     _has_pipeline_col = "pipeline" in mdf.columns
     result = {}
     for row in mdf.itertuples(index=False):
         bai = str(row.duplex_output_bam_index) if hasattr(row, "duplex_output_bam_index") and pd.notna(row.duplex_output_bam_index) else None
         variants = str(row.final_annotated_variants) if hasattr(row, "final_annotated_variants") and pd.notna(row.final_annotated_variants) else None
-        entry = {"bam": str(row.duplex_output_bam), "bai": bai, "variants_tsv": variants}
+        entry = {"bam": _abs(str(row.duplex_output_bam)), "bai": _abs(bai), "variants_tsv": variants}
         sid = str(row.collaborator_sample_id)
         if _has_pipeline_col and pd.notna(row.pipeline) and str(row.pipeline).strip():
             result[(sid, str(row.pipeline).strip())] = entry
@@ -1025,33 +1079,6 @@ with st.sidebar.expander("Filter state", expanded=False):
             st.rerun()
 
 # ── IGV helper functions ───────────────────────────────────────────────────────
-def make_bed(df: pd.DataFrame) -> str:
-    # For deletions the alt_allele is e.g. "-ACGT", so the deleted bases span
-    # pos+1 .. pos+del_len.  Extend the BED end to cover the full deleted region
-    # so IGV highlights the right coordinates.  For all other variant types a
-    # single-base interval (pos, pos+1) is correct.
-    def _end(row) -> int:
-        alt = str(row["alt_allele"])
-        if row["variant_type"] == "deletion" and alt.startswith("-"):
-            return int(row["pos"]) + len(alt)   # anchor + deleted bases
-        return int(row["pos"]) + 1
-
-    tmp = df.copy()
-    tmp["bed_end"] = tmp.apply(_end, axis=1)
-    # Where multiple records share the same locus, take the largest end coord.
-    positions = (
-        tmp.groupby(["chrom", "pos"])["bed_end"]
-        .max()
-        .reset_index()
-        .sort_values(["chrom", "pos"])
-    )
-    lines = [
-        f"{row.chrom}\t{int(row.pos)}\t{int(row.bed_end)}"
-        for row in positions.itertuples(index=False)
-    ]
-    return "\n".join(lines) + "\n"
-
-
 def launch_igv_session(session_xml: str, bed: str, sort_locus: str = "") -> str:
     """Write session.xml and positions.bed to a temp dir and load in IGV.
 
@@ -1192,7 +1219,12 @@ def make_igv_session(
             if bam in _seen_bams:
                 continue
             _seen_bams.add(bam)
-            index_attr = f' index="{bai}"' if bai else ""
+            # For local paths, only emit index= if the file actually exists.
+            # A wrong explicit index overrides IGV's auto-detection and silently
+            # produces an empty track; omitting it lets IGV find the index itself.
+            _bai_is_cloud = bai and bai.startswith(("gs://", "s3://", "https://", "http://"))
+            _bai_ok = bai and (_bai_is_cloud or _os.path.isfile(bai))
+            index_attr = f' index="{bai}"' if _bai_ok else ""
             resources.append(f'        <Resource path="{bam}" name="{label}"{index_attr}/>')
             tracks.append(f'        <Track id="{bam}" name="{label}"/>')
 
@@ -1262,13 +1294,21 @@ def igv_buttons(
             "Select specific samples below, or check the box to load all "
             "(may crash IGV — you're on your own)."
         )
-        chosen = st.multiselect(
-            "Samples to include in IGV session",
-            options=sample_ids,
-            default=cap_samples,
-            key=f"{key}_sample_pick",
-        )
-        cap_samples = chosen if chosen else cap_samples
+
+    # Always show the multiselect so the user can see and control which samples
+    # are included regardless of whether n is above or below the cap.  When the
+    # multiselect was inside the n > IGV_CAP block, filter changes that reduced n
+    # below the cap silently reset cap_samples to all current samples, causing
+    # positions from unintended samples to appear in the BED.
+    chosen = st.multiselect(
+        "Samples to include in IGV session",
+        options=sample_ids,
+        default=cap_samples,
+        key=f"{key}_sample_pick",
+    )
+    cap_samples = chosen if chosen else cap_samples
+
+    if n > IGV_CAP:
         _cap_list = ", ".join(f"'{_sql_str(s)}'" for s in cap_samples)
         _chosen_records = con.execute(
             f"SELECT COUNT(*) FROM {table_expr} WHERE {_extra_w} "

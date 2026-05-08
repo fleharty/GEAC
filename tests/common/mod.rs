@@ -785,3 +785,111 @@ pub fn duckdb_columns(db: &Path, table: &str) -> Vec<String> {
         .collect::<Result<Vec<String>, _>>()
         .unwrap()
 }
+
+// ── MNV test BAM ─────────────────────────────────────────────────────────────
+
+/// Write a BAM for MNV detection tests.
+///
+/// Creates single-end reads (all starting at `pos1 - 10`) where:
+/// - `n_mnv` reads carry `alt1` at `pos1` AND `alt2` at `pos2`  (qname "mnv_{i}")
+/// - `n_pos1_only` reads carry only `alt1` at `pos1`             (qname "p1_{i}")
+/// - `n_pos2_only` reads carry only `alt2` at `pos2`             (qname "p2_{i}")
+/// - `n_ref` reads carry the reference base at both positions     (qname "ref_{i}")
+///
+/// Both `pos1` and `pos2` must fall within the read (read starts at pos1-10,
+/// length = `read_len`).  The reference is all-A.
+pub fn write_mnv_bam(
+    dir: &Path,
+    filename: &str,
+    sample_id: &str,
+    ref_len: usize,
+    pos1: i64,
+    alt1: u8,
+    pos2: i64,
+    alt2: u8,
+    n_mnv: usize,
+    n_pos1_only: usize,
+    n_pos2_only: usize,
+    n_ref: usize,
+    read_len: usize,
+) -> PathBuf {
+    let bam_path = dir.join(filename);
+
+    let mut header = bam::header::Header::new();
+    let mut hd = bam::header::HeaderRecord::new(b"HD");
+    hd.push_tag(b"VN", "1.6");
+    hd.push_tag(b"SO", "coordinate");
+    header.push_record(&hd);
+
+    let mut sq = bam::header::HeaderRecord::new(b"SQ");
+    sq.push_tag(b"SN", "chr1");
+    sq.push_tag(b"LN", ref_len as i32);
+    header.push_record(&sq);
+
+    let mut rg = bam::header::HeaderRecord::new(b"RG");
+    rg.push_tag(b"ID", "rg1");
+    rg.push_tag(b"SM", sample_id);
+    header.push_record(&rg);
+
+    let mut writer = bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
+    let quals = vec![40u8; read_len];
+    let cigar = CigarString(vec![Cigar::Match(read_len as u32)]);
+    let read_start = pos1 - 10;
+    let off1 = (pos1 - read_start) as usize;
+    let off2 = (pos2 - read_start) as usize;
+
+    let ref_seq = vec![b'A'; read_len];
+
+    let mut write_read = |qname: String, seq: &[u8]| {
+        let mut rec = Record::new();
+        rec.set(qname.as_bytes(), Some(&cigar), seq, &quals);
+        rec.set_flags(0);
+        rec.set_tid(0);
+        rec.set_pos(read_start);
+        rec.set_mapq(60);
+        rec.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+        writer.write(&rec).unwrap();
+    };
+
+    for i in 0..n_mnv {
+        let mut seq = ref_seq.clone();
+        seq[off1] = alt1;
+        seq[off2] = alt2;
+        write_read(format!("mnv_{i}"), &seq.clone());
+    }
+    for i in 0..n_pos1_only {
+        let mut seq = ref_seq.clone();
+        seq[off1] = alt1;
+        write_read(format!("p1_{i}"), &seq.clone());
+    }
+    for i in 0..n_pos2_only {
+        let mut seq = ref_seq.clone();
+        seq[off2] = alt2;
+        write_read(format!("p2_{i}"), &seq.clone());
+    }
+    for i in 0..n_ref {
+        write_read(format!("ref_{i}"), &ref_seq.clone());
+    }
+
+    drop(writer);
+
+    let sorted = dir.join(format!("{filename}.sorted.bam"));
+    let status = std::process::Command::new("samtools")
+        .args([
+            "sort",
+            "-o",
+            sorted.to_str().unwrap(),
+            bam_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("samtools sort failed");
+    assert!(status.success(), "samtools sort failed");
+
+    let status = std::process::Command::new("samtools")
+        .args(["index", sorted.to_str().unwrap()])
+        .status()
+        .expect("samtools index failed");
+    assert!(status.success(), "samtools index failed");
+
+    sorted
+}
