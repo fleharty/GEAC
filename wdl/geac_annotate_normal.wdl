@@ -16,6 +16,7 @@ version 1.0
 ##   normal_sample_id      - (optional) override normal sample ID; defaults to SM tag
 ##   min_base_qual         - minimum base quality (default 1)
 ##   min_map_qual          - minimum mapping quality (default 0)
+##   max_pileup_depth      - max reads per pileup column; 0 = unlimited (default 0). htslib defaults to 8000 which silently downsamples high-coverage loci.
 ##   include_duplicates    - include PCR/optical duplicate reads (FLAG 0x400); default false
 ##   include_secondary     - include secondary alignments (FLAG 0x100); default false
 ##   include_supplementary - include supplementary alignments (FLAG 0x800); default false
@@ -37,6 +38,7 @@ workflow GeacAnnotateNormal {
 
         Int     min_base_qual = 1
         Int     min_map_qual  = 0
+        Int     max_pileup_depth = 0
         Boolean include_duplicates    = false
         Boolean include_secondary     = false
         Boolean include_supplementary = false
@@ -57,6 +59,7 @@ workflow GeacAnnotateNormal {
             normal_sample_id      = normal_sample_id,
             min_base_qual         = min_base_qual,
             min_map_qual          = min_map_qual,
+            max_pileup_depth      = max_pileup_depth,
             include_duplicates    = include_duplicates,
             include_secondary     = include_secondary,
             include_supplementary = include_supplementary,
@@ -86,6 +89,7 @@ task AnnotateNormal {
 
         Int     min_base_qual
         Int     min_map_qual
+        Int     max_pileup_depth
         Boolean include_duplicates
         Boolean include_secondary
         Boolean include_supplementary
@@ -110,6 +114,7 @@ task AnnotateNormal {
             --output           ~{output_name} \
             --min-base-qual    ~{min_base_qual} \
             --min-map-qual     ~{min_map_qual} \
+            --max-pileup-depth ~{max_pileup_depth} \
             ~{"--normal-sample-id " + normal_sample_id} \
             ~{if include_duplicates    then "--include-duplicates"    else ""} \
             ~{if include_secondary     then "--include-secondary"     else ""} \

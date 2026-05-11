@@ -15,7 +15,7 @@ use crate::cli::CollectArgs;
 use crate::gene_annotations::GeneAnnotations;
 use crate::gnomad::GnomadIndex;
 use crate::progress::ProgressReporter;
-use crate::record::{AltBase, AltRead, SampleMetricsRecord};
+use crate::record::{AltBase, AltRead, SampleMetricsRecord, VariantType};
 use crate::region::{RegionInput, parse_region_input};
 use crate::repeat::compute_repeat_metrics;
 use crate::targets::TargetIntervals;
@@ -28,6 +28,7 @@ use pileup::{locus_n_context_summary, tally_pileup, PileupResult};
 pub(crate) use ref_utils::RefCache;
 pub(crate) use ref_utils::gc_frac;
 pub use ref_utils::{open_bam, read_group_sample_id};
+pub(crate) use ref_utils::resolve_max_pileup_depth;
 
 /// Process a BAM/CRAM file and return all alt base records (and optionally per-read detail records).
 ///
@@ -101,7 +102,9 @@ pub fn collect_alt_bases(
             })?;
         }
 
-        for pileup in bam.pileup() {
+        let mut plp = bam.pileup();
+        plp.set_max_depth(resolve_max_pileup_depth(args.max_pileup_depth));
+        for pileup in plp {
             let pileup = pileup.context("error reading pileup")?;
             let tid = pileup.tid() as usize;
             let pos = pileup.pos() as i64;
@@ -141,6 +144,8 @@ pub fn collect_alt_bases(
                 continue;
             }
 
+            // on_target for SNVs/insertions is evaluated at the anchor position.
+            // Deletions use range overlap instead (see indel loop below).
             let on_target = target_intervals.map(|t| t.contains(&chrom, pos));
             if let Some(acc) = sample_metrics_acc.as_mut() {
                 acc.observe_position(
@@ -274,9 +279,20 @@ pub fn collect_alt_bases(
                     None
                 };
 
+                // For deletions, check whether the deleted range overlaps any target
+                // interval rather than testing only the anchor. alt_allele is "-<bases>",
+                // so pos + alt_allele.len() is the exclusive end of the deletion span.
+                let indel_on_target = if indel.variant_type == VariantType::Deletion {
+                    target_intervals
+                        .map(|t| t.overlaps(&chrom, pos, pos + indel.alt_allele.len() as i64))
+                } else {
+                    on_target
+                };
+
                 locus.push_indel_record(
                     &mut records,
                     indel,
+                    indel_on_target,
                     variant_called,
                     variant_filter,
                     gnomad_af,
@@ -395,7 +411,7 @@ impl SampleMetricsAccumulator {
         sample_type: Option<String>,
         batch: Option<String>,
         read_type: crate::record::ReadType,
-        pipeline: crate::record::Pipeline,
+        pipeline: Option<crate::record::Pipeline>,
         input_checksum_sha256: Option<String>,
         target_intervals: &TargetIntervals,
         region: Option<&RegionSpec>,

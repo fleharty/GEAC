@@ -26,6 +26,7 @@ version 1.0
 ##   gene_annotations      - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
 ##   region                - (optional) restrict all samples to a genomic region
 ##   min_map_qual          - minimum mapping quality for total_depth (default 0)
+##   max_pileup_depth      - max reads per pileup column; 0 = unlimited (default 0). htslib defaults to 8000 which silently downsamples high-coverage loci.
 ##   min_base_qual         - base quality threshold for frac_low_bq (default 20)
 ##   gc_window             - bp window centred on position for GC content (default 100)
 ##   min_depth             - suppress positions with total_depth below this (default 0)
@@ -66,6 +67,7 @@ workflow GeacCoverage {
         File?   gene_annotations
         String? region
         Int     min_map_qual  = 0
+        Int     max_pileup_depth = 0
         Int     min_base_qual = 20
         Int     gc_window     = 100
         Int     min_depth     = 0
@@ -133,6 +135,7 @@ workflow GeacCoverage {
                 gene_annotations      = gene_annotations,
                 region                = region,
                 min_map_qual          = min_map_qual,
+                max_pileup_depth      = max_pileup_depth,
                 min_base_qual         = min_base_qual,
                 gc_window             = gc_window,
                 min_depth                 = min_depth,
@@ -191,6 +194,7 @@ task Coverage {
         File?   gene_annotations
         String? region
         Int     min_map_qual
+        Int     max_pileup_depth
         Int     min_base_qual
         Int     gc_window
         Int     min_depth
@@ -220,6 +224,7 @@ task Coverage {
             --read-type        ~{read_type} \
             --pipeline         ~{pipeline} \
             --min-map-qual     ~{min_map_qual} \
+            --max-pileup-depth ~{max_pileup_depth} \
             --min-base-qual    ~{min_base_qual} \
             --gc-window        ~{gc_window} \
             --min-depth        ~{min_depth} \

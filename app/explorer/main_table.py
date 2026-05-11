@@ -51,6 +51,9 @@ def render_records_table(
             on_select="rerun",
             selection_mode="single-row",
             key=f"{key}_data_table",
+            column_config={
+                "pos_display": st.column_config.NumberColumn(format="localized"),
+            },
         )
         igv_buttons([], df, key=key)
         return event

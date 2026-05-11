@@ -5,7 +5,7 @@ use duckdb::Connection;
 use rust_htslib::bam::{self, Read};
 use tracing::info;
 
-use crate::bam::{open_bam, read_group_sample_id};
+use crate::bam::{open_bam, read_group_sample_id, resolve_max_pileup_depth};
 use crate::cli::AnnotateNormalArgs;
 use crate::record::NormalEvidence;
 
@@ -113,6 +113,7 @@ pub fn annotate_normal(args: &AnnotateNormalArgs) -> Result<Vec<NormalEvidence>>
                     args.include_duplicates,
                     args.include_secondary,
                     args.include_supplementary,
+                    resolve_max_pileup_depth(args.max_pileup_depth),
                     &mut results,
                 )?,
                 // If the chromosome is not in the normal BAM index (e.g. the normal
@@ -160,6 +161,7 @@ fn pileup_position(
     include_duplicates: bool,
     include_secondary: bool,
     include_supplementary: bool,
+    max_pileup_depth: u32,
     results: &mut Vec<NormalEvidence>,
 ) -> Result<bool> {
     // SNV positions have a single-char ref allele.  We only emit per-allele rows
@@ -169,7 +171,9 @@ fn pileup_position(
 
     let mut found = false;
 
-    for pileup_result in bam.pileup() {
+    let mut plp = bam.pileup();
+    plp.set_max_depth(max_pileup_depth);
+    for pileup_result in plp {
         let pileup = pileup_result.context("error reading pileup from normal BAM")?;
         if pileup.pos() as i64 != pos {
             continue;

@@ -75,7 +75,7 @@ fn fragments_schema() -> Arc<Schema> {
         Field::new("insert_size", DataType::Int32, false),
         Field::new("map_qual", DataType::Int32, false),
         Field::new("read_type", DataType::Utf8, false),
-        Field::new("pipeline", DataType::Utf8, false),
+        Field::new("pipeline", DataType::Utf8, true),
         Field::new("gc_content", DataType::Float32, true),
         Field::new("end_motif_5p", DataType::Utf8, true),
         Field::new("end_motif_3p", DataType::Utf8, true),
@@ -129,8 +129,11 @@ fn records_to_batch(records: &[FragmentRecord], schema: Arc<Schema>) -> Result<R
     let read_type: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.read_type.to_string()),
     ));
-    let pipeline: ArrayRef = Arc::new(StringArray::from_iter_values(
-        records.iter().map(|r| r.pipeline.to_string()),
+    let pipeline: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.pipeline.map(|p| p.to_string()))
+            .collect::<Vec<_>>(),
     ));
     let subject_id: ArrayRef = Arc::new(StringArray::from(
         records

@@ -6,7 +6,7 @@ Historical context, completed-work archives, and design notes live in
 
 ## Current state
 
-- **Released:** v0.4.26 — MNV integration test; IGV session fixes (manifest relative paths, index resolution, sample multiselect); `make_bed` moved to `igv_helpers` with unit tests.
+- **Released:** v0.4.27 — `--max-pileup-depth` flag closes silent htslib 8000-read pileup cap that dropped rare-event reads at high-coverage loci (e.g. a 42 bp deletion at 14 k× depth); deletion `on_target` now uses range overlap; `pipeline` made nullable across Parquet schemas; Explorer indel-length range slider; MNV inter-substitution min-distance slider.
 - **Branch policy:** all work goes directly to `main`.
 - **Releases are gated on Rust/pipeline changes**, not Explorer UI changes. UI improvements
   ship in whatever version is current.
@@ -21,6 +21,7 @@ Historical context, completed-work archives, and design notes live in
 | v0.4.23–24 | Sample annotations + refactor | `subject_id` and `sample_type` schema annotations; Explorer tab decomposition into `app/explorer/tabs/`                                                                                                                                   |
 | v0.4.25    | MNV detection               | `fragment_id` (FNV-1a hash of qname) in `alt_reads`; MNV candidates tab; Overlap agreement tab                                                                                                                                            |
 | v0.4.26    | MNV integration test + IGV  | MNV integration test (`reads_fragment_id_enables_mnv_detection`); IGV session fixes (manifest relative-path resolution, index existence check, always-visible sample multiselect); `make_bed` tested via `igv_helpers`                     |
+| v0.4.27    | Pileup-cap fix + indel filters | `--max-pileup-depth` (0 = unlimited) on `collect`, `coverage`, `annotate-normal`; raises the htslib 8000-read default that silently downsamples high-coverage loci and dropped a 42 bp deletion at 14 k× depth. Deletion `on_target` now evaluated by range overlap, not anchor position. `pipeline` made nullable across all output Parquet schemas. Explorer indel-length range slider; MNV inter-substitution min-distance slider |
 | **v0.5.0** | Analysis (next)             | Remaining customer-facing Coverage Explorer items; Reads tab review; trailing-N investigation                                                                                                                                              |
 | v0.6.0     | External beta               | First release shared with external users for feedback; documentation polished; onboarding guide                                                                                                                                               |
 | v1.0.0     | Stable                      | Feedback from beta incorporated; API/schema stable; production-ready                                                                                                                                                                          |

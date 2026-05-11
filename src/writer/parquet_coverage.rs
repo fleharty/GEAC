@@ -124,7 +124,7 @@ fn coverage_schema(track_names: &[String]) -> Arc<Schema> {
         Field::new("exon_number", DataType::Int32, true),
         // Provenance
         Field::new("read_type", DataType::Utf8, false),
-        Field::new("pipeline", DataType::Utf8, false),
+        Field::new("pipeline", DataType::Utf8, true),
         Field::new("subject_id", DataType::Utf8, true),
         Field::new("sample_type", DataType::Utf8, true),
         Field::new("batch", DataType::Utf8, true),
@@ -246,8 +246,11 @@ fn records_to_batch(
     let read_type: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.read_type.to_string()),
     ));
-    let pipeline: ArrayRef = Arc::new(StringArray::from_iter_values(
-        records.iter().map(|r| r.pipeline.to_string()),
+    let pipeline: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.pipeline.map(|p| p.to_string()))
+            .collect::<Vec<_>>(),
     ));
     let subject_id: ArrayRef = Arc::new(StringArray::from(
         records

@@ -32,6 +32,13 @@ def make_bed(df: pd.DataFrame) -> str:
 
     Where multiple records share the same (chrom, pos), the largest end coordinate
     is used so that the longest deletion at a locus is fully covered.
+
+    Target-boundary note: the Rust collector marks a deletion as on-target if any
+    part of its deleted range overlaps a target interval (not just the anchor). So
+    a deletion whose anchor is before the target but whose deleted bases span or
+    overlap the target will be included when "On target" is selected. The BED
+    interval reflects the full deletion extent — intentional, since truncating at
+    the target boundary would misrepresent the variant in IGV.
     """
     def _end(row) -> int:
         alt = str(row["alt_allele"])

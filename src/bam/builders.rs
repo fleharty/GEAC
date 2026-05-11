@@ -19,7 +19,7 @@ pub(super) struct LocusContext {
     overlap_depth: i32,
     overlap_ref_agree: i32,
     read_type: crate::record::ReadType,
-    pipeline: crate::record::Pipeline,
+    pipeline: Option<crate::record::Pipeline>,
     subject_id: Option<String>,
     sample_type: Option<String>,
     batch: Option<String>,
@@ -242,12 +242,13 @@ impl LocusContext {
         &self,
         records: &mut Vec<AltBase>,
         indel: &IndelCount,
+        on_target: Option<bool>,
         variant_called: Option<bool>,
         variant_filter: Option<String>,
         gnomad_af: Option<f32>,
         n_ctx_summary: Option<LocusNContextSummary>,
     ) {
-        records.push(self.build_alt_base(
+        let mut record = self.build_alt_base(
             indel.alt_allele.clone(),
             indel.variant_type,
             indel.total,
@@ -260,6 +261,8 @@ impl LocusContext {
             gnomad_af,
             None,
             n_ctx_summary,
-        ));
+        );
+        record.on_target = on_target;
+        records.push(record);
     }
 }

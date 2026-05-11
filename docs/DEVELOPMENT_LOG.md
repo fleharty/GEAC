@@ -780,3 +780,43 @@ fragments carry both T@pos50 and G@pos51, 2 carry only T@pos50, 2 carry only G@p
 5 carry ref. Asserts `co_count=3` and `frac_cooccurring=0.6` via a direct DuckDB
 self-join on `fragment_id`; also verifies that single-substitution fragments do not
 appear in the co-occurring set.
+
+---
+
+## `--max-pileup-depth` and Explorer indel-length filter (v0.4.27, 2026-05-11)
+
+**Bug discovered:** A 42 bp deletion at chr1:1204427 in an amplicon BAM (14 126 raw
+reads at the anchor; FLAG=163, MAPQ=60, primary, not duplicate, supported by exactly
+one read) did **not** appear in the per-sample `alt_bases` Parquet. A nearby 4 bp
+deletion at the same locus *did* appear, ruling out a general indel-tally bug. The
+parquet's `total_depth` at neighbouring SNV positions clipped near ~6 984.
+
+**Root cause:** `rust_htslib::bam::IndexedReader::pileup()` defaults `bam_plp_set_maxcnt`
+to **8000**. When raw depth exceeds the cap, htslib silently downsamples — the lone
+deletion-bearing read is discarded in the lottery. The default is a WGS-era heuristic
+that's wrong for amplicon panels and any low-VAF / rare-event work.
+
+**Fix:** Added `--max-pileup-depth` to `CollectArgs`, `CoverageArgs`, and
+`AnnotateNormalArgs`. Sentinel `0` (the documented default) means *unlimited*; it
+maps internally to `i32::MAX as u32` because htslib has no true "unlimited" and
+literal `0` passed to `set_max_depth` would cap at zero. Helper
+`resolve_max_pileup_depth` in `src/bam/ref_utils.rs`. All three `bam.pileup()` call
+sites (`src/bam/mod.rs`, `src/coverage/mod.rs`, `src/normal.rs`) call
+`set_max_depth` before iterating. Plumbed through `wdl/geac_collect.wdl`,
+`wdl/geac_coverage.wdl`, `wdl/geac_annotate_normal.wdl`, `wdl/geac_cohort.wdl`. See
+CHALLENGES.md entry for the full diagnostic timeline.
+
+**Why default unlimited rather than a bounded large number:** picked 0=unlimited to
+match the bug's framing (every dropped read at a panel locus is a possible missed
+variant). On WGS this is a memory risk; if it ever bites, the default can move to
+something like 1 000 000 without changing the CLI surface.
+
+**Explorer indel-length filter (same release):** added a sidebar slider for
+`indel_len_range` (default `(1, 500)`) that filters insertions/deletions by length
+derived on-the-fly from `LENGTH(alt_allele) - 1`. SNVs are explicitly preserved
+(`variant_type = 'SNV' OR ...`) so the length filter doesn't double-up with the
+Variant-type multiselect. Considered adding a stored `indel_len` column to the
+schema; rejected because `LENGTH(varchar)` is O(1) in DuckDB and a schema bump
+would force every existing Parquet to be re-collected for no measurable speedup.
+A new `mnv_min_dist` slider was added in the MNV candidates tab alongside the
+existing max-distance slider (changed the join condition to `BETWEEN min AND max`).

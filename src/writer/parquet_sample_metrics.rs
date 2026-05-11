@@ -40,7 +40,7 @@ fn sample_metrics_schema() -> Arc<Schema> {
         Field::new("sample_type", DataType::Utf8, true),
         Field::new("batch", DataType::Utf8, true),
         Field::new("read_type", DataType::Utf8, false),
-        Field::new("pipeline", DataType::Utf8, false),
+        Field::new("pipeline", DataType::Utf8, true),
         Field::new("input_checksum_sha256", DataType::Utf8, true),
         Field::new("n_target_positions", DataType::Int32, false),
         Field::new("n_target_positions_covered", DataType::Int32, false),
@@ -77,8 +77,11 @@ fn records_to_batch(records: &[SampleMetricsRecord], schema: Arc<Schema>) -> Res
     let read_type: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.read_type.to_string()),
     ));
-    let pipeline: ArrayRef = Arc::new(StringArray::from_iter_values(
-        records.iter().map(|r| r.pipeline.to_string()),
+    let pipeline: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.pipeline.map(|p| p.to_string()))
+            .collect::<Vec<_>>(),
     ));
     let input_checksum_sha256: ArrayRef = Arc::new(StringArray::from(
         records

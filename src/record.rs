@@ -94,7 +94,7 @@ pub struct AltBase {
 
     // Provenance
     pub read_type: ReadType,
-    pub pipeline: Pipeline,
+    pub pipeline: Option<Pipeline>,
     /// Biological subject identifier — groups samples (e.g. multiple timepoints
     /// or tissue types) that come from the same person/animal/study subject.
     /// Used by `geac compare` to scope longitudinal and replicate analyses.
@@ -192,7 +192,7 @@ pub struct SampleMetricsRecord {
     pub sample_type: Option<String>,
     pub batch: Option<String>,
     pub read_type: ReadType,
-    pub pipeline: Pipeline,
+    pub pipeline: Option<Pipeline>,
     pub input_checksum_sha256: Option<String>,
     pub n_target_positions: i32,
     pub n_target_positions_covered: i32,
@@ -293,7 +293,7 @@ pub struct CoverageRecord {
 
     // ── Provenance ─────────────────────────────────────────────────────────────
     pub read_type: ReadType,
-    pub pipeline: Pipeline,
+    pub pipeline: Option<Pipeline>,
     pub subject_id: Option<String>,
     pub sample_type: Option<String>,
     pub batch: Option<String>,
@@ -318,7 +318,7 @@ pub struct AltRead {
     pub pos: i64,
     pub alt_allele: String,
     pub read_type: ReadType,
-    pub pipeline: Pipeline,
+    pub pipeline: Option<Pipeline>,
     pub subject_id: Option<String>,
     pub sample_type: Option<String>,
     pub batch: Option<String>,
@@ -393,7 +393,7 @@ pub struct FragmentRecord {
     /// Mapping quality of R1
     pub map_qual: i32,
     pub read_type: ReadType,
-    pub pipeline: Pipeline,
+    pub pipeline: Option<Pipeline>,
     pub subject_id: Option<String>,
     pub sample_type: Option<String>,
     pub batch: Option<String>,
@@ -445,7 +445,7 @@ pub struct IntervalRecord {
 
     // ── Provenance ────────────────────────────────────────────────────────────
     pub read_type: ReadType,
-    pub pipeline: Pipeline,
+    pub pipeline: Option<Pipeline>,
     pub subject_id: Option<String>,
     pub sample_type: Option<String>,
     pub batch: Option<String>,

@@ -26,14 +26,20 @@ def render(ctx: TabContext) -> None:
         return
 
     # ── Controls ─────────────────────────────────────────────────────────────
-    _c1, _c2 = st.columns(2)
-    _max_dist = _c1.slider(
+    _c1, _c2, _c3 = st.columns(3)
+    _min_dist = _c1.slider(
+        "Min distance between substitutions (bp)",
+        min_value=1, max_value=20, value=1, step=1,
+        key="mnv_min_dist",
+        help="Only pairs of alt loci separated by at least this many base pairs are considered.",
+    )
+    _max_dist = _c2.slider(
         "Max distance between substitutions (bp)",
         min_value=1, max_value=20, value=3, step=1,
         key="mnv_max_dist",
         help="Only pairs of alt loci within this many base pairs are considered MNV candidates.",
     )
-    _min_co = _c2.slider(
+    _min_co = _c3.slider(
         "Min co-occurring reads",
         min_value=1, max_value=20, value=2, step=1,
         key="mnv_min_co",
@@ -63,7 +69,7 @@ def render(ctx: TabContext) -> None:
                 AND a.sample_id   = b.sample_id
                 AND a.chrom       = b.chrom
                 AND a.pos         < b.pos
-                AND (b.pos - a.pos) <= {_max_dist}
+                AND (b.pos - a.pos) BETWEEN {_min_dist} AND {_max_dist}
             GROUP BY a.sample_id, a.chrom, a.pos, a.alt_allele, b.pos, b.alt_allele
             HAVING COUNT(*) >= {_min_co}
         ),
@@ -108,14 +114,14 @@ def render(ctx: TabContext) -> None:
     if df.empty:
         st.info(
             f"No MNV candidates found with ≥{_min_co} co-occurring reads "
-            f"within {_max_dist} bp under the current filters.",
+            f"separated by {_min_dist}–{_max_dist} bp under the current filters.",
             icon="🔎",
         )
         return
 
     st.caption(
         f"**{len(df):,} MNV candidate pair(s)** — substitutions sharing ≥{_min_co} fragment(s) "
-        f"within {_max_dist} bp. Rows are sorted by co-occurrence count."
+        f"separated by {_min_dist}–{_max_dist} bp. Rows are sorted by co-occurrence count."
     )
 
     # ── Display table ─────────────────────────────────────────────────────────

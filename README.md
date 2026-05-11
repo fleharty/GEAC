@@ -88,6 +88,7 @@ Optional flags:
 | `--repeat-window` | 10 | Bases on each side of locus to scan for homopolymers and STRs |
 | `--min-base-qual` | 1 | Minimum base quality to count a read |
 | `--min-map-qual` | 0 | Minimum mapping quality |
+| `--max-pileup-depth` | 0 (unlimited) | Max reads per pileup column. htslib's default of 8000 silently downsamples high-coverage loci and can drop rare-event reads (e.g. the single read supporting a long deletion). |
 | `--include-duplicates` | off | Count PCR/optical duplicate reads (FLAG 0x400) |
 | `--include-secondary` | off | Count secondary alignments (FLAG 0x100) |
 | `--include-supplementary` | off | Count supplementary alignments (FLAG 0x800) |
@@ -336,6 +337,7 @@ Optional flags:
 | `--normal-sample-id` | from SM tag | Override the normal sample identifier |
 | `--min-base-qual` | 1 | Minimum base quality to count a base in the normal pileup |
 | `--min-map-qual` | 0 | Minimum mapping quality |
+| `--max-pileup-depth` | 0 (unlimited) | Max reads per pileup column; raises the htslib 8000 default that silently downsamples high-coverage loci |
 | `--include-duplicates` | off | Count duplicate reads in the normal |
 | `--include-secondary` | off | Count secondary alignments |
 | `--include-supplementary` | off | Count supplementary alignments |
@@ -395,6 +397,7 @@ Key options:
 | `--read-type` | `duplex` | `duplex`, `simplex`, or `raw` |
 | `--pipeline` | `fgbio` | `fgbio`, `dragen`, or `raw` |
 | `--min-map-qual` | `0` | Minimum mapping quality |
+| `--max-pileup-depth` | `0` (unlimited) | Max reads per pileup column; raises the htslib 8000 default that silently downsamples high-coverage loci |
 | `--min-base-qual` | `20` | Minimum base quality |
 | `--gc-window` | `100` | Window size (bp) for GC-content calculation |
 | `--min-depth` | `0` | Only emit positions with depth ≥ this value |
@@ -912,6 +915,7 @@ WDL 1.0 workflows are provided in `wdl/`:
 | `repeat_window` | Int | Bases each side of locus for homopolymer/STR scan (default: 10) |
 | `min_base_qual` | Int | Default: 1 |
 | `min_map_qual` | Int | Default: 0 |
+| `max_pileup_depth` | Int | Max reads per pileup column; 0 = unlimited (default: 0). Raises the htslib 8000 default that silently downsamples high-coverage loci. |
 | `include_duplicates` | Boolean | Count duplicate reads (default: false) |
 | `include_secondary` | Boolean | Count secondary alignments (default: false) |
 | `include_supplementary` | Boolean | Count supplementary alignments (default: false) |
@@ -936,7 +940,7 @@ Per-sample parallel arrays: `input_bams`, `input_bam_indices`, optional `sample_
 optional `variants_tsvs`, optional `vcfs` + `vcf_indices` (per-sample VCF annotation),
 optional `read_types`, `pipelines`, `batches`, `labels1`, `labels2`, `labels3`.
 Shared inputs applied to all samples: `reference_fasta`, `targets`, `gene_annotations`,
-`region`, `repeat_window`, `min_base_qual`, `min_map_qual`,
+`region`, `repeat_window`, `min_base_qual`, `min_map_qual`, `max_pileup_depth`,
 `include_duplicates`, `include_secondary`, `include_supplementary`,
 `gnomad`, `gnomad_index`, `gnomad_af_field` (optional gnomAD AF annotation), `threads`.
 Set `run_fragments=true` to run `geac fragments` in parallel with `geac collect` for each
@@ -971,6 +975,7 @@ Output: `cohort_db` (File) — merged DuckDB database.
 | `normal_sample_id` | String? | Override normal sample ID (default: BAM SM tag) |
 | `min_base_qual` | Int | Default: 1 |
 | `min_map_qual` | Int | Default: 0 |
+| `max_pileup_depth` | Int | Max reads per pileup column; 0 = unlimited (default: 0). Raises the htslib 8000 default that silently downsamples high-coverage loci. |
 | `include_duplicates` | Boolean | Count duplicate reads (default: false) |
 | `include_secondary` | Boolean | Count secondary alignments (default: false) |
 | `include_supplementary` | Boolean | Count supplementary alignments (default: false) |

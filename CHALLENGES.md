@@ -7,6 +7,29 @@ were diagnosed, and what the fix was. Updated as new issues arise.
 
 ## Rust / Core Tool
 
+### Silent pileup downsampling drops rare-event reads at high-depth loci
+**Symptom:** A 42 bp deletion at chr1:1204427 was visible in the BAM as a clean
+`68M42D78M` alignment (FLAG=163, MAPQ=60, not duplicate) but did **not** appear in
+the `geac collect` Parquet output. Raw read depth at the anchor position was 14,126;
+the parquet's `total_depth` at neighbouring SNV positions was capped near ~6,984.
+A nearby 4 bp deletion at the same locus *did* show up, ruling out a general indel
+bug.
+**Root cause:** `rust_htslib::bam::IndexedReader::pileup()` defaults to a maximum
+of **8000 reads per pileup column** (the htslib `bam_plp_set_maxcnt` default). When
+actual coverage exceeds this cap, htslib silently samples reads — the single
+deletion-supporting read can be discarded in the lottery.
+**Fix:** Added `--max-pileup-depth` to `CollectArgs`, `CoverageArgs`, and
+`AnnotateNormalArgs` (`src/cli.rs`). `0` is the user-facing sentinel meaning
+"unlimited" and is mapped internally to `i32::MAX as u32` (the largest cap
+`set_max_depth` accepts — htslib has no true "unlimited"). Helper
+`resolve_max_pileup_depth` lives in `src/bam/ref_utils.rs`. All three `bam.pileup()`
+call sites (`src/bam/mod.rs`, `src/coverage/mod.rs`, `src/normal.rs`) now call
+`set_max_depth` before iterating.
+**Lesson:** htslib pileup quietly drops reads at high coverage by default; for
+amplicon panels and any low-VAF / rare-event work, the cap *must* be raised. The
+default 8000 is a WGS-era heuristic. Diagnose with `samtools view -c $bam region`
+versus the parquet `total_depth` — a large gap is the signal.
+
 ### Segfault on BAM contigs absent from FASTA index (e.g. hs37d5 decoy)
 **Symptom:** `geac collect` (and `geac coverage`) crashed with a segfault after printing:
 ```

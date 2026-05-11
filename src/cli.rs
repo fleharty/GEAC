@@ -121,8 +121,8 @@ pub struct CollectArgs {
     pub read_type: ReadType,
 
     /// Pipeline that produced the BAM/CRAM: fgbio, dragen, or raw
-    #[arg(long, default_value = "fgbio")]
-    pub pipeline: Pipeline,
+    #[arg(long)]
+    pub pipeline: Option<Pipeline>,
 
     /// Optional VCF/BCF file to annotate whether loci overlap called variants.
     /// Mutually exclusive with --variants-tsv.
@@ -170,6 +170,12 @@ pub struct CollectArgs {
     /// Minimum mapping quality to consider a read
     #[arg(long, default_value_t = 0)]
     pub min_map_qual: u8,
+
+    /// Maximum reads per pileup column (0 = unlimited). htslib defaults to 8000,
+    /// which silently downsamples at high-coverage loci and can drop rare-event
+    /// reads (e.g. the single read supporting a long deletion).
+    #[arg(long, default_value_t = 0)]
+    pub max_pileup_depth: u32,
 
     /// Include PCR/optical duplicate reads (FLAG 0x400); excluded by default
     #[arg(long)]
@@ -288,6 +294,12 @@ pub struct AnnotateNormalArgs {
     #[arg(long, default_value_t = 0)]
     pub min_map_qual: u8,
 
+    /// Maximum reads per pileup column (0 = unlimited). htslib defaults to 8000,
+    /// which silently downsamples at high-coverage loci and can drop rare-event
+    /// reads (e.g. the single read supporting a long deletion).
+    #[arg(long, default_value_t = 0)]
+    pub max_pileup_depth: u32,
+
     /// Include PCR/optical duplicate reads (FLAG 0x400); excluded by default
     #[arg(long)]
     pub include_duplicates: bool,
@@ -375,8 +387,8 @@ pub struct CoverageArgs {
     pub read_type: ReadType,
 
     /// Pipeline that produced the BAM/CRAM: fgbio, dragen, or raw
-    #[arg(long, default_value = "fgbio")]
-    pub pipeline: Pipeline,
+    #[arg(long)]
+    pub pipeline: Option<Pipeline>,
 
     /// Optional BED file or Picard interval list of target regions.
     /// When provided, only positions within targets are emitted (including zero-depth positions).
@@ -397,6 +409,11 @@ pub struct CoverageArgs {
     /// Minimum mapping quality (used for total_depth; mapq stats computed from all non-dup reads)
     #[arg(long, default_value_t = 0)]
     pub min_map_qual: u8,
+
+    /// Maximum reads per pileup column (0 = unlimited). htslib defaults to 8000,
+    /// which silently downsamples at high-coverage loci.
+    #[arg(long, default_value_t = 0)]
+    pub max_pileup_depth: u32,
 
     /// Base quality threshold for frac_low_bq
     #[arg(long, default_value_t = 20)]
@@ -491,8 +508,8 @@ pub struct FragmentsArgs {
     pub read_type: ReadType,
 
     /// Pipeline that produced the BAM/CRAM: fgbio, dragen, or raw
-    #[arg(long, default_value = "fgbio")]
-    pub pipeline: Pipeline,
+    #[arg(long)]
+    pub pipeline: Option<Pipeline>,
 
     /// Restrict processing to a region. Accepts either a region string (e.g. "chr1:1000-2000")
     /// or a path to a BED file / Picard interval list.

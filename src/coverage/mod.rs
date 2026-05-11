@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use rust_htslib::bam::Read;
 use tracing::info;
 
-use crate::bam::{open_bam, read_group_sample_id, RefCache};
+use crate::bam::{open_bam, read_group_sample_id, resolve_max_pileup_depth, RefCache};
 use crate::cli::CoverageArgs;
 use crate::gene_annotations::GeneAnnotations;
 use crate::record::{CoverageRecord, IntervalRecord};
@@ -98,7 +98,9 @@ pub fn collect_coverage(
                 .with_context(|| format!("failed to fetch region '{r}'"))?;
         }
 
-    for pileup in reader.pileup() {
+    let mut plp = reader.pileup();
+    plp.set_max_depth(resolve_max_pileup_depth(args.max_pileup_depth));
+    for pileup in plp {
         let pileup = pileup.context("error reading pileup")?;
         let tid = pileup.tid() as usize;
         let pos = pileup.pos() as i64;
@@ -417,7 +419,7 @@ struct BinAccumulator {
     // provenance
     sample_id: String,
     read_type: crate::record::ReadType,
-    pipeline: crate::record::Pipeline,
+    pipeline: Option<crate::record::Pipeline>,
     subject_id: Option<String>,
     sample_type: Option<String>,
     batch: Option<String>,
@@ -464,7 +466,7 @@ impl BinAccumulator {
             exon_number: None,
             sample_id: String::new(),
             read_type: crate::record::ReadType::Duplex,
-            pipeline: crate::record::Pipeline::Fgbio,
+            pipeline: None,
             subject_id: None,
             sample_type: None,
             batch: None,

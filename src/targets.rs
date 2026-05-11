@@ -147,6 +147,25 @@ impl TargetIntervals {
         end > pos
     }
 
+    /// Returns `true` if the half-open query interval `[start, end_exclusive)` overlaps
+    /// any target interval on `chrom`.
+    ///
+    /// Because stored intervals are sorted and non-overlapping after merging, only the
+    /// last interval whose start < end_exclusive needs to be checked against `start`.
+    pub fn overlaps(&self, chrom: &str, start: i64, end_exclusive: i64) -> bool {
+        let Some(intervals) = self.by_chrom.get(chrom) else {
+            return false;
+        };
+        let start = start as u32;
+        let end = end_exclusive as u32;
+        let idx = intervals.partition_point(|&(s, _)| s < end);
+        if idx == 0 {
+            return false;
+        }
+        let (_, iend) = intervals[idx - 1];
+        iend > start
+    }
+
     pub fn n_targets(&self) -> usize {
         self.by_chrom.values().map(|v| v.len()).sum()
     }
@@ -286,6 +305,52 @@ mod tests {
         assert!(t.contains("chr1", 150));
         assert!(!t.contains("chr1", 250));
         assert!(t.contains("chr1", 350));
+    }
+
+    // ── overlaps ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn overlaps_entirely_before_target() {
+        let t = parse("chr1\t100\t200\n");
+        assert!(!t.overlaps("chr1", 50, 100)); // ends exactly at target start
+        assert!(!t.overlaps("chr1", 50, 99));
+    }
+
+    #[test]
+    fn overlaps_entirely_after_target() {
+        let t = parse("chr1\t100\t200\n");
+        assert!(!t.overlaps("chr1", 200, 250)); // starts exactly at target end
+        assert!(!t.overlaps("chr1", 201, 300));
+    }
+
+    #[test]
+    fn overlaps_spanning_entire_target() {
+        let t = parse("chr1\t100\t200\n");
+        assert!(t.overlaps("chr1", 50, 250)); // deletion spans the whole target
+    }
+
+    #[test]
+    fn overlaps_starting_inside_extending_past() {
+        let t = parse("chr1\t100\t200\n");
+        assert!(t.overlaps("chr1", 150, 250));
+    }
+
+    #[test]
+    fn overlaps_starting_before_ending_inside() {
+        let t = parse("chr1\t100\t200\n");
+        assert!(t.overlaps("chr1", 50, 150));
+    }
+
+    #[test]
+    fn overlaps_single_base_inside() {
+        let t = parse("chr1\t100\t200\n");
+        assert!(t.overlaps("chr1", 150, 151));
+    }
+
+    #[test]
+    fn overlaps_unknown_chrom() {
+        let t = parse("chr1\t100\t200\n");
+        assert!(!t.overlaps("chr2", 50, 250));
     }
 
     #[test]

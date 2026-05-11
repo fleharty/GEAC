@@ -125,6 +125,18 @@ pub(crate) fn gc_frac(seq: &[u8], start: usize, len: usize) -> Option<f32> {
     Some(gc as f32 / slice.len() as f32)
 }
 
+/// Convert a CLI `--max-pileup-depth` value to the cap to pass to
+/// `rust_htslib::bam::pileup::Pileups::set_max_depth`. `0` means "unlimited"
+/// from the user's perspective; htslib has no true unlimited, so we use the
+/// largest signed value rust-htslib will accept.
+pub(crate) fn resolve_max_pileup_depth(cli_value: u32) -> u32 {
+    if cli_value == 0 {
+        i32::MAX as u32
+    } else {
+        cli_value
+    }
+}
+
 pub fn open_bam(input: &Path, reference: &Path) -> Result<bam::IndexedReader> {
     let mut reader = bam::IndexedReader::from_path(input)
         .with_context(|| format!("failed to open BAM/CRAM: {}", input.display()))?;

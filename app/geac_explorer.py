@@ -567,6 +567,12 @@ variant_sel = st.sidebar.multiselect(
     ["SNV", "insertion", "deletion"],
     key="variant_sel",
 )
+indel_len_range = st.sidebar.slider(
+    "Indel length range (bp)",
+    min_value=1, max_value=500, step=1,
+    key="indel_len_range",
+    help="Filter insertions/deletions by length (bp). Length is derived from `alt_allele` (`+`/`-` prefix excluded). SNVs are unaffected — use Variant type to exclude them.",
+)
 vaf_range = st.sidebar.slider("VAF range", 0.0, 1.0, step=0.01, key="vaf_range")
 min_alt = st.sidebar.number_input("Min alt count", min_value=1, max_value=10000, step=1, key="min_alt")
 max_alt = st.sidebar.number_input("Max alt count (0 = no maximum)", min_value=0, max_value=10000, step=1, key="max_alt")
@@ -1464,6 +1470,12 @@ if timepoint_sel:
 if variant_sel:
     t_list = ", ".join(f"'{_sql_str(t)}'" for t in variant_sel)
     conditions.append(f"variant_type IN ({t_list})")
+if indel_len_range != (1, 500):
+    _ilo, _ihi = indel_len_range
+    conditions.append(
+        "(variant_type = 'SNV' "
+        f"OR LENGTH(alt_allele) - 1 BETWEEN {_ilo} AND {_ihi})"
+    )
 if min_fwd_alt > 0:
     conditions.append(f"fwd_alt_count >= {min_fwd_alt}")
 if min_rev_alt > 0:
@@ -1674,6 +1686,13 @@ def _build_active_filter_provenance(
         "str_length_range",
         f"{str_len_range[0]}-{str_len_range[1]}",
         active=_repeat_cols_present and str_len_range != (0, 50),
+    )
+    _append_provenance_row(
+        rows,
+        "filters",
+        "indel_length_range",
+        f"{indel_len_range[0]}-{indel_len_range[1]}",
+        active=indel_len_range != (1, 500),
     )
     _append_provenance_row(
         rows,

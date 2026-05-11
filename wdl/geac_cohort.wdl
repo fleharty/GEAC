@@ -35,6 +35,7 @@ version 1.0
 ##   gene_annotations        - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
 ##   region                  - (optional) restrict all samples to a genomic region
 ##   repeat_window           - bases each side of locus for homopolymer/STR scan (default 10)
+##   max_pileup_depth        - max reads per pileup column; 0 = unlimited (default 0). htslib defaults to 8000 which silently downsamples high-coverage loci.
 ##   include_duplicates      - include PCR/optical duplicate reads (FLAG 0x400); default false
 ##   include_secondary       - include secondary alignments (FLAG 0x100); default false
 ##   include_supplementary   - include supplementary alignments (FLAG 0x800); default false
@@ -89,6 +90,7 @@ workflow GeacCohort {
 
         Int     min_base_qual = 1
         Int     min_map_qual  = 0
+        Int     max_pileup_depth = 0
         Boolean include_duplicates    = false
         Boolean include_secondary     = false
         Boolean include_supplementary = false
@@ -178,6 +180,7 @@ workflow GeacCohort {
                 repeat_window         = repeat_window,
                 min_base_qual         = min_base_qual,
                 min_map_qual          = min_map_qual,
+                max_pileup_depth      = max_pileup_depth,
                 include_duplicates    = include_duplicates,
                 include_secondary     = include_secondary,
                 include_supplementary = include_supplementary,
@@ -275,6 +278,7 @@ task Collect {
 
         Int     min_base_qual
         Int     min_map_qual
+        Int     max_pileup_depth
         Boolean include_duplicates
         Boolean include_secondary
         Boolean include_supplementary
@@ -303,6 +307,7 @@ task Collect {
             --pipeline         ~{pipeline} \
             --min-base-qual    ~{min_base_qual} \
             --min-map-qual     ~{min_map_qual} \
+            --max-pileup-depth ~{max_pileup_depth} \
             ~{"--sample-id "        + sample_id} \
             ~{"--subject-id "       + subject_id} \
             ~{"--sample-type "      + sample_type} \

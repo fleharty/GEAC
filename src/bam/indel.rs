@@ -48,7 +48,7 @@ pub(super) fn indels_compatible(a: &str, b: &str) -> bool {
 /// so that overlapping pairs are correctly identified even when one read has no indel.
 pub(super) fn tally_indels(
     pileup: &rust_htslib::bam::pileup::Pileup,
-    pipeline: Pipeline,
+    pipeline: Option<Pipeline>,
     pos: i64,
     chrom_seq: &[u8],
     min_map_qual: u8,

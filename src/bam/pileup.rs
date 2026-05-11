@@ -153,10 +153,10 @@ pub(super) fn read_context_metrics(bases: &[u8], qpos: usize) -> ReadContextMetr
 
 pub(super) fn family_size_tags(
     record: &bam::Record,
-    pipeline: Pipeline,
+    pipeline: Option<Pipeline>,
 ) -> (Option<i32>, Option<i32>, Option<i32>) {
     match pipeline {
-        Pipeline::Fgbio => {
+        Some(Pipeline::Fgbio) => {
             let ab = aux_i32(record, b"aD");
             let ba = aux_i32(record, b"bD");
             let fs = aux_i32(record, b"cD").or_else(|| match (ab, ba) {
@@ -167,7 +167,7 @@ pub(super) fn family_size_tags(
             });
             (ab, ba, fs)
         }
-        Pipeline::Dragen => {
+        Some(Pipeline::Dragen) => {
             let xv = aux_i32(record, b"XV");
             let xw = aux_i32(record, b"XW");
             let fs = match xw {
@@ -176,7 +176,7 @@ pub(super) fn family_size_tags(
             };
             (xv, None, fs)
         }
-        Pipeline::Raw => (None, None, None),
+        Some(Pipeline::Raw) | None => (None, None, None),
     }
 }
 
@@ -211,7 +211,7 @@ pub(super) fn family_size_tags(
 /// that all reads covering a position are captured regardless of which allele they support.
 pub(super) fn tally_pileup(
     pileup: &rust_htslib::bam::pileup::Pileup,
-    pipeline: Pipeline,
+    pipeline: Option<Pipeline>,
     min_base_qual: u8,
     min_map_qual: u8,
     include_duplicates: bool,
@@ -782,7 +782,7 @@ mod tests {
         let mut rec = Record::new();
         rec.push_aux(b"XV", bam::record::Aux::I32(7)).unwrap();
         rec.push_aux(b"XW", bam::record::Aux::I32(3)).unwrap();
-        let (ab, ba, fs) = family_size_tags(&rec, Pipeline::Dragen);
+        let (ab, ba, fs) = family_size_tags(&rec, Some(Pipeline::Dragen));
         assert_eq!(ab, Some(7));
         assert_eq!(ba, None);
         assert_eq!(fs, Some(3));
@@ -793,7 +793,7 @@ mod tests {
         let mut rec = Record::new();
         rec.push_aux(b"XV", bam::record::Aux::I32(5)).unwrap();
         rec.push_aux(b"XW", bam::record::Aux::I32(0)).unwrap();
-        let (_, _, fs) = family_size_tags(&rec, Pipeline::Dragen);
+        let (_, _, fs) = family_size_tags(&rec, Some(Pipeline::Dragen));
         assert_eq!(fs, Some(5));
     }
 
