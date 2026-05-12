@@ -50,7 +50,7 @@ warnings.filterwarnings(
 )
 
 from igv_helpers import (
-    make_bed,
+    make_vcf,
     query_distinct_samples,
     per_read_warning_note,
     resolve_index_uri,
@@ -252,6 +252,13 @@ _has_normal_evidence = data_source.has_optional_table("normal_evidence")
 _has_pon_evidence = data_source.has_optional_table("pon_evidence")
 _has_sample_metrics = data_source.has_optional_table("sample_metrics")
 _has_fragments = data_source.has_optional_table("fragments")
+
+# Extract per-sample resource paths and cohort-level gnomAD path embedded in the DuckDB.
+# These are populated by `geac collect` when the new bam_path/gnomad_path columns are present.
+# Falls back gracefully to empty results for Parquet sources or older DuckDB files.
+_db_resources = data_source.sample_resources()
+_db_gnomad_paths = data_source.embedded_gnomad_paths()
+_embedded_gnomad = _db_gnomad_paths[0] if len(_db_gnomad_paths) == 1 else ""
 if "_alt_reads_cols_cached" not in st.session_state:
     st.session_state["_alt_reads_cols_cached"] = (
         set(con.execute("SELECT * FROM alt_reads LIMIT 0").df().columns)
@@ -933,9 +940,14 @@ target_regions = st.sidebar.text_input(
     help="Path to a BED or interval list file. When set, it is added as a track in every IGV session.",
 )
 if _has_data("gnomad_af"):
+    if len(_db_gnomad_paths) > 1:
+        st.sidebar.warning(
+            "Multiple gnomAD paths found in database; set 'gnomAD track' explicitly or via geac.toml.",
+            icon="⚠️",
+        )
     gnomad_track = st.sidebar.text_input(
         "gnomAD track (optional)",
-        value=_cfg.get("gnomad_track", ""),
+        value=_cfg.get("gnomad_track") or _embedded_gnomad,
         help="Path or URI to a gnomAD VCF/BCF. When set, it is added as a track in IGV sessions.",
     )
     gnomad_track_index = st.sidebar.text_input(
@@ -1023,6 +1035,13 @@ if manifest_path and manifest_path.strip():
     except Exception as e:
         st.sidebar.error(f"Could not load manifest: {e}")
 
+# Merge: start from embedded DB paths, then overlay the user-provided manifest.
+# Per-sample entries from manifest.tsv override entries from DuckDB.
+if _db_resources:
+    manifest = {**_db_resources, **manifest}
+    if not manifest_path or not manifest_path.strip():
+        st.sidebar.caption(f"{len(_db_resources):,} samples resolved from database")
+
 if data_source.is_duckdb:
     st.sidebar.divider()
     with st.sidebar.expander("Advanced", expanded=False):
@@ -1085,8 +1104,8 @@ with st.sidebar.expander("Filter state", expanded=False):
             st.rerun()
 
 # ── IGV helper functions ───────────────────────────────────────────────────────
-def launch_igv_session(session_xml: str, bed: str, sort_locus: str = "") -> str:
-    """Write session.xml and positions.bed to a temp dir and load in IGV.
+def launch_igv_session(session_xml: str, vcf: str, sort_locus: str = "") -> str:
+    """Write session.xml and positions.vcf to a temp dir and load in IGV.
 
     Tries the IGV REST API (localhost:60151) first — works if IGV is already
     running. If the connection is refused, launches IGV via subprocess.
@@ -1101,11 +1120,11 @@ def launch_igv_session(session_xml: str, bed: str, sort_locus: str = "") -> str:
 
     tmp = tempfile.mkdtemp(prefix="geac_igv_")
     session_path = _os.path.join(tmp, "session.xml")
-    bed_path     = _os.path.join(tmp, "positions.bed")
+    vcf_path     = _os.path.join(tmp, "positions.vcf")
     with open(session_path, "w") as f:
         f.write(session_xml)
-    with open(bed_path, "w") as f:
-        f.write(bed)
+    with open(vcf_path, "w") as f:
+        f.write(vcf)
 
     def _igv_sort_by_base(locus: str) -> None:
         """Send a sort-by-base command to IGV via the socket command interface.
@@ -1234,8 +1253,8 @@ def make_igv_session(
             resources.append(f'        <Resource path="{bam}" name="{label}"{index_attr}/>')
             tracks.append(f'        <Track id="{bam}" name="{label}"/>')
 
-    resources.append('        <Resource path="positions.bed" name="Selected positions"/>')
-    tracks.append('        <Track id="positions.bed" name="Selected positions" color="255,0,0" height="40"/>')
+    resources.append('        <Resource path="positions.vcf" name="Selected positions"/>')
+    tracks.append('        <Track id="positions.vcf" name="Selected positions" color="255,0,0" height="40"/>')
 
     xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n'
@@ -1357,7 +1376,7 @@ def igv_buttons(
         pbar.progress(1.0, text=f"Done — {fetched:,} records fetched.")
 
         igv_df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
-        bed = make_bed(igv_df)
+        vcf = make_vcf(igv_df)
         session, sort_locus = make_igv_session(
             igv_df,
             manifest,
@@ -1369,14 +1388,14 @@ def igv_buttons(
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("session.xml", session)
-            zf.writestr("positions.bed", bed)
+            zf.writestr("positions.vcf", vcf)
         st.session_state[f"{key}_igv"]        = buf.getvalue()
         st.session_state[f"{key}_session"]    = session
-        st.session_state[f"{key}_bed"]        = bed
+        st.session_state[f"{key}_vcf"]        = vcf
         st.session_state[f"{key}_sort_locus"] = sort_locus
 
         if auto_launch_igv:
-            msg = launch_igv_session(session, bed, sort_locus)
+            msg = launch_igv_session(session, vcf, sort_locus)
             st.info(msg)
 
     if f"{key}_igv" in st.session_state:

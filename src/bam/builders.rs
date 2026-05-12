@@ -28,6 +28,9 @@ pub(super) struct LocusContext {
     label3: Option<String>,
     timepoint: Option<String>,
     input_checksum_sha256: Option<String>,
+    bam_path: Option<String>,
+    variants_path: Option<String>,
+    gnomad_path: Option<String>,
     on_target: Option<bool>,
     gene: Option<String>,
     homopolymer_len: i32,
@@ -78,6 +81,22 @@ impl LocusContext {
             label3: args.label3.clone(),
             timepoint: args.timepoint.clone(),
             input_checksum_sha256,
+            bam_path: Some(
+                args.bam_uri
+                    .clone()
+                    .unwrap_or_else(|| args.input.to_string_lossy().into_owned()),
+            ),
+            variants_path: args.variants_uri.clone().or_else(|| {
+                args.vcf
+                    .as_ref()
+                    .or(args.variants_tsv.as_ref())
+                    .map(|p| p.to_string_lossy().into_owned())
+            }),
+            gnomad_path: args.gnomad_uri.clone().or_else(|| {
+                args.gnomad
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+            }),
             on_target,
             gene,
             homopolymer_len: repeat.homopolymer_len,
@@ -149,6 +168,9 @@ impl LocusContext {
             label3: self.label3.clone(),
             timepoint: self.timepoint.clone(),
             input_checksum_sha256: self.input_checksum_sha256.clone(),
+            bam_path: self.bam_path.clone(),
+            variants_path: self.variants_path.clone(),
+            gnomad_path: self.gnomad_path.clone(),
             variant_called,
             variant_filter,
             on_target: self.on_target,

@@ -136,6 +136,14 @@ workflow GeacCollect {
             reads_output          = reads_output,
             input_checksum_sha256 = input_checksum_sha256,
             threads               = threads,
+            # Derive cloud URIs from the File inputs via File→String coercion.
+            # On Terra the workflow-level File value is the original gs:// URI;
+            # the task receives the localized path via the File parameter and the
+            # original URI here, so geac stores the cloud path rather than the
+            # ephemeral local path.
+            bam_uri               = input_bam,
+            variants_uri          = if defined(vcf) then vcf else variants_tsv,
+            gnomad_uri            = gnomad,
             docker_image          = docker_image,
             memory_gb             = memory_gb,
             disk_gb               = disk_gb,
@@ -189,6 +197,10 @@ task Collect {
         Boolean input_checksum_sha256
         Int     threads
 
+        String? bam_uri
+        String? variants_uri
+        String? gnomad_uri
+
         String docker_image
         Int    memory_gb
         Int    disk_gb
@@ -233,7 +245,10 @@ task Collect {
             ~{if include_secondary     then "--include-secondary"     else ""} \
             ~{if include_supplementary then "--include-supplementary" else ""} \
             ~{if input_checksum_sha256 then "--input-checksum-sha256" else ""} \
-            ~{if reads_output then "--reads-output" else ""}
+            ~{if reads_output then "--reads-output" else ""} \
+            ~{"--bam-uri "      + bam_uri} \
+            ~{"--variants-uri " + variants_uri} \
+            ~{"--gnomad-uri "   + gnomad_uri}
     >>>
 
     output {

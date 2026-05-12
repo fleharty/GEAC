@@ -555,7 +555,34 @@ fn merge_duckdb_inputs(
 
 fn rebuild_samples_summary(conn: &Connection) -> Result<()> {
     info!("(re)building samples summary table...");
-    conn.execute_batch(
+
+    // Discover which columns actually exist in alt_bases (older Parquet files may
+    // predate the resource-path columns; using union_by_name=true during merge
+    // means they may be absent).
+    let alt_bases_cols: std::collections::HashSet<String> = conn
+        .prepare("DESCRIBE SELECT * FROM alt_bases LIMIT 0")
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<String>>())
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    let resource_cols = ["bam_path", "variants_path", "gnomad_path"];
+    let resource_selects: String = resource_cols
+        .iter()
+        .map(|col| {
+            if alt_bases_cols.contains(*col) {
+                format!("ANY_VALUE({col})                        AS {col}")
+            } else {
+                format!("NULL::VARCHAR                           AS {col}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",\n             ");
+
+    let sql = format!(
         "DROP TABLE IF EXISTS samples;
          CREATE TABLE samples AS
          SELECT
@@ -567,12 +594,15 @@ fn rebuild_samples_summary(conn: &Connection) -> Result<()> {
              MIN(pos)                                   AS min_pos,
              MAX(pos)                                   AS max_pos,
              ANY_VALUE(read_type)                       AS read_type,
-             ANY_VALUE(pipeline)                        AS pipeline
+             ANY_VALUE(pipeline)                        AS pipeline,
+             {resource_selects}
          FROM alt_bases
          GROUP BY sample_id, batch
-         ORDER BY sample_id, batch;",
-    )
-    .context("failed to build samples summary table")?;
+         ORDER BY sample_id, batch;"
+    );
+
+    conn.execute_batch(&sql)
+        .context("failed to build samples summary table")?;
 
     let n_samples: i64 = conn
         .query_row("SELECT COUNT(*) FROM samples", [], |row| row.get(0))

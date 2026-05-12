@@ -8,10 +8,11 @@ import sys
 import os
 
 import duckdb
+import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from igv_helpers import make_bed, query_distinct_samples, resolve_index_uri
+from igv_helpers import make_vcf, query_distinct_samples, resolve_index_uri
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -120,69 +121,118 @@ class TestResolveIndexUri:
         assert resolve_index_uri(track, None) == track + ".tbi"
 
 
-class TestMakeBed:
-    """Verify BED coordinate generation, especially the deletion off-by-one.
+_MISSING = "./.:.:.:."
 
-    GEAC coordinate convention for deletions:
-        pos       = anchor (0-based reference base before the deletion, VCF style)
-        alt_allele = "-" + deleted_bases  (e.g. "-ACG" for a 3-base deletion)
 
-    The deleted bases span pos+1 .. pos+del_len (0-based).
-    The correct BED interval to cover anchor + all deleted bases is:
-        [pos,  pos + len(alt_allele))
-    which equals [pos, pos + 1 + del_len) — the '-' prefix in the alt allele
-    length coincidentally supplies the +1 needed for the half-open BED end.
+class TestMakeVcf:
+    """Verify VCF generation: coordinate conversion, allele encoding, multi-sample layout.
 
-    BED start is always pos (the anchor), matching VCF POS convention.
-    In IGV, the deletion gap in reads starts at pos+1 (one base after the anchor).
+    GEAC coordinate convention:
+        pos        = 0-based; VCF POS = pos + 1
+        ref_allele = single anchor base
+        alt_allele = plain base (SNV), "-" + deleted (deletion), "+" + inserted (insertion)
     """
 
-    def _row(self, chrom, pos, alt_allele, variant_type="SNV"):
-        import pandas as pd
+    def _row(self, chrom, pos, ref_allele, alt_allele, variant_type="SNV",
+             sample_id="S1", alt_count=3, ref_count=97, total_depth=100, vaf=0.03):
         return pd.DataFrame([{
-            "chrom": chrom,
-            "pos": pos,
-            "alt_allele": alt_allele,
-            "variant_type": variant_type,
+            "chrom": chrom, "pos": pos, "ref_allele": ref_allele,
+            "alt_allele": alt_allele, "variant_type": variant_type,
+            "sample_id": sample_id, "alt_count": alt_count,
+            "ref_count": ref_count, "total_depth": total_depth, "vaf": vaf,
         }])
 
-    def test_snv_single_base_interval(self):
-        bed = make_bed(self._row("chr1", 100, "T", "SNV"))
-        assert bed == "chr1\t100\t101\n"
+    def _data_lines(self, vcf_str):
+        return [l for l in vcf_str.splitlines() if l and not l.startswith("#")]
 
-    def test_deletion_3bp(self):
-        # pos=100 (anchor), deleted bases ACG at positions 101-103 (0-based)
-        # BED end = 100 + len("-ACG") = 100 + 4 = 104 (exclusive)
-        bed = make_bed(self._row("chr1", 100, "-ACG", "deletion"))
-        assert bed == "chr1\t100\t104\n"
+    def _col_header(self, vcf_str):
+        for line in vcf_str.splitlines():
+            if line.startswith("#CHROM"):
+                return line
+        return None
 
-    def test_deletion_1bp(self):
-        # Single-base deletion: anchor at pos, one deleted base at pos+1
-        # BED end = pos + len("-A") = pos + 2
-        bed = make_bed(self._row("chr1", 500, "-A", "deletion"))
-        assert bed == "chr1\t500\t502\n"
+    def test_snv_pos_is_one_based(self):
+        vcf = make_vcf(self._row("chr1", 100, "A", "T"))
+        fields = self._data_lines(vcf)[0].split("\t")
+        assert fields[0] == "chr1"
+        assert fields[1] == "101"   # 0-based 100 → 1-based 101
 
-    def test_deletion_covers_anchor_and_all_deleted_bases(self):
-        # Verify interval width: anchor (1) + deleted bases (del_len) = len(alt)
-        import pandas as pd
-        pos, alt = 200, "-TTTTTT"  # 6-base deletion
-        df = self._row("chr1", pos, alt, "deletion")
-        bed = make_bed(df)
-        parts = bed.strip().split("\t")
-        start, end = int(parts[1]), int(parts[2])
-        del_len = len(alt) - 1  # exclude the '-' prefix
-        assert start == pos
-        assert end == pos + del_len + 1  # exclusive end covers through last deleted base
-        assert end - start == len(alt)   # interval width = anchor + del_len
+    def test_snv_ref_alt_passthrough(self):
+        vcf = make_vcf(self._row("chr1", 100, "A", "T"))
+        fields = self._data_lines(vcf)[0].split("\t")
+        assert fields[3] == "A"
+        assert fields[4] == "T"
 
-    def test_multi_locus_sorted_output(self):
-        import pandas as pd
+    def test_deletion_allele_expansion(self):
+        # alt_allele="-ACG" → VCF REF=AACG, ALT=A
+        vcf = make_vcf(self._row("chr1", 100, "A", "-ACG", variant_type="deletion"))
+        fields = self._data_lines(vcf)[0].split("\t")
+        assert fields[3] == "AACG"
+        assert fields[4] == "A"
+
+    def test_insertion_allele_expansion(self):
+        # alt_allele="+ACGT" → VCF REF=A, ALT=AACGT
+        vcf = make_vcf(self._row("chr1", 100, "A", "+ACGT", variant_type="insertion"))
+        fields = self._data_lines(vcf)[0].split("\t")
+        assert fields[3] == "A"
+        assert fields[4] == "AACGT"
+
+    def test_format_fields_present(self):
+        vcf = make_vcf(self._row("chr1", 100, "A", "T",
+                                  alt_count=3, ref_count=97, total_depth=100, vaf=0.03))
+        fields = self._data_lines(vcf)[0].split("\t")
+        assert fields[8] == "GT:DP:AD:VAF"
+        assert fields[9] == "./.:100:97,3:0.03"
+
+    def test_single_sample_column_in_header(self):
+        vcf = make_vcf(self._row("chr1", 100, "A", "T", sample_id="MY_SAMPLE"))
+        assert self._col_header(vcf).endswith("\tMY_SAMPLE")
+
+    def test_multi_sample_absent_sample_gets_missing_sentinel(self):
         df = pd.DataFrame([
-            {"chrom": "chr1", "pos": 300, "alt_allele": "G",    "variant_type": "SNV"},
-            {"chrom": "chr1", "pos": 100, "alt_allele": "-AC",  "variant_type": "deletion"},
-            {"chrom": "chr2", "pos": 50,  "alt_allele": "T",    "variant_type": "SNV"},
+            {"chrom": "chr1", "pos": 100, "ref_allele": "A", "alt_allele": "T",
+             "variant_type": "SNV", "sample_id": "S1",
+             "alt_count": 5, "ref_count": 95, "total_depth": 100, "vaf": 0.05},
+            {"chrom": "chr1", "pos": 200, "ref_allele": "C", "alt_allele": "G",
+             "variant_type": "SNV", "sample_id": "S2",
+             "alt_count": 2, "ref_count": 98, "total_depth": 100, "vaf": 0.02},
         ])
-        lines = make_bed(df).strip().split("\n")
-        assert lines[0] == "chr1\t100\t103"  # deletion: 100 + len("-AC") = 103
-        assert lines[1] == "chr1\t300\t301"  # SNV
-        assert lines[2] == "chr2\t50\t51"    # SNV
+        vcf = make_vcf(df)
+        col_hdr = self._col_header(vcf)
+        assert "S1" in col_hdr and "S2" in col_hdr
+        data = self._data_lines(vcf)
+        assert len(data) == 2
+        cols = col_hdr.split("\t")
+        s1_col = cols.index("S1")
+        s2_col = cols.index("S2")
+        # First variant (pos 101): S1 present, S2 absent
+        row1 = data[0].split("\t")
+        assert row1[1] == "101"
+        assert row1[s1_col] != _MISSING
+        assert row1[s2_col] == _MISSING
+        # Second variant (pos 201): S2 present, S1 absent
+        row2 = data[1].split("\t")
+        assert row2[1] == "201"
+        assert row2[s2_col] != _MISSING
+        assert row2[s1_col] == _MISSING
+
+    def test_rows_sorted_by_chrom_then_pos(self):
+        df = pd.DataFrame([
+            {"chrom": "chr2", "pos": 50,  "ref_allele": "A", "alt_allele": "T",
+             "variant_type": "SNV", "sample_id": "S1",
+             "alt_count": 1, "ref_count": 9, "total_depth": 10, "vaf": 0.1},
+            {"chrom": "chr1", "pos": 300, "ref_allele": "C", "alt_allele": "G",
+             "variant_type": "SNV", "sample_id": "S1",
+             "alt_count": 1, "ref_count": 9, "total_depth": 10, "vaf": 0.1},
+            {"chrom": "chr1", "pos": 100, "ref_allele": "G", "alt_allele": "A",
+             "variant_type": "SNV", "sample_id": "S1",
+             "alt_count": 1, "ref_count": 9, "total_depth": 10, "vaf": 0.1},
+        ])
+        data = self._data_lines(make_vcf(df))
+        positions = [(r.split("\t")[0], int(r.split("\t")[1])) for r in data]
+        assert positions == [("chr1", 101), ("chr1", 301), ("chr2", 51)]
+
+    def test_empty_dataframe_returns_header_only(self):
+        vcf = make_vcf(pd.DataFrame())
+        assert "##fileformat=VCFv4.2" in vcf
+        assert self._data_lines(vcf) == []

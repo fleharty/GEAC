@@ -10,58 +10,80 @@ import duckdb
 import pandas as pd
 
 
-def make_bed(df: pd.DataFrame) -> str:
-    """Build a BED string from a DataFrame of alt_bases rows.
+def make_vcf(df: pd.DataFrame) -> str:
+    """Build a multi-sample VCF string from a DataFrame of alt_bases rows.
 
-    Coordinate convention (GEAC uses 0-based positions, BED is 0-based half-open):
+    Coordinate convention:
+        GEAC stores 0-based positions; VCF is 1-based, so POS = pos + 1.
+        ref_allele is always the single anchor base.
 
-    SNV / insertion:
-        BED [pos, pos+1) — single-base interval at the variant position.
+    Allele encoding:
+        SNV       alt_allele = "T"     → REF=ref_allele,           ALT=alt_allele
+        deletion  alt_allele = "-ACG"  → REF=ref_allele+"ACG",     ALT=ref_allele
+        insertion alt_allele = "+ACGT" → REF=ref_allele,           ALT=ref_allele+"ACGT"
 
-    Deletion (alt_allele starts with '-', e.g. "-ACG"):
-        pos       = anchor position (the reference base before the deletion;
-                    same VCF-convention anchor that GEAC stores for every indel).
-        del_len   = number of deleted bases = len(alt_allele) - 1
-        BED start = pos      (anchor — one base before the deletion gap)
-        BED end   = pos + len(alt_allele)
-                  = pos + 1 + del_len   (exclusive, covers anchor + all deleted bases)
-
-    The '-' prefix in alt_allele has length 1, which happens to cancel the +1
-    needed for the half-open BED end, so `pos + len(alt_allele)` is the correct
-    exclusive end without any separate adjustment.
-
-    Where multiple records share the same (chrom, pos), the largest end coordinate
-    is used so that the longest deletion at a locus is fully covered.
-
-    Target-boundary note: the Rust collector marks a deletion as on-target if any
-    part of its deleted range overlaps a target interval (not just the anchor). So
-    a deletion whose anchor is before the target but whose deleted bases span or
-    overlap the target will be included when "On target" is selected. The BED
-    interval reflects the full deletion extent — intentional, since truncating at
-    the target boundary would misrepresent the variant in IGV.
+    Output: one row per unique (CHROM, POS, REF, ALT), one FORMAT/sample column
+    per distinct sample_id (sorted).  Samples absent at a locus are filled with
+    the missing-data sentinel "./.:.:.:.".
     """
-    def _end(row) -> int:
-        alt = str(row["alt_allele"])
-        if row["variant_type"] == "deletion" and alt.startswith("-"):
-            # pos is the anchor; deleted bases span pos+1 .. pos+(len(alt)-1).
-            # BED exclusive end to include the last deleted base:
-            #   pos + (len(alt)-1) + 1 = pos + len(alt)
-            return int(row["pos"]) + len(alt)
-        return int(row["pos"]) + 1
+    _HEADER = "\n".join([
+        "##fileformat=VCFv4.2",
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+        '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Total read depth">',
+        '##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths for ref and alt alleles">',
+        '##FORMAT=<ID=VAF,Number=A,Type=Float,Description="Variant allele fraction">',
+    ])
 
+    if df.empty:
+        return _HEADER + "\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\n"
+
+    samples = sorted(df["sample_id"].unique().tolist())
+
+    def _vcf_alleles(ref: str, alt: str) -> tuple[str, str]:
+        if alt.startswith("-"):
+            return ref + alt[1:], ref
+        if alt.startswith("+"):
+            return ref, ref + alt[1:]
+        return ref, alt
+
+    # Build a format string for each row, then pivot to (variant_key × sample).
     tmp = df.copy()
-    tmp["bed_end"] = tmp.apply(_end, axis=1)
-    positions = (
-        tmp.groupby(["chrom", "pos"])["bed_end"]
-        .max()
-        .reset_index()
-        .sort_values(["chrom", "pos"])
+    tmp["_fmt"] = (
+        "./."
+        + ":" + tmp["total_depth"].astype(int).astype(str)
+        + ":" + tmp["ref_count"].astype(int).astype(str) + "," + tmp["alt_count"].astype(int).astype(str)
+        + ":" + tmp["vaf"].astype(str)
     )
-    lines = [
-        f"{row.chrom}\t{int(row.pos)}\t{int(row.bed_end)}"
-        for row in positions.itertuples(index=False)
-    ]
-    return "\n".join(lines) + "\n"
+
+    # Deduplicate: if the same sample appears twice at the same variant key, keep first.
+    tmp = tmp.drop_duplicates(subset=["chrom", "pos", "ref_allele", "alt_allele", "sample_id"])
+
+    pivot = tmp.pivot(
+        index=["chrom", "pos", "ref_allele", "alt_allele"],
+        columns="sample_id",
+        values="_fmt",
+    ).reindex(columns=samples).fillna("./.:.:.:.").reset_index()
+
+    alleles = pivot.apply(
+        lambda r: _vcf_alleles(r["ref_allele"], r["alt_allele"]), axis=1
+    )
+    pivot["vcf_pos"] = pivot["pos"].astype(int) + 1
+    pivot["vcf_ref"] = [a[0] for a in alleles]
+    pivot["vcf_alt"] = [a[1] for a in alleles]
+    pivot = pivot.sort_values(["chrom", "vcf_pos"])
+
+    col_header = "\t".join(
+        ["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT"] + samples
+    )
+    rows = []
+    for _, r in pivot.iterrows():
+        sample_cols = [str(r[s]) for s in samples]
+        rows.append("\t".join(
+            [r["chrom"], str(int(r["vcf_pos"])), ".", r["vcf_ref"], r["vcf_alt"], ".", ".", ".", "GT:DP:AD:VAF"]
+            + sample_cols
+        ))
+
+    return _HEADER + "\n" + col_header + "\n" + "\n".join(rows) + "\n"
 
 
 def insert_size_active_part(

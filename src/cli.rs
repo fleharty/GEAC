@@ -201,6 +201,22 @@ pub struct CollectArgs {
     #[arg(long, default_value_t = 10)]
     pub repeat_window: usize,
 
+    /// Canonical URI for the input BAM/CRAM (e.g. gs://bucket/sample.bam).
+    /// When set, stored in output Parquet instead of the local --input path.
+    /// Useful when running on Terra or other platforms that localize cloud files.
+    #[arg(long)]
+    pub bam_uri: Option<String>,
+
+    /// Canonical URI for the variants file (VCF or TSV) passed via --vcf/--variants-tsv.
+    /// When set, stored in output Parquet instead of the local file path.
+    #[arg(long)]
+    pub variants_uri: Option<String>,
+
+    /// Canonical URI for the gnomAD VCF passed via --gnomad.
+    /// When set, stored in output Parquet instead of the local file path.
+    #[arg(long)]
+    pub gnomad_uri: Option<String>,
+
     /// Progress reporting interval in seconds (0 to disable)
     #[arg(long, default_value_t = 30)]
     pub progress_interval: u64,

@@ -157,6 +157,16 @@ pub struct AltBase {
     pub mean_delta_n_frac: Option<f32>,
     /// Fraction of alt reads where N context is asymmetric (high after, low/none before).
     pub frac_reads_asymmetric: Option<f32>,
+
+    // Resource paths (stored for downstream use in the Explorer and IGV session generation).
+    // When running on Terra, use --bam-uri / --variants-uri / --gnomad-uri to store the
+    // original cloud URIs instead of the localized local paths.
+    /// Path or URI of the input BAM/CRAM file used to generate this record.
+    pub bam_path: Option<String>,
+    /// Path or URI of the variants file (VCF or TSV) used for annotation, if any.
+    pub variants_path: Option<String>,
+    /// Path or URI of the gnomAD VCF used for allele-frequency annotation, if any.
+    pub gnomad_path: Option<String>,
 }
 
 /// Cross-annotation of tumor alt-base loci against a paired normal sample.

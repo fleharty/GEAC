@@ -54,7 +54,10 @@
         "mean_frac_n_before",
         "mean_frac_n_after",
         "mean_delta_n_frac",
-        "frac_reads_asymmetric"
+        "frac_reads_asymmetric",
+        "bam_path",
+        "variants_path",
+        "gnomad_path"
       ]
     },
     "alt_reads": {
