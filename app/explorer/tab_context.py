@@ -21,6 +21,42 @@ from explorer.data_source import DataSource
 
 
 @dataclass(frozen=True)
+class LociThresholds:
+    """Numeric values of threshold-based locus filters (alt count, VAF, depth, etc.).
+
+    These filters compare per-pipeline count columns and must be applied *after* the
+    pipeline-comparison FULL OUTER JOIN so that a locus with sub-threshold evidence in
+    one pipeline is not misclassified as absent. Categorical filters (chrom, sample,
+    variant type, on_target, …) are unaffected and stay in the CTE WHERE clauses.
+    """
+    min_alt: int = 1       # default 1 = inactive (condition only added when > 1)
+    max_alt: int = 0       # 0 = no cap
+    vaf_lo: float = 0.0
+    vaf_hi: float = 1.0
+    min_depth: int = 0
+    max_depth: int = 0     # 0 = no cap
+    min_fwd_alt: int = 0
+    min_rev_alt: int = 0
+    min_overlap_agree: int = 0
+    min_overlap_disagree: int = 0
+
+    @property
+    def any_active(self) -> bool:
+        return (
+            self.min_alt > 1
+            or self.max_alt > 0
+            or self.vaf_lo > 0.0
+            or self.vaf_hi < 1.0
+            or self.min_depth > 0
+            or self.max_depth > 0
+            or self.min_fwd_alt > 0
+            or self.min_rev_alt > 0
+            or self.min_overlap_agree > 0
+            or self.min_overlap_disagree > 0
+        )
+
+
+@dataclass(frozen=True)
 class PerReadFilters:
     active: bool
     recompute_vaf: bool
@@ -72,6 +108,11 @@ class TabContext:
     reads_where: str              # SQL WHERE fragment for active per-read filters; "" if reads.active is False
     has_fragments: bool           # True iff fragments table/view is present
     fragments_where_parts: list[str]  # pre-built sidebar-filter SQL fragments against fragments table (chrom, midpoint, batch, label1/2/3, timepoint)
+
+    # Threshold filter values — used by pipeline comparison to apply count/VAF/depth
+    # filters post-join rather than pre-join, so sub-threshold evidence is visible
+    loci_thresholds: LociThresholds
+    threshold_conditions: list[str]   # subset of conditions[] that are threshold-based
 
     # Pre-computed summaries
     stats: pd.DataFrame

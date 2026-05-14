@@ -62,6 +62,7 @@ from explorer import (
     MAIN_FILTER_STATE,
     DataSource,
     PerReadFilters,
+    LociThresholds,
     TabContext,
 )
 from explorer.data_source import cached_distinct_values, sort_chroms, parse_region, _sql_str
@@ -1182,6 +1183,7 @@ def make_igv_session(
     target_regions: str = "",
     gnomad_track: str = "",
     gnomad_track_index: str = "",
+    force_pipelines: list[str] | None = None,
 ) -> tuple[str, str]:
     """Build an IGV session XML and return (xml, sort_locus).
 
@@ -1189,6 +1191,11 @@ def make_igv_session(
     ``launch_igv_session`` to sort reads by base via the REST API.  IGV's XML
     session format does not support sort-on-load, so the XML itself contains
     no sort directives.
+
+    *force_pipelines* — when provided, emit one BAM track per (sample_id, pipeline)
+    for every pipeline in the list, regardless of which pipelines appear in *df*.
+    Use this in pipeline-comparison views where unique loci only exist in one
+    pipeline's rows but you still want both BAMs loaded for comparison.
     """
     first = df.sort_values(["chrom", "pos"]).iloc[0]
     locus = f"{first['chrom']}:{max(0, int(first['pos']) - 99)}-{int(first['pos']) + 101}"
@@ -1210,13 +1217,18 @@ def make_igv_session(
     sort_pos = int(first["pos"]) + 1  # IGV is 1-based; GEAC pos is 0-based
     sort_locus = f"{first['chrom']}:{sort_pos}"
 
-    # Build (sample_id, pipeline, track_label) tuples.  When multiple pipelines
-    # are present in df, emit one track per (sample_id, pipeline) pair so both
-    # BAMs appear in the session.  Manifest lookup tries "{sid}__{pipeline}"
-    # first (for manifests with pipeline-specific entries) then falls back to
-    # "{sid}" for backwards compatibility.
-    _has_pipeline = "pipeline" in df.columns and df["pipeline"].nunique() > 1
-    if _has_pipeline:
+    # Build (sample_id, pipeline, track_label) tuples.
+    # force_pipelines: always emit one track per (sample, pipeline) for the given
+    # pipelines — used when igv_df only contains rows from one pipeline (e.g.
+    # unique loci) but the user wants both BAMs loaded for side-by-side comparison.
+    if force_pipelines is not None:
+        _sample_ids = sorted(df["sample_id"].dropna().unique().tolist(), key=str)
+        _track_items = [
+            (sid, pipe, f"{sid} ({pipe})")
+            for sid in _sample_ids
+            for pipe in force_pipelines
+        ]
+    elif "pipeline" in df.columns and df["pipeline"].nunique() > 1:
         _sid_pipe_pairs = (
             df[["sample_id", "pipeline"]]
             .drop_duplicates()
@@ -1280,6 +1292,8 @@ def igv_buttons(
     display_df: pd.DataFrame,
     key: str,
     use_global_filters: bool = True,
+    available_samples: list[str] | None = None,
+    force_pipelines: list[str] | None = None,
 ):
     """Render IGV Prepare + Download buttons with chunked progress.
 
@@ -1290,6 +1304,14 @@ def igv_buttons(
                          to *extra_conditions*; when False, use *extra_conditions*
                          alone (e.g. for the position drill-down, which shows all
                          samples at the locus regardless of sidebar filters).
+    available_samples  — when provided, used as the multiselect options instead of
+                         querying the DB filtered to extra_conditions (useful when
+                         extra_conditions encodes only a subset of loci, e.g. the
+                         first 500 of many, but the full sample list is known).
+    force_pipelines    — when provided, passed to make_igv_session so that one BAM
+                         track is emitted per (sample, pipeline) for every listed
+                         pipeline, even if igv_df only contains rows from one
+                         pipeline (e.g. unique loci in a pipeline-comparison view).
     """
     if not manifest:
         st.caption("🧭 Add a manifest in the sidebar to enable IGV session download.")
@@ -1297,7 +1319,7 @@ def igv_buttons(
 
     _where_parts = (conditions + extra_conditions) if use_global_filters else extra_conditions
     _extra_w = " AND ".join(_where_parts) if _where_parts else "TRUE"
-    sample_ids = query_distinct_samples(con, table_expr, _extra_w)
+    sample_ids = available_samples if available_samples is not None else query_distinct_samples(con, table_expr, _extra_w)
     n = len(sample_ids)
     cap_samples = sample_ids[:IGV_CAP]
 
@@ -1384,6 +1406,7 @@ def igv_buttons(
             target_regions,
             gnomad_track,
             gnomad_track_index,
+            force_pipelines=force_pipelines,
         )
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1410,13 +1433,24 @@ def igv_buttons(
 
 
 # ── Filtered query ────────────────────────────────────────────────────────────
+# threshold_conditions: subset of conditions[] that compare per-pipeline count
+# columns (alt_count, vaf, depth, fwd/rev alt, overlap).  The pipeline comparison
+# tab strips these from its CTEs and applies them post-join so that a locus with
+# sub-threshold evidence in one pipeline is not misclassified as absent.
+threshold_conditions: list[str] = []
 conditions = []
 if min_alt > 1:
-    conditions.append(f"alt_count >= {min_alt}")
+    _c = f"alt_count >= {min_alt}"
+    conditions.append(_c)
+    threshold_conditions.append(_c)
 if vaf_range != (0.0, 1.0):
-    conditions.append(f"alt_count * 1.0 / total_depth BETWEEN {vaf_range[0]} AND {vaf_range[1]}")
+    _c = f"alt_count * 1.0 / total_depth BETWEEN {vaf_range[0]} AND {vaf_range[1]}"
+    conditions.append(_c)
+    threshold_conditions.append(_c)
 if max_alt > 0:
-    conditions.append(f"alt_count <= {max_alt}")
+    _c = f"alt_count <= {max_alt}"
+    conditions.append(_c)
+    threshold_conditions.append(_c)
 _region = parse_region(chrom_sel, chroms)
 if _region.chrom is not None:
     conditions.append(f"chrom = '{_sql_str(_region.chrom)}'")
@@ -1496,17 +1530,29 @@ if indel_len_range != (1, 500):
         f"OR LENGTH(alt_allele) - 1 BETWEEN {_ilo} AND {_ihi})"
     )
 if min_fwd_alt > 0:
-    conditions.append(f"fwd_alt_count >= {min_fwd_alt}")
+    _c = f"fwd_alt_count >= {min_fwd_alt}"
+    conditions.append(_c)
+    threshold_conditions.append(_c)
 if min_rev_alt > 0:
-    conditions.append(f"rev_alt_count >= {min_rev_alt}")
+    _c = f"rev_alt_count >= {min_rev_alt}"
+    conditions.append(_c)
+    threshold_conditions.append(_c)
 if min_overlap_agree > 0:
-    conditions.append(f"overlap_alt_agree >= {min_overlap_agree}")
+    _c = f"overlap_alt_agree >= {min_overlap_agree}"
+    conditions.append(_c)
+    threshold_conditions.append(_c)
 if min_overlap_disagree > 0:
-    conditions.append(f"overlap_alt_disagree >= {min_overlap_disagree}")
+    _c = f"overlap_alt_disagree >= {min_overlap_disagree}"
+    conditions.append(_c)
+    threshold_conditions.append(_c)
 if min_depth > 0:
-    conditions.append(f"total_depth >= {min_depth}")
+    _c = f"total_depth >= {min_depth}"
+    conditions.append(_c)
+    threshold_conditions.append(_c)
 if max_depth > 0:
-    conditions.append(f"total_depth <= {max_depth}")
+    _c = f"total_depth <= {max_depth}"
+    conditions.append(_c)
+    threshold_conditions.append(_c)
 if variant_called_sel == "Yes":
     conditions.append("variant_called = true")
 elif variant_called_sel == "No":
@@ -1825,6 +1871,19 @@ ctx = TabContext(
     table_expr=table_expr,
     where=where,
     conditions=conditions,
+    threshold_conditions=threshold_conditions,
+    loci_thresholds=LociThresholds(
+        min_alt=min_alt,
+        max_alt=max_alt,
+        vaf_lo=float(vaf_range[0]),
+        vaf_hi=float(vaf_range[1]),
+        min_depth=min_depth,
+        max_depth=max_depth,
+        min_fwd_alt=min_fwd_alt,
+        min_rev_alt=min_rev_alt,
+        min_overlap_agree=min_overlap_agree,
+        min_overlap_disagree=min_overlap_disagree,
+    ),
     schema_cols=_schema_cols,
     has_alt_reads=_has_alt_reads,
     has_normal_evidence=_has_normal_evidence,

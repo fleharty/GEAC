@@ -9,11 +9,12 @@ on the two WHERE fragments to avoid recomputing on every Streamlit rerun.
 from __future__ import annotations
 
 import altair as alt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 from explorer.sbs96 import strat_sbs96_chart, to_spec96_strat
-from explorer.tab_context import TabContext
+from explorer.tab_context import LociThresholds, TabContext
 from pipeline_compare_helpers import (
     build_unique_pipeline_characterization_df,
     summarize_unique_pipeline_groups,
@@ -55,9 +56,15 @@ def render(ctx: TabContext) -> None:
         "Pipeline B", _pc_pipe_b_opts, index=0, key="pipe_cmp_b"
     )
 
-    # Strip any pipeline_sel filter from conditions — this tab manages
-    # pipeline selection internally via its own A/B selectors.
-    _pc_base_conds = [c for c in ctx.conditions if not c.startswith("pipeline IN")]
+    # Strip pipeline_sel and all threshold conditions from the CTEs — this tab
+    # manages pipeline selection internally, and threshold conditions (min alt,
+    # VAF, depth, …) are applied post-join so sub-threshold evidence in one
+    # pipeline is not misclassified as absent.
+    _threshold_set = set(ctx.threshold_conditions)
+    _pc_base_conds = [
+        c for c in ctx.conditions
+        if not c.startswith("pipeline IN") and c not in _threshold_set
+    ]
     _pc_wa = " AND ".join(
         _pc_base_conds + [f"pipeline = '{ctx.sql_str(str(_pc_pipe_a))}'"]
     ) if _pc_base_conds else f"pipeline = '{ctx.sql_str(str(_pc_pipe_a))}'"
@@ -72,9 +79,11 @@ def render(ctx: TabContext) -> None:
         return
 
     _pc_label_map = {
-        "shared": "Shared",
-        "only_a": f"Only {_pc_pipe_a}",
-        "only_b": f"Only {_pc_pipe_b}",
+        "shared":          "Shared",
+        "only_a":          f"Only {_pc_pipe_a}",
+        "only_b":          f"Only {_pc_pipe_b}",
+        "sub_threshold_a": "Sub-threshold",
+        "sub_threshold_b": "Sub-threshold",
     }
     _pc_df["concordance_label"] = _pc_df["concordance"].map(_pc_label_map)
     _pc_shared = _pc_df[_pc_df["concordance"] == "shared"]
@@ -83,7 +92,7 @@ def render(ctx: TabContext) -> None:
     st.divider()
     _render_vaf_correlation(ctx, _pc_shared, _pc_pipe_a, _pc_pipe_b)
     st.divider()
-    _render_unique_loci_table(_pc_df, _pc_pipe_a, _pc_pipe_b)
+    _render_unique_loci_table(ctx, _pc_df, _pc_pipe_a, _pc_pipe_b)
     st.divider()
     _render_unique_characterization(ctx, _pc_df, _pc_pipe_a, _pc_pipe_b)
     st.divider()
@@ -92,20 +101,58 @@ def render(ctx: TabContext) -> None:
     _render_depth_comparison(ctx, _pc_shared, _pc_pipe_a, _pc_pipe_b)
 
 
+def _passes_threshold(df: pd.DataFrame, side: str, t: LociThresholds) -> pd.Series:
+    """Boolean mask: rows where pipeline `side` ('a' or 'b') passes all threshold filters."""
+    mask = df[f"alt_count_{side}"].notna()
+    if t.min_alt > 1:
+        mask = mask & (df[f"alt_count_{side}"] >= t.min_alt)
+    if t.max_alt > 0:
+        mask = mask & (df[f"alt_count_{side}"] <= t.max_alt)
+    if t.vaf_lo > 0.0 or t.vaf_hi < 1.0:
+        mask = mask & df[f"vaf_{side}"].between(t.vaf_lo, t.vaf_hi)
+    if t.min_depth > 0:
+        mask = mask & (df[f"depth_{side}"] >= t.min_depth)
+    if t.max_depth > 0:
+        mask = mask & (df[f"depth_{side}"] <= t.max_depth)
+    for col, attr in [
+        ("fwd_alt_count", "min_fwd_alt"),
+        ("rev_alt_count", "min_rev_alt"),
+        ("overlap_alt_agree", "min_overlap_agree"),
+        ("overlap_alt_disagree", "min_overlap_disagree"),
+    ]:
+        val = getattr(t, attr)
+        if val > 0 and f"{col}_{side}" in df.columns:
+            mask = mask & (df[f"{col}_{side}"].fillna(0) >= val)
+    return mask
+
+
 def _build_or_get_join_df(ctx: TabContext, wa: str, wb: str) -> pd.DataFrame:
-    # Cache on the two WHERE fragments — this full-outer-join scans
-    # table_expr twice and runs on every rerun (Streamlit evaluates all
-    # tab bodies eagerly, not just the active tab).
-    _cache_key = ("pc_df", wa, wb)
+    # Cache on table_expr + the two WHERE fragments (which contain only categorical
+    # conditions — threshold conditions are stripped and applied post-join).
+    # table_expr is also included because per-read filters (cycle, map qual, …)
+    # change table_expr without changing wa/wb.
+    _cache_key = ("pc_df", ctx.table_expr, wa, wb)
     if st.session_state.get("_pc_cache_key") != _cache_key:
         st.session_state["_pc_cache_key"] = _cache_key
+
+        # Include optional count columns needed for post-join threshold application.
+        _opt_cols = [
+            c for c in ("fwd_alt_count", "rev_alt_count", "overlap_alt_agree", "overlap_alt_disagree")
+            if c in ctx.schema_cols
+        ]
+        _opt_cte = "".join(f",\n                           {c}" for c in _opt_cols)
+        _opt_select = "".join(
+            f",\n                    a.{c} AS {c}_a, b.{c} AS {c}_b"
+            for c in _opt_cols
+        )
+
         with ctx.timed("pc_df FULL OUTER JOIN [cache miss]"):
             _result = ctx.con.execute(f"""
                 WITH a AS (
                     SELECT sample_id, chrom, pos, alt_allele, variant_type,
                            ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
                            total_depth, alt_count,
-                           trinuc_context, ref_allele
+                           trinuc_context, ref_allele{_opt_cte}
                     FROM {ctx.table_expr}
                     WHERE {wa}
                 ),
@@ -113,7 +160,7 @@ def _build_or_get_join_df(ctx: TabContext, wa: str, wb: str) -> pd.DataFrame:
                     SELECT sample_id, chrom, pos, alt_allele, variant_type,
                            ROUND(alt_count * 1.0 / total_depth, 4) AS vaf,
                            total_depth, alt_count,
-                           trinuc_context, ref_allele
+                           trinuc_context, ref_allele{_opt_cte}
                     FROM {ctx.table_expr}
                     WHERE {wb}
                 )
@@ -135,7 +182,7 @@ def _build_or_get_join_df(ctx: TabContext, wa: str, wb: str) -> pd.DataFrame:
                         WHEN a.chrom IS NOT NULL AND b.chrom IS NOT NULL THEN 'shared'
                         WHEN a.chrom IS NOT NULL                         THEN 'only_a'
                         ELSE                                                  'only_b'
-                    END AS concordance
+                    END AS concordance{_opt_select}
                 FROM a
                 FULL OUTER JOIN b
                     ON  a.sample_id  = b.sample_id
@@ -144,7 +191,33 @@ def _build_or_get_join_df(ctx: TabContext, wa: str, wb: str) -> pd.DataFrame:
                     AND a.alt_allele = b.alt_allele
             """).df()
         st.session_state["_pc_df_cache"] = _result
-    return st.session_state["_pc_df_cache"]
+
+    _df = st.session_state["_pc_df_cache"].copy()
+
+    # Re-classify concordance when threshold filters are active.  Without this,
+    # a locus with 8 alts in pipeline B (below a "min alt = 12" threshold) appears
+    # absent in the B CTE and is wrongly labelled "unique to A".  The CTEs now use
+    # only categorical conditions; thresholds are applied here on the raw counts.
+    t = ctx.loci_thresholds
+    if t.any_active:
+        _pa = _passes_threshold(_df, "a", t)
+        _pb = _passes_threshold(_df, "b", t)
+        _has_a = _df["alt_count_a"].notna()
+        _has_b = _df["alt_count_b"].notna()
+        _df["concordance"] = np.select(
+            [
+                _pa & _pb,                        # both pass → shared
+                _pa & ~_has_b,                    # A passes, B truly absent → only_a
+                _pb & ~_has_a,                    # B passes, A truly absent → only_b
+                _pa & _has_b & ~_pb,              # A passes, B sub-threshold → sub_threshold_a
+                _pb & _has_a & ~_pa,              # B passes, A sub-threshold → sub_threshold_b
+            ],
+            ["shared", "only_a", "only_b", "sub_threshold_a", "sub_threshold_b"],
+            default="_drop",
+        )
+        _df = _df[_df["concordance"] != "_drop"].reset_index(drop=True)
+
+    return _df
 
 
 def _render_concordance_summary(_pc_df: pd.DataFrame, pipe_a, pipe_b) -> None:
@@ -153,17 +226,24 @@ def _render_concordance_summary(_pc_df: pd.DataFrame, pipe_a, pipe_b) -> None:
     _n_shared = int((_pc_df["concordance"] == "shared").sum())
     _n_only_a = int((_pc_df["concordance"] == "only_a").sum())
     _n_only_b = int((_pc_df["concordance"] == "only_b").sum())
-    _m1, _m2, _m3 = st.columns(3)
-    _m1.metric("Shared loci", f"{_n_shared:,}")
-    _m2.metric(f"Only {pipe_a}", f"{_n_only_a:,}")
-    _m3.metric(f"Only {pipe_b}", f"{_n_only_b:,}")
+    _n_sub    = int(_pc_df["concordance"].isin(["sub_threshold_a", "sub_threshold_b"]).sum())
+    _has_sub  = _n_sub > 0
+    _cols = st.columns(4 if _has_sub else 3)
+    _cols[0].metric("Shared loci", f"{_n_shared:,}")
+    _cols[1].metric(f"Only {pipe_a}", f"{_n_only_a:,}")
+    _cols[2].metric(f"Only {pipe_b}", f"{_n_only_b:,}")
+    if _has_sub:
+        _cols[3].metric("Sub-threshold", f"{_n_sub:,}",
+                        help="One pipeline passes the active threshold filters; "
+                             "the other detects the variant but below threshold. "
+                             "Both pipelines have evidence — this is not a true pipeline difference.")
 
     _conc_counts = (
         _pc_df.groupby(["concordance_label", "variant_type"])
         .size()
         .reset_index(name="n_loci")
     )
-    _conc_order = ["Shared", f"Only {pipe_a}", f"Only {pipe_b}"]
+    _conc_order = ["Shared", f"Only {pipe_a}", f"Only {pipe_b}", "Sub-threshold"]
     _conc_chart = (
         alt.Chart(_conc_counts)
         .mark_bar()
@@ -262,48 +342,119 @@ def _render_vaf_correlation(ctx: TabContext, _pc_shared: pd.DataFrame, pipe_a, p
         )
 
 
-def _render_unique_loci_table(_pc_df: pd.DataFrame, pipe_a, pipe_b) -> None:
-    st.subheader("Loci unique to one pipeline")
-    st.caption(
-        "One pipeline calls these loci; the other does not. "
-        "Highest-priority candidates for manual review."
-    )
+_TABLE_DISPLAY_CAP = 500
 
-    _uniq = _pc_df[_pc_df["concordance"] != "shared"].copy()
-    _uniq["pipeline"] = _uniq["concordance"].map({"only_a": pipe_a, "only_b": pipe_b})
+
+def _render_unique_loci_table(ctx: TabContext, _pc_df: pd.DataFrame, pipe_a, pipe_b) -> None:
+    st.subheader("Loci by pipeline concordance")
+
+    _has_sub = _pc_df["concordance"].isin(["sub_threshold_a", "sub_threshold_b"]).any()
+    _radio_opts = ["Both unique", f"Only {pipe_a}", f"Only {pipe_b}"]
+    if _has_sub:
+        _radio_opts.append("Sub-threshold")
+    _radio_opts.append("In both")
+
     _filter = st.radio(
         "Show",
-        ["Both", f"Only {pipe_a}", f"Only {pipe_b}"],
+        _radio_opts,
         horizontal=True,
         key="pipe_cmp_uniq_filter",
     )
-    if _filter == f"Only {pipe_a}":
-        _show = _uniq[_uniq["concordance"] == "only_a"]
-    elif _filter == f"Only {pipe_b}":
-        _show = _uniq[_uniq["concordance"] == "only_b"]
-    else:
-        _show = _uniq
 
-    _cols = [c for c in [
-        "pipeline", "sample_id", "chrom", "pos", "alt_allele",
-        "variant_type", "vaf_a", "vaf_b", "depth_a", "depth_b",
-    ] if c in _show.columns]
-
-    if _show.empty:
-        st.success("No unique loci for current filter selection.")
+    if _filter == "In both":
+        st.caption(
+            "Loci called by both pipelines. "
+            "VAF columns show each pipeline's call at the same locus."
+        )
+        _uniq = _pc_df[_pc_df["concordance"] == "shared"].copy()
+        _sort_cols = ["chrom", "pos"]
+        _cols = [c for c in [
+            "sample_id", "chrom", "pos", "alt_allele", "variant_type",
+            "vaf_a", "vaf_b", "depth_a", "depth_b",
+        ] if c in _uniq.columns]
+    elif _filter == "Sub-threshold":
+        st.caption(
+            f"Both pipelines detect the variant, but only one passes the active threshold filters. "
+            f"The 'pipeline' column shows which pipeline has the confident call. "
+            f"These are NOT true pipeline-unique calls — both pipelines have alt evidence."
+        )
+        _uniq = _pc_df[_pc_df["concordance"].isin(["sub_threshold_a", "sub_threshold_b"])].copy()
+        _uniq["pipeline"] = _uniq["concordance"].map(
+            {"sub_threshold_a": pipe_a, "sub_threshold_b": pipe_b}
+        )
+        _sort_cols = ["pipeline", "chrom", "pos"]
+        _cols = [c for c in [
+            "pipeline", "sample_id", "chrom", "pos", "alt_allele",
+            "variant_type", "vaf_a", "vaf_b", "depth_a", "depth_b",
+        ] if c in _uniq.columns]
     else:
+        st.caption(
+            "One pipeline calls these loci; the other has zero alt evidence. "
+            "Highest-priority candidates for manual review."
+        )
+        _uniq = _pc_df[_pc_df["concordance"].isin(["only_a", "only_b"])].copy()
+        _uniq["pipeline"] = _uniq["concordance"].map({"only_a": pipe_a, "only_b": pipe_b})
+        if _filter == f"Only {pipe_a}":
+            _uniq = _uniq[_uniq["concordance"] == "only_a"]
+        elif _filter == f"Only {pipe_b}":
+            _uniq = _uniq[_uniq["concordance"] == "only_b"]
+        _sort_cols = ["pipeline", "chrom", "pos"]
+        _cols = [c for c in [
+            "pipeline", "sample_id", "chrom", "pos", "alt_allele",
+            "variant_type", "vaf_a", "vaf_b", "depth_a", "depth_b",
+        ] if c in _uniq.columns]
+
+    if _uniq.empty:
+        st.success("No loci for current filter selection.")
+    else:
+        _col_rename = {
+            "vaf_a":   f"vaf_{pipe_a}",
+            "vaf_b":   f"vaf_{pipe_b}",
+            "depth_a": f"depth_{pipe_a}",
+            "depth_b": f"depth_{pipe_b}",
+        }
+        _sorted_uniq = _uniq[_cols].rename(columns=_col_rename).sort_values(_sort_cols)
+        _n_total = len(_sorted_uniq)
+
+        if _n_total > _TABLE_DISPLAY_CAP:
+            _show_all = st.checkbox(
+                f"Show all {_n_total:,} loci (default: first {_TABLE_DISPLAY_CAP:,})",
+                value=False,
+                key="pipe_cmp_show_all_loci",
+            )
+            _display_df = _sorted_uniq if _show_all else _sorted_uniq.head(_TABLE_DISPLAY_CAP)
+        else:
+            _display_df = _sorted_uniq
+
         st.dataframe(
-            _show[_cols]
-            .rename(columns={
-                "vaf_a":   f"vaf_{pipe_a}",
-                "vaf_b":   f"vaf_{pipe_b}",
-                "depth_a": f"depth_{pipe_a}",
-                "depth_b": f"depth_{pipe_b}",
-            })
-            .sort_values(["pipeline", "chrom", "pos"]),
+            _display_df,
             width="stretch",
             hide_index=True,
             key="pipe_cmp_uniq_table",
+        )
+
+        # Register all unique loci as a temp view so the IGV session covers every
+        # locus (no cap). A subquery condition is far more compact than thousands
+        # of per-row OR clauses and scales to any number of loci.
+        _loci_df = (
+            _uniq[["sample_id", "chrom", "pos", "alt_allele"]]
+            .dropna()
+            .drop_duplicates()
+        )
+        ctx.con.register("_pc_igv_loci", _loci_df)
+        _igv_cond = (
+            "(sample_id, chrom, pos, alt_allele) IN "
+            "(SELECT sample_id, chrom, pos, alt_allele FROM _pc_igv_loci)"
+        )
+        _igv_key = f"pc_conc_{str(_filter).replace(' ', '_')}_{pipe_a}_{pipe_b}_{_n_total}"
+        _all_samples = sorted(_uniq["sample_id"].dropna().astype(str).unique().tolist())
+        ctx.igv_buttons(
+            [_igv_cond],
+            _uniq,
+            key=_igv_key,
+            use_global_filters=False,
+            available_samples=_all_samples,
+            force_pipelines=[str(pipe_a), str(pipe_b)],
         )
 
 
@@ -315,7 +466,7 @@ def _render_unique_characterization(ctx: TabContext, _pc_df: pd.DataFrame, pipe_
         "or mutational context between the two pipelines."
     )
 
-    _uniq = _pc_df[_pc_df["concordance"] != "shared"].copy()
+    _uniq = _pc_df[_pc_df["concordance"].isin(["only_a", "only_b"])].copy()
     _uniq["pipeline"] = _uniq["concordance"].map({"only_a": pipe_a, "only_b": pipe_b})
 
     _uniq_cmp = build_unique_pipeline_characterization_df(_uniq, str(pipe_a), str(pipe_b))
