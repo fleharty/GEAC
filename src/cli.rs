@@ -40,6 +40,15 @@ pub enum Command {
 
     /// Extract per-fragment metrics (insert size, GC content, end motifs) from a BAM/CRAM file
     Fragments(FragmentsArgs),
+
+    /// Build a gene-unique k-mer index from a reference FASTA + GTF for fusion detection
+    BuildFusionIndex(BuildFusionIndexArgs),
+
+    /// Detect gene fusions from a BAM/CRAM file using a pre-built k-mer index
+    Fusions(FusionsArgs),
+
+    /// Extract read pairs containing k-mers unique to one or more target genes
+    ExtractGene(ExtractGeneArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -535,6 +544,147 @@ pub struct FragmentsArgs {
     /// Minimum mapping quality for R1 reads included in output
     #[arg(long, default_value_t = 0)]
     pub min_map_qual: u8,
+}
+
+#[derive(Parser, Debug)]
+pub struct BuildFusionIndexArgs {
+    /// Gene annotation file in GTF format (.gtf or .gtf.gz)
+    #[arg(long)]
+    pub gtf: PathBuf,
+
+    /// Reference FASTA (must be indexed with samtools faidx — .fai required)
+    #[arg(long)]
+    pub fasta: PathBuf,
+
+    /// K-mer length. Must match the value used later with `geac fusions`
+    #[arg(long, default_value_t = 19)]
+    pub kmer_size: u8,
+
+    /// Drop genes with fewer than this many genome-unique k-mers; these genes
+    /// have too little unique sequence to reliably detect fusions (default: 100)
+    #[arg(long, default_value_t = 100)]
+    pub min_gene_kmers: u32,
+
+    /// Output DuckDB index file (e.g. hg38_fusion_index.duckdb)
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Optional text file listing gene names to include (one per line).
+    /// Lines starting with '#' and blank lines are ignored.
+    /// When provided, only the listed genes are indexed; all others are skipped.
+    /// Useful for building a small targeted index (e.g. a fusion gene panel).
+    #[arg(long)]
+    pub genes: Option<PathBuf>,
+
+    /// Scan the full genome FASTA and remove k-mers that appear more than once
+    /// genome-wide. Disabled by default because the candidate k-mer set (often
+    /// >1 billion entries) requires tens of GB of RAM to hold in a HashMap.
+    /// At k ≥ 19 cross-gene deduplication already eliminates nearly all
+    /// non-unique k-mers; this flag adds a stricter guarantee at high memory cost.
+    #[arg(long, default_value_t = false)]
+    pub check_genome_uniqueness: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct FusionsArgs {
+    /// Input BAM or CRAM file
+    #[arg(long)]
+    pub bam: PathBuf,
+
+    /// Fusion k-mer index produced by `geac build-fusion-index`
+    #[arg(long)]
+    pub index: PathBuf,
+
+    /// Reference FASTA (required for CRAM decoding; optional for BAM)
+    #[arg(short = 'r', long)]
+    pub reference: Option<PathBuf>,
+
+    /// Sample identifier written to the output Parquet.
+    /// If omitted, the SM tag from the BAM/CRAM read group header is used.
+    #[arg(long)]
+    pub sample_id: Option<String>,
+
+    /// Output Parquet file (e.g. sample.fusions.parquet)
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// K-mer length — must match the value used in `geac build-fusion-index`
+    #[arg(long, default_value_t = 19)]
+    pub kmer_size: u8,
+
+    /// Minimum number of unique k-mer hits to a gene for a read to be assigned
+    /// to that gene. Lower values increase sensitivity; higher values reduce noise
+    #[arg(long, default_value_t = 3)]
+    pub min_kmer_hits: u32,
+
+    /// Minimum fragment pairs supporting a fusion to include it in the output
+    #[arg(long, default_value_t = 2)]
+    pub min_supporting_reads: u32,
+
+    /// Minimum mapping quality for reads to be considered
+    #[arg(long, default_value_t = 20)]
+    pub min_mapq: u8,
+
+    /// Optional output BAM containing all reads from fusion-supporting fragments.
+    /// Both reads of a pair are written even if only one read was gene-assigned.
+    #[arg(long)]
+    pub reads_output: Option<PathBuf>,
+
+    /// Optional TSV file for human-readable fusion results.
+    /// Columns: sample_id, gene_a, gene_b, chrom_a, chrom_b, supporting_reads, min_mapq
+    #[arg(long)]
+    pub tsv_output: Option<PathBuf>,
+
+    /// Optional TSV with one row per k-mer hit from fusion-supporting reads.
+    /// Columns: fusion, sample_id, read_name, gene_matched, kmer_hash, kmer_seq
+    #[arg(long)]
+    pub kmer_hits_output: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct ExtractGeneArgs {
+    /// Input BAM or CRAM file
+    #[arg(long)]
+    pub bam: PathBuf,
+
+    /// Fusion k-mer index produced by `geac build-fusion-index`
+    #[arg(long)]
+    pub index: PathBuf,
+
+    /// Reference FASTA (required for CRAM decoding; optional for BAM)
+    #[arg(short = 'r', long)]
+    pub reference: Option<PathBuf>,
+
+    /// Sample identifier written to TSV output.
+    /// If omitted, the SM tag from the BAM/CRAM read group header is used.
+    #[arg(long)]
+    pub sample_id: Option<String>,
+
+    /// Gene name(s) to extract reads for. Repeatable: --gene PAX3 --gene FOXO1
+    #[arg(long = "gene", required = true)]
+    pub genes: Vec<String>,
+
+    /// Output BAM containing all reads from fragments with a k-mer hit to any target gene.
+    /// Both reads of a pair are written even if only one read carries a k-mer hit.
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// K-mer length — must match the value used in `geac build-fusion-index`
+    #[arg(long, default_value_t = 19)]
+    pub kmer_size: u8,
+
+    /// Minimum number of unique k-mer hits to a target gene for a read to count as matching
+    #[arg(long, default_value_t = 3)]
+    pub min_kmer_hits: u32,
+
+    /// Minimum mapping quality for reads to be considered during gene assignment
+    #[arg(long, default_value_t = 20)]
+    pub min_mapq: u8,
+
+    /// Optional TSV with one row per k-mer hit from matching reads.
+    /// Columns: gene_matched, sample_id, read_name, read_end, chrom, pos, kmer_hash, kmer_seq
+    #[arg(long)]
+    pub kmer_hits_output: Option<PathBuf>,
 }
 
 // Allow clap to parse ReadType and Pipeline from strings

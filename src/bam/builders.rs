@@ -1,9 +1,20 @@
+use std::path::Path;
+
 use crate::cli::CollectArgs;
 use crate::record::{AltBase, AltRead, VariantType};
 use crate::repeat::RepeatMetrics;
 
 use super::indel::IndelCount;
 use super::pileup::{true_cycle, BaseTally, LocusNContextSummary, ReadDetail};
+
+/// Return the absolute path string for *p*, falling back to the original
+/// string if canonicalization fails (e.g. symlink resolution error).
+fn abs_path(p: &Path) -> String {
+    std::fs::canonicalize(p)
+        .unwrap_or_else(|_| p.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
 
 pub(super) struct LocusContext {
     sample_id: String,
@@ -84,18 +95,16 @@ impl LocusContext {
             bam_path: Some(
                 args.bam_uri
                     .clone()
-                    .unwrap_or_else(|| args.input.to_string_lossy().into_owned()),
+                    .unwrap_or_else(|| abs_path(&args.input)),
             ),
             variants_path: args.variants_uri.clone().or_else(|| {
                 args.vcf
                     .as_ref()
                     .or(args.variants_tsv.as_ref())
-                    .map(|p| p.to_string_lossy().into_owned())
+                    .map(|p| abs_path(p))
             }),
             gnomad_path: args.gnomad_uri.clone().or_else(|| {
-                args.gnomad
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().into_owned())
+                args.gnomad.as_ref().map(|p| abs_path(p))
             }),
             on_target,
             gene,

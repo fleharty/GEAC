@@ -1,12 +1,16 @@
 #![deny(unsafe_code)]
 #![deny(unsafe_code)]
 mod bam;
+mod build_fusion_index;
 mod cli;
 mod cohort;
 mod coverage;
+mod extract_gene;
 mod fragments;
+mod fusions;
 mod gene_annotations;
 mod gnomad;
+mod kmer;
 mod merge;
 mod normal;
 mod pon;
@@ -290,6 +294,38 @@ fn main() -> Result<()> {
             frag_writer.close()?;
 
             info!("done");
+        }
+
+        Command::BuildFusionIndex(args) => {
+            info!(
+                gtf = %args.gtf.display(),
+                fasta = %args.fasta.display(),
+                output = %args.output.display(),
+                kmer_size = args.kmer_size,
+                "building fusion k-mer index"
+            );
+            build_fusion_index::build_fusion_index(&args)?;
+        }
+
+        Command::Fusions(args) => {
+            info!(
+                bam = %args.bam.display(),
+                index = %args.index.display(),
+                output = %args.output.display(),
+                "detecting gene fusions"
+            );
+            fusions::detect_fusions(&args)?;
+        }
+
+        Command::ExtractGene(args) => {
+            info!(
+                bam = %args.bam.display(),
+                index = %args.index.display(),
+                output = %args.output.display(),
+                genes = ?args.genes,
+                "extracting reads for target gene(s)"
+            );
+            extract_gene::extract_gene(&args)?;
         }
     }
 
