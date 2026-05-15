@@ -1,7 +1,8 @@
 /// Rolling canonical k-mer iterator.
 ///
-/// Yields the canonical form (min of forward and reverse-complement encodings)
-/// of each k-mer in the input sequence. Non-ACGT bytes reset the sliding window.
+/// Yields `(canonical_kmer, start_pos)` where `start_pos` is the 0-based index
+/// of the first base of the k-mer within the input slice. Non-ACGT bytes reset
+/// the sliding window; positions within reset runs are skipped in the output.
 /// Encoding: A=0, C=1, G=2, T=3 (2-bit); k must be 1..=31.
 pub struct KmerIter<'a> {
     seq: &'a [u8],
@@ -14,8 +15,8 @@ pub struct KmerIter<'a> {
 }
 
 impl<'a> Iterator for KmerIter<'a> {
-    type Item = u64;
-    fn next(&mut self) -> Option<u64> {
+    type Item = (u64, usize); // (canonical_kmer, start_pos_in_slice)
+    fn next(&mut self) -> Option<(u64, usize)> {
         while self.pos < self.seq.len() {
             let b = self.seq[self.pos];
             self.pos += 1;
@@ -36,7 +37,9 @@ impl<'a> Iterator for KmerIter<'a> {
             self.rev = (self.rev >> 2) | ((3u64 ^ enc) << (2 * (self.k - 1)));
             self.valid += 1;
             if self.valid >= self.k {
-                return Some(self.fwd.min(self.rev));
+                // pos has already been advanced past the last base, so the k-mer
+                // starts at pos - k.
+                return Some((self.fwd.min(self.rev), self.pos - self.k));
             }
         }
         None
@@ -72,8 +75,19 @@ mod tests {
 
     #[test]
     fn single_kmer() {
-        let kmers: Vec<u64> = kmer_iter(b"ACGT", 4).collect();
-        assert_eq!(kmers.len(), 1);
+        let hits: Vec<(u64, usize)> = kmer_iter(b"ACGT", 4).collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, 0); // starts at position 0
+    }
+
+    #[test]
+    fn positions_are_correct() {
+        // ACGTACGT with k=4: 5 k-mers starting at positions 0,1,2,3,4
+        let hits: Vec<(u64, usize)> = kmer_iter(b"ACGTACGT", 4).collect();
+        assert_eq!(hits.len(), 5);
+        for (i, &(_, pos)) in hits.iter().enumerate() {
+            assert_eq!(pos, i);
+        }
     }
 
     #[test]
@@ -87,12 +101,23 @@ mod tests {
     }
 
     #[test]
+    fn position_after_n_run() {
+        // Sequence: AAAA NNN CCCC (k=4)
+        // k-mer 0: AAAA at pos 0
+        // After NNN, next k-mer CCCC at pos 7
+        let hits: Vec<(u64, usize)> = kmer_iter(b"AAAANNNCCCC", 4).collect();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].1, 0);
+        assert_eq!(hits[1].1, 7); // 4 A's + 3 N's = position 7
+    }
+
+    #[test]
     fn canonical_is_palindrome_idempotent() {
         // A palindromic k-mer (its own RC) should yield the same value for
         // both the forward and RC sequences.
         // ACGT has RC ACGT — it's a palindrome for k=4.
-        let fwd: Vec<u64> = kmer_iter(b"ACGT", 4).collect();
-        let rev: Vec<u64> = kmer_iter(b"ACGT", 4).collect();
+        let fwd: Vec<(u64, usize)> = kmer_iter(b"ACGT", 4).collect();
+        let rev: Vec<(u64, usize)> = kmer_iter(b"ACGT", 4).collect();
         assert_eq!(fwd, rev);
     }
 
@@ -102,8 +127,8 @@ mod tests {
         // (in reverse order since RC reverses the sequence).
         let seq = b"AACCTG";
         let rc = b"CAGGTT";
-        let fwd_kmers: Vec<u64> = kmer_iter(seq, 4).collect();
-        let mut rc_kmers: Vec<u64> = kmer_iter(rc, 4).collect();
+        let fwd_kmers: Vec<u64> = kmer_iter(seq, 4).map(|(k, _)| k).collect();
+        let mut rc_kmers: Vec<u64> = kmer_iter(rc, 4).map(|(k, _)| k).collect();
         rc_kmers.reverse();
         assert_eq!(fwd_kmers, rc_kmers);
     }

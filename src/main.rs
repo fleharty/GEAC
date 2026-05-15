@@ -8,6 +8,7 @@ mod coverage;
 mod extract_gene;
 mod fragments;
 mod fusions;
+mod locate_kmer;
 mod gene_annotations;
 mod gnomad;
 mod kmer;
@@ -326,6 +327,15 @@ fn main() -> Result<()> {
                 "extracting reads for target gene(s)"
             );
             extract_gene::extract_gene(&args)?;
+        }
+
+        Command::LocateKmer(args) => {
+            info!(
+                fasta = %args.fasta.display(),
+                kmer = %args.kmer,
+                "locating k-mer in reference"
+            );
+            locate_kmer::locate_kmer(&args)?;
         }
     }
 

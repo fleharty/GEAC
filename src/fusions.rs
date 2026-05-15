@@ -73,7 +73,7 @@ struct ReadHit {
 fn assign_gene(seq: &[u8], index: &FusionIndex, k: usize, min_hits: u32) -> Option<ReadHit> {
     let mut gene_hits: HashMap<u32, u32> = HashMap::new();
     let mut kmer_hits: Vec<(u64, u32)> = Vec::new();
-    for kmer in kmer_iter(seq, k) {
+    for (kmer, _) in kmer_iter(seq, k) {
         if let Some(&gene_idx) = index.kmer_to_gene.get(&kmer) {
             *gene_hits.entry(gene_idx).or_insert(0) += 1;
             kmer_hits.push((kmer, gene_idx));
@@ -286,11 +286,18 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         reads_processed += 1;
 
         let flags = record.flags();
-        // Skip secondary (0x100), supplementary (0x800), duplicate (0x400), unmapped (0x4)
-        if flags & (0x100 | 0x800 | 0x400 | 0x4) != 0 {
+        // Skip duplicates only. Secondary, supplementary, and unmapped reads are
+        // intentionally included: k-mer matching is alignment-independent, so reads
+        // the aligner couldn't place or split chimerically (the most informative for
+        // fusion detection) still carry useful k-mer signal. Per-fragment dedup is
+        // by qname, so multiple records sharing a qname collapse into one fragment.
+        if flags & 0x400 != 0 {
             continue;
         }
-        if record.mapq() < args.min_mapq {
+        // mapq filter applies only to mapped records; unmapped reads have mapq=0
+        // by convention and would otherwise always be excluded.
+        let is_unmapped = flags & 0x4 != 0;
+        if !is_unmapped && record.mapq() < args.min_mapq {
             continue;
         }
 
@@ -463,8 +470,14 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 reads_written += 1;
             }
         }
+        // Close before indexing.
+        drop(writer);
 
-        info!(reads_written, output = %reads_output.display(), "fusion reads written");
+        info!(reads_written, output = %reads_output.display(), "BAM written");
+
+        bam::index::build(reads_output, None, bam::index::Type::Bai, 0)
+            .with_context(|| format!("failed to index output BAM: {}", reads_output.display()))?;
+        info!(output = %reads_output.display(), "BAI index written");
     }
 
     Ok(())

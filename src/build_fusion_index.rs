@@ -187,6 +187,73 @@ fn write_index(
     Ok(())
 }
 
+// ─── BED output ───────────────────────────────────────────────────────────────
+
+/// Write a BED file of merged intervals covering all unique k-mer start positions.
+///
+/// Adjacent k-mers (positions within `k` bases of the current interval end) are
+/// merged into a single interval so the output is compact. Chromosomes are emitted
+/// in the order they appear in `chrom_order` (i.e. FASTA index order) so the file
+/// is already sorted for bedtools / IGV.
+fn write_kmer_bed(
+    kmer_to_pos: &HashMap<u64, (String, u32)>,
+    chrom_order: &[(String, usize)],
+    k: usize,
+    output: &Path,
+) -> Result<()> {
+    use std::io::{BufWriter, Write};
+
+    // Group positions by chromosome.
+    let mut pos_by_chrom: HashMap<&str, Vec<u32>> = HashMap::new();
+    for (chrom, pos) in kmer_to_pos.values() {
+        pos_by_chrom.entry(chrom.as_str()).or_default().push(*pos);
+    }
+
+    let file = std::fs::File::create(output)
+        .with_context(|| format!("failed to create BED: {}", output.display()))?;
+    let mut w = BufWriter::new(file);
+
+    let mut n_intervals: usize = 0;
+
+    for (chrom_name, _) in chrom_order {
+        let Some(positions) = pos_by_chrom.get(chrom_name.as_str()) else {
+            continue;
+        };
+
+        let mut sorted = positions.clone();
+        sorted.sort_unstable();
+
+        // Merge: extend the current interval while the next k-mer starts before
+        // the current interval ends (i.e. they are adjacent or overlapping).
+        let mut iter = sorted.into_iter();
+        let Some(first) = iter.next() else { continue };
+        let mut interval_start = first;
+        let mut interval_end = first + k as u32;
+
+        for pos in iter {
+            if pos <= interval_end {
+                // Extend: this k-mer overlaps or is immediately adjacent.
+                interval_end = interval_end.max(pos + k as u32);
+            } else {
+                writeln!(w, "{}\t{}\t{}", chrom_name, interval_start, interval_end)?;
+                n_intervals += 1;
+                interval_start = pos;
+                interval_end = pos + k as u32;
+            }
+        }
+        // Flush the last interval.
+        writeln!(w, "{}\t{}\t{}", chrom_name, interval_start, interval_end)?;
+        n_intervals += 1;
+    }
+
+    info!(
+        n_intervals,
+        output = %output.display(),
+        "unique k-mer BED written"
+    );
+    Ok(())
+}
+
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
 const MULTI_GENE: u32 = u32::MAX;
@@ -277,7 +344,7 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
             if start >= end_clamped {
                 continue;
             }
-            for (offset, kmer) in kmer_iter(&chrom_seq[start..end_clamped], k).enumerate() {
+            for (kmer, offset) in kmer_iter(&chrom_seq[start..end_clamped], k) {
                 local
                     .entry(kmer)
                     .and_modify(|v| {
@@ -287,6 +354,8 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
                     })
                     .or_insert(gene_idx);
                 // Record the chromosome position of the first occurrence only.
+                // offset is the true 0-based start position within the slice,
+                // so (start + offset) gives the correct chromosome coordinate.
                 local_pos.entry(kmer).or_insert((start + offset) as u32);
             }
         }
@@ -361,11 +430,11 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
             };
 
             let mut next_report = PROGRESS_INTERVAL;
-            for (i, kmer) in kmer_iter(&seq, k).enumerate() {
+            for (kmer, pos_in_seq) in kmer_iter(&seq, k) {
                 if let Some(cnt) = genome_counts.get_mut(&kmer) {
                     *cnt = cnt.saturating_add(1);
                 }
-                let pos_in_seq = i as u64;
+                let pos_in_seq = pos_in_seq as u64;
                 if pos_in_seq >= next_report {
                     let total_done = bases_done + pos_in_seq;
                     let pct = (total_done * 100) / total_bases.max(1);
@@ -417,6 +486,13 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
     // Step 4 — write the index.
     info!(output = %args.output.display(), "writing fusion index...");
     write_index(&kmer_to_gene, &kmer_to_pos, &genes, &args.output)?;
+
+    // Step 5 — optional BED of merged k-mer intervals.
+    if let Some(ref bed_path) = args.bed_output {
+        info!(output = %bed_path.display(), "writing k-mer coverage BED...");
+        write_kmer_bed(&kmer_to_pos, &seq_list_for_genes, k, bed_path)?;
+    }
+
     info!("done");
     Ok(())
 }

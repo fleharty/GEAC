@@ -49,6 +49,9 @@ pub enum Command {
 
     /// Extract read pairs containing k-mers unique to one or more target genes
     ExtractGene(ExtractGeneArgs),
+
+    /// Search a reference FASTA for all occurrences of a given k-mer sequence
+    LocateKmer(LocateKmerArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -583,6 +586,13 @@ pub struct BuildFusionIndexArgs {
     /// non-unique k-mers; this flag adds a stricter guarantee at high memory cost.
     #[arg(long, default_value_t = false)]
     pub check_genome_uniqueness: bool,
+
+    /// Optional BED file of merged intervals covering all unique k-mer start positions.
+    /// Adjacent k-mers are merged into a single interval, so the output is compact
+    /// and suitable for use as a target BED with IGV, bedtools, or other tools.
+    /// Chromosomes are emitted in FASTA index order.
+    #[arg(long)]
+    pub bed_output: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
@@ -621,8 +631,9 @@ pub struct FusionsArgs {
     #[arg(long, default_value_t = 2)]
     pub min_supporting_reads: u32,
 
-    /// Minimum mapping quality for reads to be considered
-    #[arg(long, default_value_t = 20)]
+    /// Minimum mapping quality for reads to be considered. Unmapped reads
+    /// bypass this filter (k-mer matching is alignment-independent).
+    #[arg(long, default_value_t = 0)]
     pub min_mapq: u8,
 
     /// Optional output BAM containing all reads from fusion-supporting fragments.
@@ -673,18 +684,64 @@ pub struct ExtractGeneArgs {
     #[arg(long, default_value_t = 19)]
     pub kmer_size: u8,
 
-    /// Minimum number of unique k-mer hits to a target gene for a read to count as matching
-    #[arg(long, default_value_t = 3)]
+    /// Minimum number of unique k-mer hits to a target gene for a read to count as matching.
+    /// Defaults to 1: any read with a single unique k-mer from the target gene is captured.
+    /// At k=19 a single k-mer match is already highly specific. Raise this only if you see
+    /// false-positive reads from repetitive regions adjacent to the target gene.
+    #[arg(long, default_value_t = 1)]
     pub min_kmer_hits: u32,
 
-    /// Minimum mapping quality for reads to be considered during gene assignment
-    #[arg(long, default_value_t = 20)]
+    /// Minimum mapping quality for reads to be considered during gene assignment.
+    /// Defaults to 0 so that multimapping reads are not silently dropped. Reads with
+    /// mapq=0 that contain unique k-mers are still highly likely to belong to the target
+    /// gene; raise this only to restrict output to confidently-placed alignments.
+    #[arg(long, default_value_t = 0)]
     pub min_mapq: u8,
 
     /// Optional TSV with one row per k-mer hit from matching reads.
     /// Columns: gene_matched, sample_id, read_name, read_end, chrom, pos, kmer_hash, kmer_seq
     #[arg(long)]
     pub kmer_hits_output: Option<PathBuf>,
+
+    /// Optional BAM for reads from fragments with no k-mer match to any target gene.
+    /// When provided, every record in the input BAM appears in exactly one of
+    /// --output (fragment has a k-mer hit) or --complement-output (fragment has none).
+    /// A BAI index is created automatically alongside this file.
+    #[arg(long)]
+    pub complement_output: Option<PathBuf>,
+
+    /// Diagnostic: dump per-read k-mer-matching detail for reads overlapping
+    /// this region. Format: "chr:start-end" (1-based, inclusive). When set,
+    /// every primary read whose alignment overlaps the region is logged with
+    /// its k-mer extraction and match counts. Use this to debug "expected
+    /// reads missing" scenarios.
+    #[arg(long)]
+    pub debug_region: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+pub struct LocateKmerArgs {
+    /// Reference FASTA (must be indexed with samtools faidx — .fai required)
+    #[arg(long)]
+    pub fasta: PathBuf,
+
+    /// K-mer sequence to search for (e.g. ACGTACGTACGTACGTACG).
+    /// Both the k-mer and its reverse complement are reported; palindromic
+    /// k-mers (equal to their own RC) are reported once with strand "+".
+    /// Length must be 1–31.
+    #[arg(long)]
+    pub kmer: String,
+
+    /// Output TSV file. When omitted, results are written to stdout.
+    /// Columns: chrom, start (0-based), end, strand (+/-)
+    /// When --gene-annotations is provided, additional columns: gene, region
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Optional gene annotation file (GTF, GFF3, or genePred) used to label
+    /// each k-mer hit with the gene name and genomic region (exon/CDS/UTR/intron/intergenic).
+    #[arg(long)]
+    pub gene_annotations: Option<PathBuf>,
 }
 
 // Allow clap to parse ReadType and Pipeline from strings
