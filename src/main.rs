@@ -30,7 +30,7 @@ use anyhow::Result;
 use clap::Parser;
 use tracing::info;
 
-use cli::{Cli, Command};
+use cli::{Cli, Command, ExperimentalCommand};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -297,45 +297,53 @@ fn main() -> Result<()> {
             info!("done");
         }
 
-        Command::BuildFusionIndex(args) => {
-            info!(
-                gtf = %args.gtf.display(),
-                fasta = %args.fasta.display(),
-                output = %args.output.display(),
-                kmer_size = args.kmer_size,
-                "building fusion k-mer index"
+        Command::Experimental(args) => {
+            eprintln!(
+                "warning: 'geac experimental' commands are unstable; outputs and \
+                 CLI flags may change without notice."
             );
-            build_fusion_index::build_fusion_index(&args)?;
-        }
+            match args.command {
+                ExperimentalCommand::BuildFusionIndex(args) => {
+                    info!(
+                        gtf = %args.gtf.display(),
+                        fasta = %args.fasta.display(),
+                        output = %args.output.display(),
+                        kmer_size = args.kmer_size,
+                        "building fusion k-mer index"
+                    );
+                    build_fusion_index::build_fusion_index(&args)?;
+                }
 
-        Command::Fusions(args) => {
-            info!(
-                bam = %args.bam.display(),
-                index = %args.index.display(),
-                output = %args.output.display(),
-                "detecting gene fusions"
-            );
-            fusions::detect_fusions(&args)?;
-        }
+                ExperimentalCommand::Fusions(args) => {
+                    info!(
+                        bam = %args.bam.display(),
+                        index = %args.index.display(),
+                        output = %args.output.display(),
+                        "detecting gene fusions"
+                    );
+                    fusions::detect_fusions(&args)?;
+                }
 
-        Command::ExtractGene(args) => {
-            info!(
-                bam = %args.bam.display(),
-                index = %args.index.display(),
-                output = %args.output.display(),
-                genes = ?args.genes,
-                "extracting reads for target gene(s)"
-            );
-            extract_gene::extract_gene(&args)?;
-        }
+                ExperimentalCommand::ExtractGene(args) => {
+                    info!(
+                        bam = %args.bam.display(),
+                        index = %args.index.display(),
+                        output = %args.output.display(),
+                        genes = ?args.genes,
+                        "extracting reads for target gene(s)"
+                    );
+                    extract_gene::extract_gene(&args)?;
+                }
 
-        Command::LocateKmer(args) => {
-            info!(
-                fasta = %args.fasta.display(),
-                kmer = %args.kmer,
-                "locating k-mer in reference"
-            );
-            locate_kmer::locate_kmer(&args)?;
+                ExperimentalCommand::LocateKmer(args) => {
+                    info!(
+                        fasta = %args.fasta.display(),
+                        kmer = %args.kmer,
+                        "locating k-mer in reference"
+                    );
+                    locate_kmer::locate_kmer(&args)?;
+                }
+            }
         }
     }
 

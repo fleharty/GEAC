@@ -41,16 +41,29 @@ pub enum Command {
     /// Extract per-fragment metrics (insert size, GC content, end motifs) from a BAM/CRAM file
     Fragments(FragmentsArgs),
 
-    /// Build a gene-unique k-mer index from a reference FASTA + GTF for fusion detection
+    /// Experimental tools (k-mer / fusion detection). APIs and outputs may
+    /// change without notice; do not rely on these in production pipelines.
+    Experimental(ExperimentalArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct ExperimentalArgs {
+    #[command(subcommand)]
+    pub command: ExperimentalCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ExperimentalCommand {
+    /// [EXPERIMENTAL] Build a gene-unique k-mer index from a reference FASTA + GTF
     BuildFusionIndex(BuildFusionIndexArgs),
 
-    /// Detect gene fusions from a BAM/CRAM file using a pre-built k-mer index
+    /// [EXPERIMENTAL] Detect gene fusions from a BAM/CRAM using a pre-built k-mer index
     Fusions(FusionsArgs),
 
-    /// Extract read pairs containing k-mers unique to one or more target genes
+    /// [EXPERIMENTAL] Extract read pairs containing k-mers unique to target genes
     ExtractGene(ExtractGeneArgs),
 
-    /// Search a reference FASTA for all occurrences of a given k-mer sequence
+    /// [EXPERIMENTAL] Search a reference FASTA for all occurrences of a k-mer
     LocateKmer(LocateKmerArgs),
 }
 
