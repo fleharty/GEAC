@@ -9,6 +9,8 @@ mod extract_gene;
 mod fragments;
 mod fusions;
 mod locate_kmer;
+mod lookup_kmer;
+mod scan_read;
 mod gene_annotations;
 mod gnomad;
 mod kmer;
@@ -342,6 +344,25 @@ fn main() -> Result<()> {
                         "locating k-mer in reference"
                     );
                     locate_kmer::locate_kmer(&args)?;
+                }
+
+                ExperimentalCommand::LookupKmer(args) => {
+                    info!(
+                        index = %args.index.display(),
+                        kmer = %args.kmer,
+                        "looking up k-mer in fusion index"
+                    );
+                    lookup_kmer::lookup_kmer(&args)?;
+                }
+
+                ExperimentalCommand::ScanRead(args) => {
+                    info!(
+                        index = %args.index.display(),
+                        read_len = args.read.len(),
+                        k = args.kmer_size,
+                        "scanning read sequence against fusion index"
+                    );
+                    scan_read::scan_read(&args)?;
                 }
             }
         }

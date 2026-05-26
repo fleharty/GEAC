@@ -65,6 +65,12 @@ pub enum ExperimentalCommand {
 
     /// [EXPERIMENTAL] Search a reference FASTA for all occurrences of a k-mer
     LocateKmer(LocateKmerArgs),
+
+    /// [EXPERIMENTAL] Look up a k-mer sequence in a fusion index and report its gene + position
+    LookupKmer(LookupKmerArgs),
+
+    /// [EXPERIMENTAL] Scan a read sequence against a fusion index and report every k-mer hit
+    ScanRead(ScanReadArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -573,7 +579,7 @@ pub struct BuildFusionIndexArgs {
     pub fasta: PathBuf,
 
     /// K-mer length. Must match the value used later with `geac fusions`
-    #[arg(long, default_value_t = 19)]
+    #[arg(long, default_value_t = 23)]
     pub kmer_size: u8,
 
     /// Drop genes with fewer than this many genome-unique k-mers; these genes
@@ -632,7 +638,7 @@ pub struct FusionsArgs {
     pub output: PathBuf,
 
     /// K-mer length — must match the value used in `geac build-fusion-index`
-    #[arg(long, default_value_t = 19)]
+    #[arg(long, default_value_t = 23)]
     pub kmer_size: u8,
 
     /// Minimum number of unique k-mer hits to a gene for a read to be assigned
@@ -694,7 +700,7 @@ pub struct ExtractGeneArgs {
     pub output: PathBuf,
 
     /// K-mer length — must match the value used in `geac build-fusion-index`
-    #[arg(long, default_value_t = 19)]
+    #[arg(long, default_value_t = 23)]
     pub kmer_size: u8,
 
     /// Minimum number of unique k-mer hits to a target gene for a read to count as matching.
@@ -755,6 +761,35 @@ pub struct LocateKmerArgs {
     /// each k-mer hit with the gene name and genomic region (exon/CDS/UTR/intron/intergenic).
     #[arg(long)]
     pub gene_annotations: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct LookupKmerArgs {
+    /// Fusion index built by `geac experimental build-fusion-index` (DuckDB)
+    #[arg(long)]
+    pub index: PathBuf,
+
+    /// K-mer sequence to look up (e.g. ACGTACGTACGTACGTACG). The canonical form
+    /// (min of forward and reverse complement) is computed and queried against
+    /// the index. Length must be 1–31.
+    #[arg(long)]
+    pub kmer: String,
+}
+
+#[derive(Parser, Debug)]
+pub struct ScanReadArgs {
+    /// Fusion index built by `geac experimental build-fusion-index` (DuckDB)
+    #[arg(long)]
+    pub index: PathBuf,
+
+    /// Read sequence to scan (e.g. the SEQ field from a BAM record). Must contain
+    /// only ACGT/acgt bases; N bases reset the sliding window just as in fusions.
+    #[arg(long)]
+    pub read: String,
+
+    /// K-mer size used when building the index.
+    #[arg(long, default_value = "23")]
+    pub kmer_size: u8,
 }
 
 // Allow clap to parse ReadType and Pipeline from strings
