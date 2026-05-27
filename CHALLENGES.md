@@ -1106,3 +1106,31 @@ asserts both produce a fragment record.
 designates the order in the FASTQ pair, not the strand. Use TLEN sign or alignment
 strand flags (`0x10`, `0x20`) to reason about strand; use `0x40`/`0x80` only when you
 need to distinguish the two reads of a pair without regard to position.
+
+---
+
+### `geac fusions` OOM after k-mer-size defaults were aligned to the index
+
+**Symptom:** `geac fusions` had run comfortably in ~36 GB; after the `--kmer-size`
+default was changed from 19 to 23, the same run ballooned to tens of GB of swap.
+
+**Root cause:** Two compounding facts. (1) The indexes were built with k=23, but the
+`fusions`/`extract-gene`/`scan-read` defaults were k=19, so the common (no-flag) run
+computed 19-mer hashes that never matched the 23-mer index — almost nothing was
+assigned, and the per-read accumulators stayed nearly empty. The low memory use was an
+artifact of the tool silently matching nothing. (2) `assign_gene` populated
+`ReadHit.kmer_hits: Vec<(u64,u32)>` (every matching k-mer) and a per-read `chrom`
+String for *every* assigned read, retained in `qname_to_reads` until end-of-scan, even
+though that detail is only consumed by the optional `--kmer-hits-output` TSV. Once the
+default k matched the index, every read began matching, and the unconditional detail
+collection (~100 entries/read on deep panels) dominated memory.
+
+**Fix:** Gate per-read detail (`kmer_hits`, `chrom`, `pos`, `is_read1`) behind
+`collect_detail = args.kmer_hits_output.is_some()` in `src/fusions.rs`. Without the
+flag, each `ReadHit` now stores only `gene_idx` + `mapq`. (`extract_gene.rs` already
+gated its detail this way.)
+
+**Lesson:** A "comfortable" memory/runtime profile can be an artifact of a correctness
+bug that suppresses work. When a fix makes the tool actually do its job, re-check the
+resource envelope. Also: never collect optional-output detail unconditionally on a
+per-read hot path.

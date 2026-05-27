@@ -462,6 +462,14 @@ GROUP BY midpoint
 ORDER BY midpoint;
 ```
 
+### Experimental commands (k-mer / fusion detection)
+
+Pre-production tools for alignment-independent gene-fusion detection live under
+`geac experimental <...>` and are documented separately in
+[docs/EXPERIMENTAL.md](docs/EXPERIMENTAL.md). Their APIs, output schemas, and the
+DuckDB index layout may change between releases and are not covered by the stable
+command's test guarantees.
+
 ### Query the cohort (DuckDB)
 
 You can query either a merged DuckDB or raw Parquet files directly.

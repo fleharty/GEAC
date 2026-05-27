@@ -23,9 +23,26 @@ struct FusionIndex {
     kmer_to_gene: HashMap<u64, u32>,
     gene_names: Vec<String>,
     gene_chroms: Vec<String>,
+    /// Genome-wide copy number per k-mer. Populated only when a copy filter is
+    /// requested and the index carries `genome_copies`; empty otherwise.
+    kmer_to_copies: HashMap<u64, u8>,
 }
 
-fn load_index(index_path: &Path) -> Result<FusionIndex> {
+/// Return true if the `kmers` table has a `genome_copies` column.
+fn kmers_has_copies_column(conn: &Connection) -> Result<bool> {
+    let mut stmt = conn.prepare("PRAGMA table_info('kmers')")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        // PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
+        let name: String = row.get(1)?;
+        if name == "genome_copies" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn load_index(index_path: &Path, max_kmer_copies: Option<u32>) -> Result<FusionIndex> {
     let conn = Connection::open(index_path)
         .with_context(|| format!("failed to open fusion index: {}", index_path.display()))?;
 
@@ -42,13 +59,58 @@ fn load_index(index_path: &Path) -> Result<FusionIndex> {
     }
     info!(n_genes = gene_names.len(), "loaded genes from index");
 
-    let mut stmt = conn.prepare("SELECT kmer_hash, gene_index FROM kmers")?;
+    // Only read genome_copies when a copy filter is active. This keeps the default
+    // path identical (and compatible with indexes built before the column existed).
+    let load_copies = max_kmer_copies.is_some();
+    if load_copies {
+        anyhow::ensure!(
+            kmers_has_copies_column(&conn)?,
+            "--max-kmer-copies requires an index built with --check-genome-uniqueness \
+             (the index has no genome_copies column); rebuild the index or drop the flag"
+        );
+        // Fail fast on indexes whose genome_copies are all NULL (column present but
+        // the genome pass never ran) before loading the whole kmers table into RAM.
+        let n_total: i64 =
+            conn.query_row("SELECT count(*) FROM kmers", [], |r| r.get(0))?;
+        let n_with_copies: i64 =
+            conn.query_row("SELECT count(genome_copies) FROM kmers", [], |r| r.get(0))?;
+        anyhow::ensure!(
+            n_total == 0 || n_with_copies > 0,
+            "--max-kmer-copies requires per-k-mer genome copy counts, but the index has \
+             none (genome_copies is NULL for every k-mer); rebuild with --check-genome-uniqueness"
+        );
+    }
+
     let mut kmer_to_gene: HashMap<u64, u32> = HashMap::new();
-    let mut rows = stmt.query([])?;
-    while let Some(row) = rows.next()? {
-        let kmer_i64: i64 = row.get(0)?;
-        let gene_idx: u32 = row.get(1)?;
-        kmer_to_gene.insert(kmer_i64 as u64, gene_idx);
+    let mut kmer_to_copies: HashMap<u64, u8> = HashMap::new();
+
+    if load_copies {
+        let mut stmt = conn.prepare("SELECT kmer_hash, gene_index, genome_copies FROM kmers")?;
+        let mut rows = stmt.query([])?;
+        let mut n_null: u64 = 0;
+        while let Some(row) = rows.next()? {
+            let kmer_i64: i64 = row.get(0)?;
+            let gene_idx: u32 = row.get(1)?;
+            let copies: Option<i32> = row.get(2)?;
+            kmer_to_gene.insert(kmer_i64 as u64, gene_idx);
+            match copies {
+                Some(c) => {
+                    kmer_to_copies.insert(kmer_i64 as u64, c.clamp(0, u8::MAX as i32) as u8);
+                }
+                None => n_null += 1,
+            }
+        }
+        if n_null > 0 {
+            info!(n_null, "some k-mers have NULL genome_copies and will be excluded by the copy filter");
+        }
+    } else {
+        let mut stmt = conn.prepare("SELECT kmer_hash, gene_index FROM kmers")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let kmer_i64: i64 = row.get(0)?;
+            let gene_idx: u32 = row.get(1)?;
+            kmer_to_gene.insert(kmer_i64 as u64, gene_idx);
+        }
     }
     info!(n_kmers = kmer_to_gene.len(), "loaded k-mer index");
 
@@ -56,6 +118,7 @@ fn load_index(index_path: &Path) -> Result<FusionIndex> {
         kmer_to_gene,
         gene_names,
         gene_chroms,
+        kmer_to_copies,
     })
 }
 
@@ -70,13 +133,32 @@ struct ReadHit {
     kmer_hits: Vec<(u64, u32)>, // (kmer_hash, matched_gene_idx) for every kmer that hit any gene
 }
 
-fn assign_gene(seq: &[u8], index: &FusionIndex, k: usize, min_hits: u32) -> Option<ReadHit> {
+fn assign_gene(
+    seq: &[u8],
+    index: &FusionIndex,
+    k: usize,
+    min_hits: u32,
+    collect_detail: bool,
+    max_copies: Option<u32>,
+) -> Option<ReadHit> {
     let mut gene_hits: HashMap<u32, u32> = HashMap::new();
     let mut kmer_hits: Vec<(u64, u32)> = Vec::new();
     for (kmer, _) in kmer_iter(seq, k) {
         if let Some(&gene_idx) = index.kmer_to_gene.get(&kmer) {
+            // Optional genome-wide copy filter: skip k-mers that occur too often
+            // (or whose copy number is unknown — NULL in the index).
+            if let Some(max) = max_copies {
+                match index.kmer_to_copies.get(&kmer) {
+                    Some(&c) if c as u32 <= max => {}
+                    _ => continue,
+                }
+            }
             *gene_hits.entry(gene_idx).or_insert(0) += 1;
-            kmer_hits.push((kmer, gene_idx));
+            // Retaining every matching k-mer for every assigned read costs
+            // gigabytes on deep BAMs; only do it when the detail TSV is requested.
+            if collect_detail {
+                kmer_hits.push((kmer, gene_idx));
+            }
         }
     }
     let (winning_gene, count) = gene_hits
@@ -229,7 +311,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     anyhow::ensure!(k > 0 && k <= 31, "--kmer-size must be between 1 and 31");
 
     info!(index = %args.index.display(), "loading fusion k-mer index...");
-    let index = load_index(&args.index)?;
+    let index = load_index(&args.index, args.max_kmer_copies)?;
 
     let mut reader = bam::Reader::from_path(&args.bam)
         .with_context(|| format!("failed to open BAM/CRAM: {}", args.bam.display()))?;
@@ -276,6 +358,11 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             .collect()
     };
 
+    // Per-read detail (chrom, position, and every matching k-mer) is only consumed
+    // by the optional --kmer-hits-output TSV. Collecting it for every assigned read
+    // otherwise dominates memory on deep BAMs, so gate it behind the flag.
+    let collect_detail = args.kmer_hits_output.is_some();
+
     // qname bytes → list of ReadHit for reads that hit a gene
     let mut qname_to_reads: HashMap<Vec<u8>, Vec<ReadHit>> = HashMap::new();
     let mut reads_processed: u64 = 0;
@@ -302,18 +389,20 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         }
 
         let seq = record.seq().as_bytes();
-        if let Some(mut rh) = assign_gene(&seq, &index, k, args.min_kmer_hits) {
+        if let Some(mut rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, collect_detail, args.max_kmer_copies) {
             rh.mapq = record.mapq();
-            rh.chrom = {
-                let tid = record.tid();
-                if tid >= 0 {
-                    target_names.get(tid as usize).cloned().unwrap_or_else(|| "*".to_string())
-                } else {
-                    "*".to_string()
-                }
-            };
-            rh.pos = record.pos();
-            rh.is_read1 = flags & 0x40 != 0;
+            if collect_detail {
+                rh.chrom = {
+                    let tid = record.tid();
+                    if tid >= 0 {
+                        target_names.get(tid as usize).cloned().unwrap_or_else(|| "*".to_string())
+                    } else {
+                        "*".to_string()
+                    }
+                };
+                rh.pos = record.pos();
+                rh.is_read1 = flags & 0x40 != 0;
+            }
             qname_to_reads
                 .entry(record.qname().to_vec())
                 .or_default()
@@ -438,11 +527,15 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
 
     // Optional second BAM pass: write all reads from fusion-supporting fragments.
     if let Some(ref reads_output) = args.reads_output {
-        // Collect qnames of fragments that support a passing fusion.
-        let fusion_qnames: HashSet<Vec<u8>> = qname_to_reads
+        // Collect qnames of fragments that support a passing fusion, mapping each
+        // to its "GENE_A::GENE_B" label so we can tag every emitted record with FX.
+        let fusion_qnames: HashMap<Vec<u8>, String> = qname_to_reads
             .iter()
-            .filter(|(_, read_hits)| fragment_fusion_key(read_hits).is_some())
-            .map(|(qname, _)| qname.clone())
+            .filter_map(|(qname, read_hits)| {
+                let key = fragment_fusion_key(read_hits)?;
+                let label = fusion_label.get(&key)?;
+                Some((qname.clone(), label.clone()))
+            })
             .collect();
 
         info!(
@@ -464,8 +557,14 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
 
         let mut reads_written: u64 = 0;
         for result in reader2.records() {
-            let record = result.context("error reading BAM record in second pass")?;
-            if fusion_qnames.contains(record.qname()) {
+            let mut record = result.context("error reading BAM record in second pass")?;
+            if let Some(label) = fusion_qnames.get(record.qname()) {
+                // Tag the read with the fusion it supports, e.g. FX:Z:EWSR1::FLI1.
+                // Remove any pre-existing FX so re-runs don't duplicate the tag.
+                let _ = record.remove_aux(b"FX");
+                record
+                    .push_aux(b"FX", bam::record::Aux::String(label))
+                    .context("failed to add FX tag to BAM record")?;
                 writer.write(&record).context("failed to write BAM record")?;
                 reads_written += 1;
             }

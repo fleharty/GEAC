@@ -606,12 +606,42 @@ pub struct BuildFusionIndexArgs {
     #[arg(long, default_value_t = false)]
     pub check_genome_uniqueness: bool,
 
+    /// Retain k-mers occurring up to this many times genome-wide (instead of
+    /// requiring exactly 1). A value > 1 keeps "near-unique" k-mers — useful for
+    /// repetitive genes that would otherwise have little usable sequence. Only
+    /// meaningful together with --check-genome-uniqueness; setting it > 1 without
+    /// that flag is an error because no genome-wide counts are available.
+    #[arg(long, default_value_t = 1)]
+    pub max_genome_copies: u32,
+
+    /// Optional TSV histogram of genome-wide k-mer copy number across the whole
+    /// candidate set: two columns, `copies` and `n_kmers`. Requires
+    /// --check-genome-uniqueness (the copy counts come from that pass).
+    #[arg(long)]
+    pub copy_histogram_output: Option<PathBuf>,
+
     /// Optional BED file of merged intervals covering all unique k-mer start positions.
     /// Adjacent k-mers are merged into a single interval, so the output is compact
     /// and suitable for use as a target BED with IGV, bedtools, or other tools.
     /// Chromosomes are emitted in FASTA index order.
     #[arg(long)]
     pub bed_output: Option<PathBuf>,
+
+    /// Optional prefix for per-copy-tier BED files. Writes one BED per genome-wide
+    /// copy number — `<prefix>.copies1.bed` (strictly unique), `<prefix>.copies2.bed`
+    /// (occurs twice), … up to --max-genome-copies — so unique and near-unique regions
+    /// can be loaded/colored separately in IGV or used as distinct target BEDs.
+    /// Requires --check-genome-uniqueness (copy counts come from that pass).
+    #[arg(long)]
+    pub bed_output_by_copies: Option<PathBuf>,
+
+    /// Optional per-gene uniqueness TSV. For each indexed gene reports the body
+    /// length, count of unique k-mers, and two "% of gene that is k-mer unique"
+    /// metrics: pct_unique_windows (unique k-mers / k-mer windows) and
+    /// pct_unique_bases (gene-body bases covered by a unique k-mer). Computed
+    /// before the --min-gene-kmers drop so even excluded genes report real values.
+    #[arg(long)]
+    pub gene_stats_output: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
@@ -669,6 +699,13 @@ pub struct FusionsArgs {
     /// Columns: fusion, sample_id, read_name, gene_matched, kmer_hash, kmer_seq
     #[arg(long)]
     pub kmer_hits_output: Option<PathBuf>,
+
+    /// Ignore k-mers occurring more than this many times genome-wide when
+    /// assigning reads to genes. Requires an index built with
+    /// --check-genome-uniqueness (which records per-k-mer copy number); using
+    /// this flag against an older index without that data is an error.
+    #[arg(long)]
+    pub max_kmer_copies: Option<u32>,
 }
 
 #[derive(Parser, Debug)]

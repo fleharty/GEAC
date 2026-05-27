@@ -820,3 +820,55 @@ schema; rejected because `LENGTH(varchar)` is O(1) in DuckDB and a schema bump
 would force every existing Parquet to be re-collected for no measurable speedup.
 A new `mnv_min_dist` slider was added in the MNV candidates tab alongside the
 existing max-distance slider (changed the join condition to `BETWEEN min AND max`).
+
+## Fusion index — k-mer copy-number quantification & two-tier uniqueness (experimental)
+
+The fusion k-mer index originally treated uniqueness as binary. Two refinements
+were added to `geac experimental build-fusion-index` and `... fusions`.
+
+**Two tiers already existed, only one was reported.** Step 1's cross-gene dedup
+already yields *panel-wide* uniqueness (k-mers unique among the indexed gene
+bodies); `--check-genome-uniqueness` is the strict genome-wide add-on. The work
+was to quantify and expose both, not to invent panel-wide.
+
+- **Copy counting.** The genome pass already counted each candidate k-mer's
+  genome-wide occurrences (`genome_counts: HashMap<u64,u8>`, saturating at 255)
+  but discarded everything except `== 1`. We now keep that map and (a) write a
+  global `--copy-histogram-output` (`copies`,`n_kmers`), (b) add per-gene copy
+  buckets + strict/relaxed base-coverage columns to `--gene-stats-output`, and
+  (c) store per-k-mer `genome_copies` in the DuckDB `kmers` table (nullable;
+  NULL when the genome pass didn't run — backward compatible with the other
+  index readers, which all select explicit columns).
+- **Relaxed build tier.** `--max-genome-copies N` (default 1) retains k-mers
+  occurring `1..=N` times genome-wide. The genome-copy retain was moved to run
+  *after* the stats/histogram writers so they see the full panel-unique survivor
+  set together with every count.
+- **Query-time filter.** `geac experimental fusions --max-kmer-copies N` ignores
+  k-mers exceeding N copies (or with unknown/NULL copies). Errors clearly if the
+  index lacks `genome_copies`. Default path is unchanged (no extra lookups).
+- **Per-copy-tier BEDs.** `--bed-output-by-copies <prefix>` writes one merged BED
+  per genome-wide copy number (`<prefix>.copies1.bed`, `.copies2.bed`, … up to
+  `--max-genome-copies`), each merged only among k-mers of that exact copy count,
+  so strictly-unique vs near-unique regions load as separate IGV tracks / target
+  BEDs. The existing `--bed-output` still emits the combined set. Merge logic is
+  shared via `write_merged_bed_intervals`. Adjacent tiers may overlap by up to
+  k−1 bases at boundaries (independent k-mer sets with overlapping ±k windows).
+  For tiers ≥2 a 4th BED column names every **full-GTF** gene each interval's
+  k-mers occur in (comma-separated, sorted), or `intergenic` — so a near-unique
+  region is labelled with the paralog(s) driving its non-uniqueness even when
+  those paralogs are outside the `--genes` panel (e.g. `GENEB,GENEBP1`,
+  `GENEC,intergenic`). Implemented by a `GeneIntervals` index built from the
+  unfiltered GTF and a per-k-mer `GeneAnnot` (gene-index set + intergenic flag)
+  accumulated during the genome scan; the 1× tier stays plain 3-column. The
+  annotation map is only allocated when `--bed-output-by-copies` is set; for a
+  whole-genome (non-panel) build it adds memory proportional to the candidate set.
+
+Demonstrated on a synthetic gene with a duplicated 100 bp block: strict
+genome-unique coverage = 81%, relaxed (≤2) = 100% — the same pattern as a real
+tandem-repeat/paralog gene like DUX4 (~16% genome-wide).
+
+**Known limitation (not fixed):** `--max-genome-copies` only relaxes *genome-wide*
+paralog copies; it does not rescue *intra*-gene tandem repeats (those survive
+step 1 already, assigned to their single gene). Also, the base-coverage metric
+undercounts repeat genes because `kmer_to_pos` stores only each k-mer's first
+position; switching to all-positions would fix it but was left out of scope.
