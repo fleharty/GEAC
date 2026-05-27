@@ -169,7 +169,7 @@ geac experimental fusions \
 | `--min-kmer-hits <N>` | `3` | Min unique k-mer hits for a read→gene assignment. |
 | `--min-supporting-reads <N>` | `2` | Min fragments supporting a fusion to report it. |
 | `--min-mapq <N>` | `0` | Mapping-quality floor (unmapped reads bypass it). |
-| `--reads-output <PATH>` | — | BAM of all reads from fusion-supporting fragments. Each record is tagged `FX:Z:GENEA::GENEB` with the fusion it supports; a BAI is built automatically. |
+| `--reads-output <PATH>` | — | BAM of all reads from fusion-supporting fragments. Each record is tagged `FX:Z:GENEA::GENEB` with the fusion it supports; a BAI is built automatically. The pair order in `FX` matches the `gene_a`/`gene_b` columns of the Parquet/TSV and the `fusion` column of `--kmer-hits-output` (all use gene-index order), so the tag joins cleanly back to the tables. |
 | `--tsv-output <PATH>` | — | Human-readable fusion table. |
 | `--kmer-hits-output <PATH>` | — | One row per k-mer hit from fusion reads (enables per-read detail collection). |
 | `--max-kmer-copies <N>` | — | Ignore k-mers occurring > `N` times genome-wide (or with unknown copy count). Requires an index built with `--check-genome-uniqueness`; errors clearly otherwise. Lets you re-tighten or relax uniqueness at call time without rebuilding. |

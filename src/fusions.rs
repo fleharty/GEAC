@@ -161,13 +161,49 @@ fn assign_gene(
             }
         }
     }
+    // Highest k-mer count wins; ties broken by lowest gene index so the choice is
+    // deterministic (HashMap iteration order must not influence the result).
     let (winning_gene, count) = gene_hits
         .into_iter()
-        .max_by_key(|&(_, count)| count)?;
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))?;
     if count < min_hits {
         return None;
     }
     Some(ReadHit { gene_idx: winning_gene, mapq: 0, chrom: String::new(), pos: 0, is_read1: false, kmer_hits })
+}
+
+/// Select the fusion gene-pair for a fragment's read hits.
+///
+/// Votes are gene → number of reads hitting it. Returns `None` for fragments hitting
+/// fewer than two distinct genes. The top two genes are chosen by vote count
+/// descending, breaking ties by **ascending gene index** so the result is
+/// deterministic (HashMap iteration order must not influence it). The pair is
+/// normalized to `(min_index, max_index)` so it is a stable key for the whole run.
+fn fragment_top_pair(read_hits: &[ReadHit]) -> Option<(u32, u32)> {
+    if read_hits.len() < 2 {
+        return None;
+    }
+    let mut gene_vote: HashMap<u32, usize> = HashMap::new();
+    for rh in read_hits {
+        *gene_vote.entry(rh.gene_idx).or_insert(0) += 1;
+    }
+    if gene_vote.len() < 2 {
+        return None;
+    }
+    let mut sorted: Vec<(u32, usize)> = gene_vote.into_iter().collect();
+    // Vote count descending, then gene index ascending (deterministic tie-break).
+    sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let ga = sorted[0].0;
+    let gb = sorted[1].0;
+    Some(if ga <= gb { (ga, gb) } else { (gb, ga) })
+}
+
+/// Canonical `GENE_A::GENE_B` label for a normalized `(min_index, max_index)` pair.
+/// Uses gene-index order so every output — Parquet, TSV, the `FX` BAM tag, and the
+/// kmer-hits TSV — labels the same fusion identically. (The Parquet `gene_a`/`gene_b`
+/// columns are filled from `gene_names[key.0]`/`[key.1]`, matching this order.)
+fn fusion_pair_label(key: (u32, u32), gene_names: &[String]) -> String {
+    format!("{}::{}", gene_names[key.0 as usize], gene_names[key.1 as usize])
 }
 
 fn decode_kmer(hash: u64, k: usize) -> String {
@@ -422,26 +458,10 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     let mut fusion_counts: HashMap<(u32, u32), (u32, u8)> = HashMap::new();
 
     for read_hits in qname_to_reads.values() {
-        if read_hits.len() < 2 {
+        let Some(key) = fragment_top_pair(read_hits) else {
             continue;
-        }
-
-        let mut gene_vote: HashMap<u32, usize> = HashMap::new();
+        };
         let min_mq = read_hits.iter().map(|rh| rh.mapq).min().unwrap_or(0);
-        for rh in read_hits {
-            *gene_vote.entry(rh.gene_idx).or_insert(0) += 1;
-        }
-        if gene_vote.len() < 2 {
-            continue;
-        }
-
-        let mut sorted: Vec<(u32, usize)> = gene_vote.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
-
-        let ga = sorted[0].0;
-        let gb = sorted[1].0;
-        let key = if ga <= gb { (ga, gb) } else { (gb, ga) };
-
         let entry = fusion_counts.entry(key).or_insert((0, 255));
         entry.0 += 1;
         entry.1 = entry.1.min(min_mq);
@@ -479,36 +499,17 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         info!(output = %tsv_path.display(), "fusion TSV written");
     }
 
-    // Build a helper: (min_gene_idx, max_gene_idx) → "GENE_A::GENE_B" label.
+    // Canonical "GENE_A::GENE_B" label per passing pair — same gene-index order as
+    // the Parquet/TSV gene_a/gene_b columns, so all outputs agree on the label.
     let fusion_label: HashMap<(u32, u32), String> = passing_pairs
         .iter()
-        .map(|&(ga, gb)| {
-            let na = &index.gene_names[ga as usize];
-            let nb = &index.gene_names[gb as usize];
-            let label = if na <= nb {
-                format!("{}::{}", na, nb)
-            } else {
-                format!("{}::{}", nb, na)
-            };
-            ((ga, gb), label)
-        })
+        .map(|&key| (key, fusion_pair_label(key, &index.gene_names)))
         .collect();
 
-    // Helper closure: given per-fragment read hits, return the passing fusion key if any.
-    let fragment_fusion_key = |read_hits: &Vec<ReadHit>| -> Option<(u32, u32)> {
-        let mut gene_vote: HashMap<u32, usize> = HashMap::new();
-        for rh in read_hits {
-            *gene_vote.entry(rh.gene_idx).or_insert(0) += 1;
-        }
-        if gene_vote.len() < 2 {
-            return None;
-        }
-        let mut sorted: Vec<(u32, usize)> = gene_vote.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
-        let ga = sorted[0].0;
-        let gb = sorted[1].0;
-        let key = if ga <= gb { (ga, gb) } else { (gb, ga) };
-        if passing_pairs.contains(&key) { Some(key) } else { None }
+    // Given a fragment's read hits, return its fusion key iff it passes the filter.
+    let fragment_fusion_key = |read_hits: &[ReadHit]| -> Option<(u32, u32)> {
+        let key = fragment_top_pair(read_hits)?;
+        passing_pairs.contains(&key).then_some(key)
     };
 
     if let Some(ref kmer_hits_path) = args.kmer_hits_output {

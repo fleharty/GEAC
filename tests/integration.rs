@@ -2404,3 +2404,143 @@ fn fragments_emits_record_for_both_r1_strand_orientations() {
     assert_eq!(parquet_query_i64(&out, "frag_start", "frag_start = 100"), 100);
     assert_eq!(parquet_query_i64(&out, "frag_start", "frag_start = 300"), 300);
 }
+
+// ── Experimental: fusion detection ──────────────────────────────────────────────
+//
+// Locks in cross-file label consistency: the Parquet gene_a/gene_b columns and the
+// FX:Z: tag in the --reads-output BAM must order the fused pair identically. Uses
+// gene names whose GTF order (BCR then ABL1) differs from alphabetical order (ABL1 <
+// BCR) so a regression to per-output ordering would change one but not the other.
+
+/// Deterministic pseudo-random ACGT sequence (xorshift64) — distinct per seed so two
+/// gene bodies share no k-mers.
+fn fusion_gen_seq(seed: u64, n: usize) -> String {
+    let mut x = seed | 1;
+    let mut s = String::with_capacity(n);
+    for _ in 0..n {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        s.push(b"ACGT"[(x & 3) as usize] as char);
+    }
+    s
+}
+
+#[test]
+fn fusions_label_ordering_consistent_across_outputs() {
+    use rust_htslib::bam::{self, Read as _};
+
+    let dir = TempDir::new().unwrap();
+
+    // Two distinct 300 bp gene bodies on chr1, with 200 bp of (distinct) filler
+    // between and around them.
+    let f0 = fusion_gen_seq(1, 100);
+    let bcr = fusion_gen_seq(2, 300); // chr1:100-400
+    let f1 = fusion_gen_seq(3, 200);
+    let abl1 = fusion_gen_seq(4, 300); // chr1:600-900
+    let tail = fusion_gen_seq(5, 100);
+    let seq = format!("{f0}{bcr}{f1}{abl1}{tail}");
+    let len = seq.len();
+
+    // FASTA (single line) + .fai. Header ">chr1\n" is 6 bytes, so first base is at
+    // offset 6; one line of `len` bases plus newline → linewidth len+1.
+    let fa = dir.path().join("ref.fa");
+    std::fs::write(&fa, format!(">chr1\n{seq}\n")).unwrap();
+    std::fs::write(
+        dir.path().join("ref.fa.fai"),
+        format!("chr1\t{len}\t6\t{len}\t{}\n", len + 1),
+    )
+    .unwrap();
+
+    // GTF: BCR listed FIRST (gene index 0), ABL1 second (index 1). 1-based inclusive.
+    let gtf = dir.path().join("genes.gtf");
+    std::fs::write(
+        &gtf,
+        "chr1\tt\tgene\t101\t400\t.\t+\t.\tgene_name \"BCR\";\n\
+         chr1\tt\tgene\t601\t900\t.\t+\t.\tgene_name \"ABL1\";\n",
+    )
+    .unwrap();
+
+    // One fusion fragment: read1 drawn from BCR, read2 from ABL1 (unmapped pair
+    // sharing a qname — k-mer matching is alignment-independent).
+    let r1 = &bcr[50..110];
+    let r2 = &abl1[50..110];
+    let mut header = bam::Header::new();
+    let mut sq = bam::header::HeaderRecord::new(b"SQ");
+    sq.push_tag(b"SN", "chr1");
+    sq.push_tag(b"LN", len as i64);
+    header.push_record(&sq);
+
+    let bam_path = dir.path().join("reads.bam");
+    {
+        let mut writer =
+            bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
+        let qual = vec![30u8; 60];
+        for (flags, rseq) in [(77u16, r1), (141u16, r2)] {
+            let mut rec = bam::record::Record::new();
+            rec.set(b"frag1", None, rseq.as_bytes(), &qual);
+            rec.set_tid(-1);
+            rec.set_pos(-1);
+            rec.set_mtid(-1);
+            rec.set_mpos(-1);
+            rec.set_flags(flags);
+            writer.write(&rec).unwrap();
+        }
+    }
+
+    let index = dir.path().join("idx.duckdb");
+    assert_geac_success(&[
+        "experimental",
+        "build-fusion-index",
+        "--gtf",
+        gtf.to_str().unwrap(),
+        "--fasta",
+        fa.to_str().unwrap(),
+        "--min-gene-kmers",
+        "1",
+        "--output",
+        index.to_str().unwrap(),
+    ]);
+
+    let out = dir.path().join("fusions.parquet");
+    let reads_out = dir.path().join("fusion_reads.bam");
+    assert_geac_success(&[
+        "experimental",
+        "fusions",
+        "--bam",
+        bam_path.to_str().unwrap(),
+        "--index",
+        index.to_str().unwrap(),
+        "--sample-id",
+        "HG002",
+        "--output",
+        out.to_str().unwrap(),
+        "--reads-output",
+        reads_out.to_str().unwrap(),
+        "--min-supporting-reads",
+        "1",
+    ]);
+
+    // Exactly one fusion candidate; gene_a/gene_b follow gene-index order (BCR, ABL1).
+    assert_eq!(parquet_count(&out), 1, "expected one fusion candidate");
+    let gene_a = parquet_query_str(&out, "gene_a", "supporting_reads >= 1");
+    let gene_b = parquet_query_str(&out, "gene_b", "supporting_reads >= 1");
+    assert_eq!((gene_a.as_str(), gene_b.as_str()), ("BCR", "ABL1"));
+
+    // Every FX tag in the reads BAM must equal "gene_a::gene_b" from the Parquet —
+    // the cross-file consistency guarantee.
+    let expected_fx = format!("{gene_a}::{gene_b}");
+    let mut reader = bam::Reader::from_path(&reads_out).unwrap();
+    let mut n_tagged = 0;
+    for r in reader.records() {
+        let rec = r.unwrap();
+        match rec.aux(b"FX") {
+            Ok(bam::record::Aux::String(s)) => {
+                assert_eq!(s, expected_fx, "FX tag must match Parquet gene_a::gene_b");
+                n_tagged += 1;
+            }
+            _ => panic!("fusion read missing FX tag"),
+        }
+    }
+    assert_eq!(n_tagged, 2, "both reads of the fragment should be tagged");
+}

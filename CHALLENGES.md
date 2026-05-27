@@ -1134,3 +1134,34 @@ gated its detail this way.)
 bug that suppresses work. When a fix makes the tool actually do its job, re-check the
 resource envelope. Also: never collect optional-output detail unconditionally on a
 per-read hot path.
+
+---
+
+### `geac fusions` labelled the same fusion two different ways across outputs
+
+**Symptom:** For a fusion whose gene names are not in GTF order alphabetically
+(e.g. a GTF listing `BCR` before `ABL1`), the Parquet/TSV reported
+`gene_a=BCR, gene_b=ABL1` while the `--reads-output` BAM `FX` tag (and the
+`--kmer-hits-output` TSV) said `ABL1::BCR`. Joining the BAM tag back to the table
+by string silently mismatched.
+
+**Root cause:** Two independent orderings. The fusion-count key is normalized on
+`(min_gene_index, max_gene_index)`, and `FusionRecord` fills `gene_a`/`gene_b` from
+that index order. But the `FX`/kmer-hits label was built separately by **alphabetical
+name** (`if na <= nb { na::nb }`). The two only agree when GTF order happens to match
+alphabetical order. Compounding it, the top-2 gene selection was duplicated in two
+places and used `sort_by` over `HashMap`-iteration order with no tie-break, so a
+fragment hitting 3+ genes could even be assigned different pairs run-to-run (and
+between the count pass and the read-emit pass).
+
+**Fix:** Single `fragment_top_pair()` helper with a deterministic tie-break (vote
+count desc, then gene index asc) used by both passes, and a single
+`fusion_pair_label()` that formats every output in gene-index order. Per-read
+`assign_gene` winner also made deterministic (lowest gene index on tie). Locked in by
+`fusions_label_ordering_consistent_across_outputs` integration test, which uses
+BCR-before-ABL1 specifically so a regression to per-output ordering fails.
+
+**Lesson:** When the same identity (here, a fusion pair) is emitted into multiple
+files, derive its label once from one canonical ordering — don't re-derive it
+per-output. And never let `HashMap` iteration order leak into output: sort with an
+explicit tie-break.

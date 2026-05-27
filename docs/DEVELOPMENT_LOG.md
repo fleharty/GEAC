@@ -872,3 +872,17 @@ paralog copies; it does not rescue *intra*-gene tandem repeats (those survive
 step 1 already, assigned to their single gene). Also, the base-coverage metric
 undercounts repeat genes because `kmer_to_pos` stores only each k-mer's first
 position; switching to all-positions would fix it but was left out of scope.
+
+**Post-release audit fixes (v0.4.25–30 review).** A code audit of the fusion work
+surfaced and fixed: (1) cross-file label inconsistency — the Parquet `gene_a`/`gene_b`
+ordered by gene index while the `FX` tag / kmer-hits TSV ordered alphabetically; both
+now use one canonical gene-index order (see `CHALLENGES.md`). (2) The top-2 gene
+selection was duplicated and depended on `HashMap` iteration order; it is now a single
+`fragment_top_pair()` with a deterministic tie-break, and `assign_gene`'s per-read
+winner breaks ties on lowest gene index. (3) Added the first integration test for the
+experimental pipeline (`fusions_label_ordering_consistent_across_outputs`) — the
+fusion code previously had no automated coverage beyond `kmer.rs` unit tests. Remaining
+known gaps recorded in the audit: directionality (5'/3' partner) is intentionally
+dropped by pair normalization; `chrom_a`/`chrom_b` are annotated gene loci, not
+observed breakpoints; pre-0.4.30 indexes (no `genome_copies` column) are believed
+compatible on the default path but unverified against a real old index.
