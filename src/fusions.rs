@@ -129,7 +129,7 @@ struct ReadHit {
     mapq: u8,
     // kmer_hits is populated only during the second BAM pass for kmer-hits-output;
     // empty during the first pass to avoid gigabytes of per-read detail on deep BAMs.
-    kmer_hits: Vec<(u64, u32)>, // (kmer_hash, matched_gene_idx)
+    kmer_hits: Vec<(u64, u32, usize)>, // (kmer_hash, matched_gene_idx, pos_in_read)
 }
 
 fn assign_gene(
@@ -141,8 +141,8 @@ fn assign_gene(
     max_copies: Option<u32>,
 ) -> Option<ReadHit> {
     let mut gene_hits: HashMap<u32, u32> = HashMap::new();
-    let mut kmer_hits: Vec<(u64, u32)> = Vec::new();
-    for (kmer, _) in kmer_iter(seq, k) {
+    let mut kmer_hits: Vec<(u64, u32, usize)> = Vec::new();
+    for (kmer, pos_in_read) in kmer_iter(seq, k) {
         if let Some(&gene_idx) = index.kmer_to_gene.get(&kmer) {
             // Optional genome-wide copy filter: skip k-mers that occur too often
             // (or whose copy number is unknown — NULL in the index).
@@ -156,7 +156,7 @@ fn assign_gene(
             // Retaining every matching k-mer for every assigned read costs
             // gigabytes on deep BAMs; only do it when the detail TSV is requested.
             if collect_detail {
-                kmer_hits.push((kmer, gene_idx));
+                kmer_hits.push((kmer, gene_idx, pos_in_read));
             }
         }
     }
@@ -533,7 +533,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         let file = std::fs::File::create(kmer_hits_path)
             .with_context(|| format!("failed to create kmer hits TSV: {}", kmer_hits_path.display()))?;
         let mut w = BufWriter::new(file);
-        writeln!(w, "fusion\tsample_id\tread_name\tread_end\tchrom\tpos\tgene_matched\tkmer_hash\tkmer_seq")?;
+        writeln!(w, "fusion\tsample_id\tread_name\tread_end\tchrom\tpos\tgene_matched\tkmer_pos_in_read\tkmer_hash\tkmer_seq")?;
 
         let mut rows_written: u64 = 0;
         for result in reader2.records() {
@@ -555,14 +555,14 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             };
             let pos1 = record.pos() + 1;
             let read_name = std::str::from_utf8(record.qname()).unwrap_or("?");
-            for &(kmer_hash, gene_idx) in &rh.kmer_hits {
+            for &(kmer_hash, gene_idx, kmer_pos_in_read) in &rh.kmer_hits {
                 let gene_name = index.gene_names.get(gene_idx as usize).map(|s| s.as_str()).unwrap_or("?");
                 let kmer_seq = decode_kmer(kmer_hash, k);
                 writeln!(
                     w,
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     fusion_label_str, sample_id, read_name, read_end, chrom, pos1,
-                    gene_name, kmer_hash as i64, kmer_seq
+                    gene_name, kmer_pos_in_read, kmer_hash as i64, kmer_seq
                 )?;
                 rows_written += 1;
             }

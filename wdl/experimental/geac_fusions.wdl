@@ -32,6 +32,7 @@ version 1.0
 ## Outputs:
 ##   fusions_parquet       - Per-fusion detection results Parquet
 ##   reads_bam             - BAM of all reads from fusion-supporting fragments (empty BAM when no fusions)
+##   reads_bam_index       - Corresponding .bai index
 ##   fusions_tsv           - Human-readable fusion results TSV (header-only when no fusions)
 ##   kmer_hits_tsv         - Per-k-mer hits TSV for fusion-supporting reads (header-only when no fusions)
 
@@ -79,6 +80,7 @@ workflow GeacFusions {
     output {
         File fusions_parquet = Fusions.fusions_parquet
         File reads_bam       = Fusions.reads_bam
+        File reads_bam_index = Fusions.reads_bam_index
         File fusions_tsv     = Fusions.fusions_tsv
         File kmer_hits_tsv   = Fusions.kmer_hits_tsv
     }
@@ -107,10 +109,11 @@ task Fusions {
     }
 
     String stem             = sub(basename(input_bam), "\\.(bam|cram)$", "")
-    String output_parquet   = stem + ".fusions.parquet"
-    String output_reads_bam = stem + ".fusions.bam"
-    String output_tsv       = stem + ".fusions.tsv"
-    String output_kmer_hits = stem + ".fusions.kmer_hits.tsv"
+    String output_parquet       = stem + ".fusions.parquet"
+    String output_reads_bam     = stem + ".fusions.bam"
+    String output_reads_bam_bai = stem + ".fusions.bam.bai"
+    String output_tsv           = stem + ".fusions.tsv"
+    String output_kmer_hits     = stem + ".fusions.kmer_hits.tsv"
 
     command <<<
         set -euo pipefail
@@ -134,6 +137,7 @@ task Fusions {
     output {
         File fusions_parquet = output_parquet
         File reads_bam       = output_reads_bam
+        File reads_bam_index = output_reads_bam_bai
         File fusions_tsv     = output_tsv
         File kmer_hits_tsv   = output_kmer_hits
     }
