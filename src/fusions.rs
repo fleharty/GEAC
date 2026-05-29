@@ -127,10 +127,9 @@ fn load_index(index_path: &Path, max_kmer_copies: Option<u32>) -> Result<FusionI
 struct ReadHit {
     gene_idx: u32,
     mapq: u8,
-    chrom: String,
-    pos: i64,   // 0-based leftmost position from BAM record
-    is_read1: bool,
-    kmer_hits: Vec<(u64, u32)>, // (kmer_hash, matched_gene_idx) for every kmer that hit any gene
+    // kmer_hits is populated only during the second BAM pass for kmer-hits-output;
+    // empty during the first pass to avoid gigabytes of per-read detail on deep BAMs.
+    kmer_hits: Vec<(u64, u32)>, // (kmer_hash, matched_gene_idx)
 }
 
 fn assign_gene(
@@ -169,7 +168,7 @@ fn assign_gene(
     if count < min_hits {
         return None;
     }
-    Some(ReadHit { gene_idx: winning_gene, mapq: 0, chrom: String::new(), pos: 0, is_read1: false, kmer_hits })
+    Some(ReadHit { gene_idx: winning_gene, mapq: 0, kmer_hits })
 }
 
 /// Select the fusion gene-pair for a fragment's read hits.
@@ -228,50 +227,6 @@ fn write_fusion_tsv(records: &[FusionRecord], output: &Path) -> Result<()> {
             "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             r.sample_id, r.gene_a, r.gene_b, r.chrom_a, r.chrom_b, r.supporting_reads, r.min_mapq
         )?;
-    }
-    Ok(())
-}
-
-// ─── K-mer hit detail TSV ─────────────────────────────────────────────────────
-
-fn write_kmer_hits_tsv(
-    fusion_reads: &[(&[u8], &Vec<ReadHit>, &str)], // (qname, hits_for_fragment, fusion_label)
-    sample_id: &str,
-    k: usize,
-    gene_names: &[String],
-    output: &Path,
-) -> Result<()> {
-    use std::io::{BufWriter, Write};
-    let file = std::fs::File::create(output)
-        .with_context(|| format!("failed to create kmer hits TSV: {}", output.display()))?;
-    let mut w = BufWriter::new(file);
-    writeln!(w, "fusion\tsample_id\tread_name\tread_end\tchrom\tpos\tgene_matched\tkmer_hash\tkmer_seq")?;
-    for (qname, read_hits, fusion_label) in fusion_reads {
-        let read_name = std::str::from_utf8(qname).unwrap_or("?");
-        for rh in *read_hits {
-            let read_end = if rh.is_read1 { "R1" } else { "R2" };
-            let pos1 = rh.pos + 1; // convert 0-based to 1-based
-            for &(kmer_hash, gene_idx) in &rh.kmer_hits {
-                let gene_name = gene_names
-                    .get(gene_idx as usize)
-                    .map(|s| s.as_str())
-                    .unwrap_or("?");
-                let kmer_seq = decode_kmer(kmer_hash, k);
-                writeln!(
-                    w,
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                    fusion_label,
-                    sample_id,
-                    read_name,
-                    read_end,
-                    rh.chrom,
-                    pos1,
-                    gene_name,
-                    kmer_hash as i64,
-                    kmer_seq
-                )?;
-            }
-        }
     }
     Ok(())
 }
@@ -385,20 +340,6 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         "scanning BAM for fusion evidence..."
     );
 
-    // Pre-extract target names so we can look up chrom during the records loop
-    // without conflicting borrows on reader.
-    let target_names: Vec<String> = {
-        let hdr = reader.header();
-        (0..hdr.target_count())
-            .map(|i| std::str::from_utf8(hdr.tid2name(i)).unwrap_or("?").to_string())
-            .collect()
-    };
-
-    // Per-read detail (chrom, position, and every matching k-mer) is only consumed
-    // by the optional --kmer-hits-output TSV. Collecting it for every assigned read
-    // otherwise dominates memory on deep BAMs, so gate it behind the flag.
-    let collect_detail = args.kmer_hits_output.is_some();
-
     // qname bytes → list of ReadHit for reads that hit a gene
     let mut qname_to_reads: HashMap<Vec<u8>, Vec<ReadHit>> = HashMap::new();
     let mut reads_processed: u64 = 0;
@@ -425,20 +366,8 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         }
 
         let seq = record.seq().as_bytes();
-        if let Some(mut rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, collect_detail, args.max_kmer_copies) {
+        if let Some(mut rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, false, args.max_kmer_copies) {
             rh.mapq = record.mapq();
-            if collect_detail {
-                rh.chrom = {
-                    let tid = record.tid();
-                    if tid >= 0 {
-                        target_names.get(tid as usize).cloned().unwrap_or_else(|| "*".to_string())
-                    } else {
-                        "*".to_string()
-                    }
-                };
-                rh.pos = record.pos();
-                rh.is_read1 = flags & 0x40 != 0;
-            }
             qname_to_reads
                 .entry(record.qname().to_vec())
                 .or_default()
@@ -512,20 +441,6 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         passing_pairs.contains(&key).then_some(key)
     };
 
-    if let Some(ref kmer_hits_path) = args.kmer_hits_output {
-        let mut fusion_reads: Vec<(&[u8], &Vec<ReadHit>, &str)> = Vec::new();
-        for (qname, read_hits) in &qname_to_reads {
-            if let Some(key) = fragment_fusion_key(read_hits) {
-                if let Some(label) = fusion_label.get(&key) {
-                    fusion_reads.push((qname.as_slice(), read_hits, label.as_str()));
-                }
-            }
-        }
-        fusion_reads.sort_by(|a, b| a.2.cmp(b.2).then(a.0.cmp(b.0)));
-        write_kmer_hits_tsv(&fusion_reads, &sample_id, k, &index.gene_names, kmer_hits_path)?;
-        info!(output = %kmer_hits_path.display(), "kmer hits TSV written");
-    }
-
     // Optional second BAM pass: write all reads from fusion-supporting fragments.
     if let Some(ref reads_output) = args.reads_output {
         // Collect qnames of fragments that support a passing fusion, mapping each
@@ -578,6 +493,81 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         bam::index::build(reads_output, None, bam::index::Type::Bai, 0)
             .with_context(|| format!("failed to index output BAM: {}", reads_output.display()))?;
         info!(output = %reads_output.display(), "BAI index written");
+    }
+
+    // Optional second BAM pass: stream per-k-mer hit rows for fusion-supporting reads.
+    // Doing this in a second pass (rather than accumulating kmer_hits during the first
+    // pass) avoids storing gigabytes of per-read detail for reads that turn out not to
+    // support any passing fusion.
+    if let Some(ref kmer_hits_path) = args.kmer_hits_output {
+        use std::io::{BufWriter, Write};
+
+        let fusion_qnames: HashMap<Vec<u8>, String> = qname_to_reads
+            .iter()
+            .filter_map(|(qname, read_hits)| {
+                let key = fragment_fusion_key(read_hits)?;
+                let label = fusion_label.get(&key)?;
+                Some((qname.clone(), label.clone()))
+            })
+            .collect();
+
+        info!(
+            n_fragments = fusion_qnames.len(),
+            output = %kmer_hits_path.display(),
+            "writing kmer hits TSV (second BAM pass)..."
+        );
+
+        let mut reader2 = bam::Reader::from_path(&args.bam)
+            .with_context(|| format!("failed to re-open BAM: {}", args.bam.display()))?;
+        if let Some(ref ref_path) = args.reference {
+            reader2.set_reference(ref_path)?;
+        }
+
+        let target_names: Vec<String> = {
+            let hdr = reader2.header();
+            (0..hdr.target_count())
+                .map(|i| std::str::from_utf8(hdr.tid2name(i)).unwrap_or("?").to_string())
+                .collect()
+        };
+
+        let file = std::fs::File::create(kmer_hits_path)
+            .with_context(|| format!("failed to create kmer hits TSV: {}", kmer_hits_path.display()))?;
+        let mut w = BufWriter::new(file);
+        writeln!(w, "fusion\tsample_id\tread_name\tread_end\tchrom\tpos\tgene_matched\tkmer_hash\tkmer_seq")?;
+
+        let mut rows_written: u64 = 0;
+        for result in reader2.records() {
+            let record = result.context("error reading BAM record in kmer hits pass")?;
+            let Some(fusion_label_str) = fusion_qnames.get(record.qname()) else {
+                continue;
+            };
+            let seq = record.seq().as_bytes();
+            let Some(rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, true, args.max_kmer_copies) else {
+                continue;
+            };
+            let flags = record.flags();
+            let read_end = if flags & 0x40 != 0 { "R1" } else { "R2" };
+            let tid = record.tid();
+            let chrom = if tid >= 0 {
+                target_names.get(tid as usize).map(|s| s.as_str()).unwrap_or("*")
+            } else {
+                "*"
+            };
+            let pos1 = record.pos() + 1;
+            let read_name = std::str::from_utf8(record.qname()).unwrap_or("?");
+            for &(kmer_hash, gene_idx) in &rh.kmer_hits {
+                let gene_name = index.gene_names.get(gene_idx as usize).map(|s| s.as_str()).unwrap_or("?");
+                let kmer_seq = decode_kmer(kmer_hash, k);
+                writeln!(
+                    w,
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    fusion_label_str, sample_id, read_name, read_end, chrom, pos1,
+                    gene_name, kmer_hash as i64, kmer_seq
+                )?;
+                rows_written += 1;
+            }
+        }
+        info!(rows_written, output = %kmer_hits_path.display(), "kmer hits TSV written");
     }
 
     Ok(())
