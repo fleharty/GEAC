@@ -886,3 +886,40 @@ known gaps recorded in the audit: directionality (5'/3' partner) is intentionall
 dropped by pair normalization; `chrom_a`/`chrom_b` are annotated gene loci, not
 observed breakpoints; pre-0.4.30 indexes (no `genome_copies` column) are believed
 compatible on the default path but unverified against a real old index.
+
+## Fusion breakpoint localization & k-mer-hits memory fix (experimental)
+
+Two related changes to `geac experimental fusions`, plus Terra WDLs.
+
+**`--kmer-hits-output` memory fix.** The original implementation set
+`collect_detail = kmer_hits_output.is_some()` and accumulated every matching
+k-mer for *every* gene-assigned read in `ReadHit.kmer_hits` during the single
+BAM scan — gigabytes of peak RSS on deep WGS BAMs, most of it for reads that
+never belonged to a passing fusion. Fixed by mirroring the existing
+`--reads-output` pattern: the first pass keeps only the minimal `ReadHit`
+(gene_idx + mapq), and k-mer detail is re-derived in a *second BAM pass*
+restricted to fusion-supporting qnames. `ReadHit` lost its `chrom`/`pos`/
+`is_read1` fields (now read straight from the BAM record in the second pass).
+
+**`kmer_pos_in_read` + `--breakpoints-output`.** `kmer_iter` already yields
+`(kmer, start_pos_in_read)`, so the 0-based offset was threaded through
+`assign_gene` into the kmer-hits TSV. On a junction-spanning read the offset
+where Gene A k-mers give way to Gene B k-mers, projected onto the alignment
+start, locates the breakpoint to within a few bp. `--breakpoints-output` does
+this in-binary: it shares the *same* second BAM pass as `--kmer-hits-output`
+(only one extra scan when both are set), votes per-gene chromosomes from
+single-gene reads, collects spanning-read estimates, and writes one row per
+fusion with median coordinate, contributing-read count, and std (spread).
+
+**Why in-binary rather than a script.** A prototype `scripts/call_breakpoints.py`
+post-processed the kmer-hits TSV, but folding it into the command keeps the
+workflow single-pass and makes breakpoints a first-class Terra output. The
+script was removed.
+
+**Known limitation.** Reverse-strand reads report `kmer_pos_in_read` relative to
+the stored SEQ (the reverse complement of the reference strand), which widens
+`bp_*_std`. `scripts/reconstruct_fusions.sh` (de novo assembly + minimap2) is the
+sequence-level cross-check that handles strand correctly; the two approaches are
+complementary. WDLs: `wdl/experimental/geac_build_fusion_index.wdl` and
+`geac_fusions.wdl`. Cromwell rejects the `None` literal, so optional task outputs
+use `if cond then [path] else []` (0/1-element arrays) rather than `File?`.

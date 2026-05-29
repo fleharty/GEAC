@@ -696,9 +696,16 @@ pub struct FusionsArgs {
     pub tsv_output: Option<PathBuf>,
 
     /// Optional TSV with one row per k-mer hit from fusion-supporting reads.
-    /// Columns: fusion, sample_id, read_name, gene_matched, kmer_hash, kmer_seq
+    /// Columns: fusion, sample_id, read_name, read_end, chrom, pos, gene_matched,
+    /// kmer_pos_in_read, kmer_hash, kmer_seq
     #[arg(long)]
     pub kmer_hits_output: Option<PathBuf>,
+
+    /// Optional TSV with one breakpoint row per detected fusion.
+    /// Columns: fusion, gene_a, chrom_a, breakpoint_a, bp_a_n, bp_a_std,
+    ///          gene_b, chrom_b, breakpoint_b, bp_b_n, bp_b_std, n_spanning_reads
+    #[arg(long)]
+    pub breakpoints_output: Option<PathBuf>,
 
     /// Ignore k-mers occurring more than this many times genome-wide when
     /// assigning reads to genes. Requires an index built with

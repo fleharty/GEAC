@@ -901,6 +901,8 @@ WDL 1.0 workflows are provided in `wdl/`:
 | `geac_merge.wdl` | Untested | Standalone merge — takes existing Parquets and builds a DuckDB |
 | `geac_annotate_normal.wdl` | Untested | Single-sample wrapper around `geac annotate-normal`; cross-checks tumor loci against a paired normal BAM |
 | `geac_annotate_pon.wdl` | Untested | Single-sample wrapper around `geac annotate-pon`; cross-checks tumor loci against a pre-built PoN DuckDB |
+| `experimental/geac_build_fusion_index.wdl` | Experimental | Builds a gene-unique k-mer index from a reference FASTA + GTF for fusion detection |
+| `experimental/geac_fusions.wdl` | Experimental | Single-sample wrapper around `geac experimental fusions`; emits per-fusion Parquet, TSV, evidence BAM, k-mer hits, and breakpoints |
 
 ### `geac_collect.wdl` inputs
 

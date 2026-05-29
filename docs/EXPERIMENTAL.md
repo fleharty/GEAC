@@ -155,6 +155,7 @@ geac experimental fusions \
     --output sample.fusions.parquet \
     --tsv-output sample.fusions.tsv \
     --reads-output sample.fusion_reads.bam \
+    --breakpoints-output sample.fusions.breakpoints.tsv \
     --max-kmer-copies 1
 ```
 
@@ -171,11 +172,21 @@ geac experimental fusions \
 | `--min-mapq <N>` | `0` | Mapping-quality floor (unmapped reads bypass it). |
 | `--reads-output <PATH>` | — | BAM of all reads from fusion-supporting fragments. Each record is tagged `FX:Z:GENEA::GENEB` with the fusion it supports; a BAI is built automatically. The pair order in `FX` matches the `gene_a`/`gene_b` columns of the Parquet/TSV and the `fusion` column of `--kmer-hits-output` (all use gene-index order), so the tag joins cleanly back to the tables. |
 | `--tsv-output <PATH>` | — | Human-readable fusion table. |
-| `--kmer-hits-output <PATH>` | — | One row per k-mer hit from fusion reads (enables per-read detail collection). |
+| `--kmer-hits-output <PATH>` | — | One row per k-mer hit from fusion reads. The `kmer_pos_in_read` column gives each k-mer's 0-based offset within the read, which locates the Gene A→Gene B transition on junction-spanning reads. |
+| `--breakpoints-output <PATH>` | — | Per-fusion breakpoint TSV. Projects the k-mer transition on junction-spanning reads onto genomic coordinates; shares the same second BAM pass as `--kmer-hits-output` (only one extra scan when both are set). |
 | `--max-kmer-copies <N>` | — | Ignore k-mers occurring > `N` times genome-wide (or with unknown copy count). Requires an index built with `--check-genome-uniqueness`; errors clearly otherwise. Lets you re-tighten or relax uniqueness at call time without rebuilding. |
 
 Output Parquet/TSV columns: `sample_id, gene_a, gene_b, chrom_a, chrom_b,
 supporting_reads, min_mapq`.
+
+`--kmer-hits-output` columns: `fusion, sample_id, read_name, read_end, chrom, pos,
+gene_matched, kmer_pos_in_read, kmer_hash, kmer_seq`.
+
+`--breakpoints-output` columns: `fusion, gene_a, chrom_a, breakpoint_a, bp_a_n,
+bp_a_std, gene_b, chrom_b, breakpoint_b, bp_b_n, bp_b_std, n_spanning_reads`. The
+`bp_*_n` columns count spanning reads contributing to each side and `bp_*_std` is
+the spread in bp (low = tight consensus). Coordinates are 1-based; partners with no
+spanning-read support report `NA`.
 
 ---
 
@@ -272,7 +283,36 @@ geac experimental build-fusion-index \
 #    Load panel_kmers.copies1.bed and panel_kmers.copies2.bed as separate IGV tracks.
 
 # 3. Call fusions, re-tightening to strictly-unique k-mers at call time.
+#    --breakpoints-output localizes each junction from spanning reads.
 geac experimental fusions --bam sample.bam --index panel.duckdb \
     --output sample.fusions.parquet --tsv-output sample.fusions.tsv \
-    --reads-output sample.fusion_reads.bam --max-kmer-copies 1
+    --reads-output sample.fusion_reads.bam \
+    --breakpoints-output sample.fusions.breakpoints.tsv --max-kmer-copies 1
+
+# 4. (Optional) reference-free reconstruction of the junction contig.
+scripts/reconstruct_fusions.sh -b sample.fusion_reads.bam -r two_gene_miniref.fa
 ```
+
+---
+
+## Helper scripts
+
+**Experimental.** These live in `scripts/` and complement the `geac experimental`
+fusion commands; like the commands themselves, their interfaces may change.
+
+### `reconstruct_fusions.sh`
+
+Reference-free reconstruction of fusion junctions from a fusion *evidence BAM*
+(records tagged `FX:Z:GENEA::GENEB` by `geac experimental fusions --reads-output`).
+For each fusion it extracts that fusion's reads, assembles them de novo with CAP3,
+and (optionally) aligns the contigs to a reference with minimap2 so the breakpoint
+appears as a split/supplementary alignment. This is a sequence-level complement to
+`--breakpoints-output`: the latter estimates coordinates from k-mer positions,
+while this rebuilds the actual junction contig.
+
+```bash
+scripts/reconstruct_fusions.sh -b evidence.bam [-o outdir] [-r ref.fa] \
+                               [-f "GENEA::GENEB"] [-t threads]
+```
+
+Requires `samtools` (≥1.12) and `cap3`; `minimap2` is needed only when `-r` is given.

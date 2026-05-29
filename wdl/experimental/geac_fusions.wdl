@@ -35,6 +35,7 @@ version 1.0
 ##   reads_bam_index       - Corresponding .bai index
 ##   fusions_tsv           - Human-readable fusion results TSV (header-only when no fusions)
 ##   kmer_hits_tsv         - Per-k-mer hits TSV for fusion-supporting reads (header-only when no fusions)
+##   breakpoints_tsv       - Per-fusion breakpoint coordinates derived from junction-spanning reads
 
 workflow GeacFusions {
 
@@ -83,6 +84,7 @@ workflow GeacFusions {
         File reads_bam_index = Fusions.reads_bam_index
         File fusions_tsv     = Fusions.fusions_tsv
         File kmer_hits_tsv   = Fusions.kmer_hits_tsv
+        File breakpoints_tsv = Fusions.breakpoints_tsv
     }
 }
 
@@ -108,12 +110,13 @@ task Fusions {
         Int    preemptible
     }
 
-    String stem             = sub(basename(input_bam), "\\.(bam|cram)$", "")
-    String output_parquet       = stem + ".fusions.parquet"
-    String output_reads_bam     = stem + ".fusions.bam"
-    String output_reads_bam_bai = stem + ".fusions.bam.bai"
-    String output_tsv           = stem + ".fusions.tsv"
-    String output_kmer_hits     = stem + ".fusions.kmer_hits.tsv"
+    String stem                  = sub(basename(input_bam), "\\.(bam|cram)$", "")
+    String output_parquet        = stem + ".fusions.parquet"
+    String output_reads_bam      = stem + ".fusions.bam"
+    String output_reads_bam_bai  = stem + ".fusions.bam.bai"
+    String output_tsv            = stem + ".fusions.tsv"
+    String output_kmer_hits      = stem + ".fusions.kmer_hits.tsv"
+    String output_breakpoints    = stem + ".fusions.breakpoints.tsv"
 
     command <<<
         set -euo pipefail
@@ -129,17 +132,19 @@ task Fusions {
             --reads-output         ~{output_reads_bam} \
             --tsv-output           ~{output_tsv} \
             --kmer-hits-output     ~{output_kmer_hits} \
+            --breakpoints-output   ~{output_breakpoints} \
             ~{"--reference "       + reference_fasta} \
             ~{"--sample-id "       + sample_id} \
             ~{"--max-kmer-copies " + max_kmer_copies}
     >>>
 
     output {
-        File fusions_parquet = output_parquet
-        File reads_bam       = output_reads_bam
-        File reads_bam_index = output_reads_bam_bai
-        File fusions_tsv     = output_tsv
-        File kmer_hits_tsv   = output_kmer_hits
+        File fusions_parquet  = output_parquet
+        File reads_bam        = output_reads_bam
+        File reads_bam_index  = output_reads_bam_bai
+        File fusions_tsv      = output_tsv
+        File kmer_hits_tsv    = output_kmer_hits
+        File breakpoints_tsv  = output_breakpoints
     }
 
     runtime {

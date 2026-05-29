@@ -205,6 +205,48 @@ fn fusion_pair_label(key: (u32, u32), gene_names: &[String]) -> String {
     format!("{}::{}", gene_names[key.0 as usize], gene_names[key.1 as usize])
 }
 
+// ─── Breakpoint accumulation types ───────────────────────────────────────────
+
+struct SpanningReadData {
+    chrom: String,
+    pos: i64,
+    last_a: usize,
+    first_a: usize,
+    last_b: usize,
+    first_b: usize,
+}
+
+struct BreakpointAccumulator {
+    gene_a_idx: u32,
+    gene_b_idx: u32,
+    gene_a_chrom_votes: HashMap<String, u32>,
+    gene_b_chrom_votes: HashMap<String, u32>,
+    spanning_reads: Vec<SpanningReadData>,
+}
+
+fn median_i64(values: &mut Vec<i64>) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_unstable();
+    let n = values.len();
+    if n % 2 == 0 {
+        Some((values[n / 2 - 1] + values[n / 2]) as f64 / 2.0)
+    } else {
+        Some(values[n / 2] as f64)
+    }
+}
+
+fn std_dev_i64(values: &[i64]) -> Option<f64> {
+    if values.len() < 2 {
+        return None;
+    }
+    let mean = values.iter().sum::<i64>() as f64 / values.len() as f64;
+    let variance = values.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>()
+        / (values.len() - 1) as f64;
+    Some(variance.sqrt())
+}
+
 fn decode_kmer(hash: u64, k: usize) -> String {
     const BASES: [u8; 4] = *b"ACGT";
     (0..k)
@@ -495,11 +537,9 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         info!(output = %reads_output.display(), "BAI index written");
     }
 
-    // Optional second BAM pass: stream per-k-mer hit rows for fusion-supporting reads.
-    // Doing this in a second pass (rather than accumulating kmer_hits during the first
-    // pass) avoids storing gigabytes of per-read detail for reads that turn out not to
-    // support any passing fusion.
-    if let Some(ref kmer_hits_path) = args.kmer_hits_output {
+    // Optional combined second BAM pass: produces kmer-hits TSV and/or breakpoints TSV.
+    // Both outputs share one BAM scan to avoid re-reading the file twice.
+    if args.kmer_hits_output.is_some() || args.breakpoints_output.is_some() {
         use std::io::{BufWriter, Write};
 
         let fusion_qnames: HashMap<Vec<u8>, String> = qname_to_reads
@@ -513,8 +553,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
 
         info!(
             n_fragments = fusion_qnames.len(),
-            output = %kmer_hits_path.display(),
-            "writing kmer hits TSV (second BAM pass)..."
+            "writing detail outputs (second BAM pass)..."
         );
 
         let mut reader2 = bam::Reader::from_path(&args.bam)
@@ -530,14 +569,39 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 .collect()
         };
 
-        let file = std::fs::File::create(kmer_hits_path)
-            .with_context(|| format!("failed to create kmer hits TSV: {}", kmer_hits_path.display()))?;
-        let mut w = BufWriter::new(file);
-        writeln!(w, "fusion\tsample_id\tread_name\tread_end\tchrom\tpos\tgene_matched\tkmer_pos_in_read\tkmer_hash\tkmer_seq")?;
+        // kmer-hits TSV writer (optional).
+        let mut kmer_hits_writer: Option<BufWriter<std::fs::File>> =
+            if let Some(ref path) = args.kmer_hits_output {
+                let file = std::fs::File::create(path)
+                    .with_context(|| format!("failed to create kmer hits TSV: {}", path.display()))?;
+                let mut w = BufWriter::new(file);
+                writeln!(w, "fusion\tsample_id\tread_name\tread_end\tchrom\tpos\tgene_matched\tkmer_pos_in_read\tkmer_hash\tkmer_seq")?;
+                Some(w)
+            } else {
+                None
+            };
+
+        // Breakpoint accumulators (optional): one per passing fusion.
+        let mut accumulators: Option<HashMap<String, BreakpointAccumulator>> =
+            if args.breakpoints_output.is_some() {
+                let mut map: HashMap<String, BreakpointAccumulator> = HashMap::new();
+                for (&(ga, gb), label) in &fusion_label {
+                    map.insert(label.clone(), BreakpointAccumulator {
+                        gene_a_idx: ga,
+                        gene_b_idx: gb,
+                        gene_a_chrom_votes: HashMap::new(),
+                        gene_b_chrom_votes: HashMap::new(),
+                        spanning_reads: Vec::new(),
+                    });
+                }
+                Some(map)
+            } else {
+                None
+            };
 
         let mut rows_written: u64 = 0;
         for result in reader2.records() {
-            let record = result.context("error reading BAM record in kmer hits pass")?;
+            let record = result.context("error reading BAM record in detail pass")?;
             let Some(fusion_label_str) = fusion_qnames.get(record.qname()) else {
                 continue;
             };
@@ -548,26 +612,140 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             let flags = record.flags();
             let read_end = if flags & 0x40 != 0 { "R1" } else { "R2" };
             let tid = record.tid();
-            let chrom = if tid >= 0 {
+            let chrom_str: &str = if tid >= 0 {
                 target_names.get(tid as usize).map(|s| s.as_str()).unwrap_or("*")
             } else {
                 "*"
             };
-            let pos1 = record.pos() + 1;
-            let read_name = std::str::from_utf8(record.qname()).unwrap_or("?");
-            for &(kmer_hash, gene_idx, kmer_pos_in_read) in &rh.kmer_hits {
-                let gene_name = index.gene_names.get(gene_idx as usize).map(|s| s.as_str()).unwrap_or("?");
-                let kmer_seq = decode_kmer(kmer_hash, k);
-                writeln!(
-                    w,
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                    fusion_label_str, sample_id, read_name, read_end, chrom, pos1,
-                    gene_name, kmer_pos_in_read, kmer_hash as i64, kmer_seq
-                )?;
-                rows_written += 1;
+            let pos1 = record.pos() + 1; // 1-based alignment start
+
+            // kmer-hits TSV rows.
+            if let Some(ref mut w) = kmer_hits_writer {
+                let read_name = std::str::from_utf8(record.qname()).unwrap_or("?");
+                for &(kmer_hash, gene_idx, kmer_pos_in_read) in &rh.kmer_hits {
+                    let gene_name = index.gene_names.get(gene_idx as usize).map(|s| s.as_str()).unwrap_or("?");
+                    let kmer_seq = decode_kmer(kmer_hash, k);
+                    writeln!(
+                        w,
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                        fusion_label_str, sample_id, read_name, read_end, chrom_str, pos1,
+                        gene_name, kmer_pos_in_read, kmer_hash as i64, kmer_seq
+                    )?;
+                    rows_written += 1;
+                }
+            }
+
+            // Breakpoint accumulation.
+            if let Some(ref mut acc_map) = accumulators {
+                if let Some(acc) = acc_map.get_mut(fusion_label_str) {
+                    // Partition k-mer hit positions by gene.
+                    let mut a_positions: Vec<usize> = Vec::new();
+                    let mut b_positions: Vec<usize> = Vec::new();
+                    for &(_, gene_idx, kmer_pos_in_read) in &rh.kmer_hits {
+                        if gene_idx == acc.gene_a_idx {
+                            a_positions.push(kmer_pos_in_read);
+                        } else if gene_idx == acc.gene_b_idx {
+                            b_positions.push(kmer_pos_in_read);
+                        }
+                    }
+
+                    if chrom_str == "*" {
+                        // Unmapped: skip for chromosome votes and breakpoint estimates.
+                    } else if !a_positions.is_empty() && b_positions.is_empty() {
+                        *acc.gene_a_chrom_votes.entry(chrom_str.to_string()).or_insert(0) += 1;
+                    } else if a_positions.is_empty() && !b_positions.is_empty() {
+                        *acc.gene_b_chrom_votes.entry(chrom_str.to_string()).or_insert(0) += 1;
+                    } else if !a_positions.is_empty() && !b_positions.is_empty() {
+                        // Spanning read.
+                        let last_a = *a_positions.iter().max().unwrap();
+                        let first_a = *a_positions.iter().min().unwrap();
+                        let last_b = *b_positions.iter().max().unwrap();
+                        let first_b = *b_positions.iter().min().unwrap();
+                        acc.spanning_reads.push(SpanningReadData {
+                            chrom: chrom_str.to_string(),
+                            pos: pos1,
+                            last_a, first_a, last_b, first_b,
+                        });
+                    }
+                }
             }
         }
-        info!(rows_written, output = %kmer_hits_path.display(), "kmer hits TSV written");
+
+        if let Some(ref path) = args.kmer_hits_output {
+            info!(rows_written, output = %path.display(), "kmer hits TSV written");
+        }
+
+        // Compute and write breakpoints TSV.
+        if let Some(ref bp_path) = args.breakpoints_output {
+            let file = std::fs::File::create(bp_path)
+                .with_context(|| format!("failed to create breakpoints TSV: {}", bp_path.display()))?;
+            let mut w = BufWriter::new(file);
+            writeln!(w, "fusion\tgene_a\tchrom_a\tbreakpoint_a\tbp_a_n\tbp_a_std\tgene_b\tchrom_b\tbreakpoint_b\tbp_b_n\tbp_b_std\tn_spanning_reads")?;
+
+            let acc_map = accumulators.as_mut().unwrap();
+            let mut fusions_sorted: Vec<String> = acc_map.keys().cloned().collect();
+            fusions_sorted.sort_unstable();
+
+            for label in &fusions_sorted {
+                let acc = acc_map.get_mut(label.as_str()).unwrap();
+                let gene_a = &index.gene_names[acc.gene_a_idx as usize];
+                let gene_b = &index.gene_names[acc.gene_b_idx as usize];
+
+                let modal_chrom = |votes: &HashMap<String, u32>| -> String {
+                    votes.iter()
+                        .max_by_key(|(_, &v)| v)
+                        .map(|(c, _)| c.clone())
+                        .unwrap_or_else(|| "*".to_string())
+                };
+                let chrom_a = modal_chrom(&acc.gene_a_chrom_votes);
+                let chrom_b = modal_chrom(&acc.gene_b_chrom_votes);
+
+                let mut bp_a_estimates: Vec<i64> = Vec::new();
+                let mut bp_b_estimates: Vec<i64> = Vec::new();
+
+                for sd in &acc.spanning_reads {
+                    let a_before_b = sd.first_a < sd.first_b;
+                    if sd.chrom == chrom_a {
+                        let est = if a_before_b {
+                            sd.pos + sd.last_a as i64 + k as i64
+                        } else {
+                            sd.pos + sd.first_a as i64
+                        };
+                        bp_a_estimates.push(est);
+                    }
+                    if sd.chrom == chrom_b {
+                        let est = if a_before_b {
+                            sd.pos + sd.first_b as i64
+                        } else {
+                            sd.pos + sd.last_b as i64 + k as i64
+                        };
+                        bp_b_estimates.push(est);
+                    }
+                }
+
+                let n_spanning = acc.spanning_reads.len();
+                let bp_a = median_i64(&mut bp_a_estimates);
+                let bp_a_std = std_dev_i64(&bp_a_estimates);
+                let bp_a_n = bp_a_estimates.len();
+                let bp_b = median_i64(&mut bp_b_estimates);
+                let bp_b_std = std_dev_i64(&bp_b_estimates);
+                let bp_b_n = bp_b_estimates.len();
+
+                let fmt_opt_f64 = |v: Option<f64>| v.map(|x| format!("{:.1}", x)).unwrap_or_else(|| "NA".to_string());
+                let fmt_opt_i64 = |v: Option<f64>| v.map(|x| format!("{}", x as i64)).unwrap_or_else(|| "NA".to_string());
+
+                writeln!(
+                    w,
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    label, gene_a, chrom_a,
+                    fmt_opt_i64(bp_a), bp_a_n, fmt_opt_f64(bp_a_std),
+                    gene_b, chrom_b,
+                    fmt_opt_i64(bp_b), bp_b_n, fmt_opt_f64(bp_b_std),
+                    n_spanning,
+                )?;
+            }
+            info!(output = %bp_path.display(), "breakpoints TSV written");
+        }
     }
 
     Ok(())
