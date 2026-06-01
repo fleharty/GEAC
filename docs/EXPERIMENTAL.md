@@ -12,6 +12,10 @@ workflow. The core idea: build an index of k-mers that are unique to each gene b
 then scan a BAM/CRAM and flag read fragments whose two ends match two *different*
 genes — a signature of a fusion or chimeric read.
 
+> 🧭 For the forward-looking design — the niche this caller aims to own, the
+> false-positive root-cause taxonomy, and the prioritized improvement roadmap — see
+> [FUSION_DEVELOPMENT.md](FUSION_DEVELOPMENT.md).
+
 ## Command overview
 
 | Command | Purpose |
@@ -175,9 +179,13 @@ geac experimental fusions \
 | `--kmer-hits-output <PATH>` | — | One row per k-mer hit from fusion reads. The `kmer_pos_in_read` column gives each k-mer's 0-based offset within the read, which locates the Gene A→Gene B transition on junction-spanning reads. |
 | `--breakpoints-output <PATH>` | — | Per-fusion breakpoint TSV. Projects the k-mer transition on junction-spanning reads onto genomic coordinates; shares the same second BAM pass as `--kmer-hits-output` (only one extra scan when both are set). |
 | `--max-kmer-copies <N>` | — | Ignore k-mers occurring > `N` times genome-wide (or with unknown copy count). Requires an index built with `--check-genome-uniqueness`; errors clearly otherwise. Lets you re-tighten or relax uniqueness at call time without rebuilding. |
+| `--fusion-pon <PATH>` | — | Fusion Panel-of-Normals DuckDB (a `geac merge` of normal-sample `*.fusions.parquet` files). Annotates every call with `n_pon_samples`, `pon_total_samples`, `max_pon_supporting_reads`. Matching is by alphabetically-sorted gene-name pair, so PoN and call may use different indexes. |
+| `--max-pon-samples <N>` | — | Drop fusions seen in strictly more than `N` PoN samples. Requires `--fusion-pon`. Default: annotate only, never filter. |
 
 Output Parquet/TSV columns: `sample_id, gene_a, gene_b, chrom_a, chrom_b,
-supporting_reads, min_mapq`.
+supporting_reads, min_mapq, n_pon_samples, pon_total_samples,
+max_pon_supporting_reads`. The three `*pon*` columns are `0`/`0`/`NA` unless
+`--fusion-pon` is given.
 
 `--kmer-hits-output` columns: `fusion, sample_id, read_name, read_end, chrom, pos,
 gene_matched, kmer_pos_in_read, kmer_hash, kmer_seq`.
@@ -291,6 +299,30 @@ geac experimental fusions --bam sample.bam --index panel.duckdb \
 
 # 4. (Optional) reference-free reconstruction of the junction contig.
 scripts/reconstruct_fusions.sh -b sample.fusion_reads.bam -r two_gene_miniref.fa
+```
+
+### Building a fusion Panel-of-Normals
+
+A fusion PoN suppresses recurrent false positives (paralog crosstalk, alignment
+artifacts, read-through, lab-specific chimeras). Run `fusions` on a set of normal
+samples with a **low `--min-supporting-reads`** so even weak artifacts are captured,
+then `geac merge` their `*.fusions.parquet` files into a DuckDB. `merge` routes them
+into a `fusions` table.
+
+```bash
+# Run each normal with sensitive settings (capture weak artifacts).
+for n in normal1 normal2 normal3; do
+  geac experimental fusions --bam $n.bam --index panel.duckdb \
+      --output $n.fusions.parquet --min-supporting-reads 1
+done
+
+# Build the PoN DuckDB.
+geac merge --output fusion_pon.duckdb normal1.fusions.parquet normal2.fusions.parquet normal3.fusions.parquet
+
+# Apply it: annotate (and optionally filter) a tumor sample's calls.
+geac experimental fusions --bam tumor.bam --index panel.duckdb \
+    --output tumor.fusions.parquet --tsv-output tumor.fusions.tsv \
+    --fusion-pon fusion_pon.duckdb --max-pon-samples 0
 ```
 
 ---

@@ -713,6 +713,32 @@ pub struct FusionsArgs {
     /// this flag against an older index without that data is an error.
     #[arg(long)]
     pub max_kmer_copies: Option<u32>,
+
+    /// Optional fusion Panel-of-Normals DuckDB (a `geac merge` of normal-sample
+    /// *.fusions.parquet files). Each output fusion is annotated with PoN columns
+    /// (n_pon_samples, pon_total_samples, max_pon_supporting_reads).
+    #[arg(long)]
+    pub fusion_pon: Option<PathBuf>,
+
+    /// Drop fusions seen in strictly more than this many PoN samples. Requires
+    /// --fusion-pon. Default: annotate only, never filter.
+    #[arg(long)]
+    pub max_pon_samples: Option<u32>,
+
+    /// Require at least this many spanning reads (single reads hitting both
+    /// fusion genes) to show a coherent A-block→B-block k-mer partition.
+    /// Spanning reads with interleaved gene k-mers indicate homology/paralog
+    /// artifacts rather than a real junction. Default: 0 (disabled — report
+    /// all candidates regardless of coherence). Set to 1 or higher to enable.
+    #[arg(long, default_value_t = 0)]
+    pub min_coherent_fragments: u32,
+
+    /// Minimum k-mer hits from each gene for a spanning read to be considered
+    /// anchored on both sides of the junction. Reads with fewer than this many
+    /// k-mers from either gene are counted as spanning but not coherent.
+    /// Only relevant when --min-coherent-fragments > 0.
+    #[arg(long, default_value_t = 3)]
+    pub min_anchor_kmers: u32,
 }
 
 #[derive(Parser, Debug)]

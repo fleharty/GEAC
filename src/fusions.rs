@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -126,6 +126,15 @@ fn load_index(index_path: &Path, max_kmer_copies: Option<u32>) -> Result<FusionI
 
 struct ReadHit {
     gene_idx: u32,
+    gene1_kmer_count: u32,
+    gene1_kmer_min: u32,
+    gene1_kmer_max: u32,
+    // Second-best gene on this read (if any k-mer hit a different gene).
+    // Used by the junction-coherence filter to detect spanning reads.
+    gene2_idx: Option<u32>,
+    gene2_kmer_count: u32,
+    gene2_kmer_min: u32,
+    gene2_kmer_max: u32,
     mapq: u8,
     // kmer_hits is populated only during the second BAM pass for kmer-hits-output;
     // empty during the first pass to avoid gigabytes of per-read detail on deep BAMs.
@@ -140,7 +149,8 @@ fn assign_gene(
     collect_detail: bool,
     max_copies: Option<u32>,
 ) -> Option<ReadHit> {
-    let mut gene_hits: HashMap<u32, u32> = HashMap::new();
+    // gene_idx → (count, min_pos, max_pos)
+    let mut gene_hits: HashMap<u32, (u32, usize, usize)> = HashMap::new();
     let mut kmer_hits: Vec<(u64, u32, usize)> = Vec::new();
     for (kmer, pos_in_read) in kmer_iter(seq, k) {
         if let Some(&gene_idx) = index.kmer_to_gene.get(&kmer) {
@@ -152,7 +162,10 @@ fn assign_gene(
                     _ => continue,
                 }
             }
-            *gene_hits.entry(gene_idx).or_insert(0) += 1;
+            let e = gene_hits.entry(gene_idx).or_insert((0, pos_in_read, pos_in_read));
+            e.0 += 1;
+            e.1 = e.1.min(pos_in_read);
+            e.2 = e.2.max(pos_in_read);
             // Retaining every matching k-mer for every assigned read costs
             // gigabytes on deep BAMs; only do it when the detail TSV is requested.
             if collect_detail {
@@ -160,41 +173,149 @@ fn assign_gene(
             }
         }
     }
-    // Highest k-mer count wins; ties broken by lowest gene index so the choice is
-    // deterministic (HashMap iteration order must not influence the result).
-    let (winning_gene, count) = gene_hits
+
+    // Sort by count desc, then gene_idx asc so the result is deterministic
+    // (HashMap iteration order must not influence the winner choice).
+    let mut sorted: Vec<(u32, u32, usize, usize)> = gene_hits
         .into_iter()
-        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))?;
+        .map(|(gi, (cnt, mn, mx))| (gi, cnt, mn, mx))
+        .collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let (winning_gene, count, g1_min, g1_max) = *sorted.first()?;
     if count < min_hits {
         return None;
     }
-    Some(ReadHit { gene_idx: winning_gene, mapq: 0, kmer_hits })
+
+    // Expose the second gene whenever any k-mer matched it. Quality gating is
+    // handled separately: coherence requires >= min_anchor_kmers from each side
+    // (enforced inside read_coherence), and fusion pair selection via
+    // fragment_top_pair still relies on gene_idx (the primary/winning gene) which
+    // is gated on min_hits. Setting gene2_idx at the 1-k-mer level means
+    // n_spanning_reads correctly reflects all reads that cross the junction,
+    // even when the anchor on one side is short (asymmetric junction coverage).
+    let (gene2_idx, gene2_kmer_count, g2_min, g2_max) = if sorted.len() >= 2 {
+        let (g2, c2, mn2, mx2) = sorted[1];
+        (Some(g2), c2, mn2, mx2)
+    } else {
+        (None, 0, 0, 0)
+    };
+
+    Some(ReadHit {
+        gene_idx: winning_gene,
+        gene1_kmer_count: count,
+        gene1_kmer_min: g1_min as u32,
+        gene1_kmer_max: g1_max as u32,
+        gene2_idx,
+        gene2_kmer_count,
+        gene2_kmer_min: g2_min as u32,
+        gene2_kmer_max: g2_max as u32,
+        mapq: 0,
+        kmer_hits,
+    })
 }
 
 /// Select the fusion gene-pair for a fragment's read hits.
 ///
-/// Votes are gene → number of reads hitting it. Returns `None` for fragments hitting
-/// fewer than two distinct genes. The top two genes are chosen by vote count
-/// descending, breaking ties by **ascending gene index** so the result is
-/// deterministic (HashMap iteration order must not influence it). The pair is
-/// normalized to `(min_index, max_index)` so it is a stable key for the whole run.
+/// Primary votes: each read casts 1 vote for its `gene_idx`. If fewer than two
+/// distinct genes are identified by primary votes alone, a supplemental round adds
+/// `gene2_kmer_count` votes for each read's `gene2_idx` — weighting by k-mer count
+/// so a genuine junction read (many k-mers on both sides) outweighs a noise hit
+/// (1 k-mer). This handles single-read chimeric fragments (mate unmapped/filtered)
+/// and multi-read fragments where the junction falls late in every read so all
+/// primary assignments land on one gene.
+///
+/// The top two genes are chosen by vote count descending, breaking ties by
+/// **ascending gene index** so the result is deterministic. The pair is normalized
+/// to `(min_index, max_index)` so it is a stable key for the whole run.
 fn fragment_top_pair(read_hits: &[ReadHit]) -> Option<(u32, u32)> {
-    if read_hits.len() < 2 {
-        return None;
-    }
     let mut gene_vote: HashMap<u32, usize> = HashMap::new();
     for rh in read_hits {
         *gene_vote.entry(rh.gene_idx).or_insert(0) += 1;
     }
-    if gene_vote.len() < 2 {
-        return None;
+    if gene_vote.len() >= 2 {
+        // Primary votes identified two or more distinct genes — pick top two
+        // by vote count, breaking ties by ascending gene index.
+        let mut sorted: Vec<(u32, usize)> = gene_vote.into_iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let ga = sorted[0].0;
+        let gb = sorted[1].0;
+        return Some(if ga <= gb { (ga, gb) } else { (gb, ga) });
     }
-    let mut sorted: Vec<(u32, usize)> = gene_vote.into_iter().collect();
-    // Vote count descending, then gene index ascending (deterministic tie-break).
-    sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    let ga = sorted[0].0;
-    let gb = sorted[1].0;
+    // Primary votes identified only one gene. The primary gene must always be
+    // part of the returned pair; supplemental evidence only selects its partner.
+    // Adding supplemental k-mer-weighted votes into the same map would allow
+    // two competing gene2 candidates to both outscore the primary gene and
+    // exclude it from the pair — so we handle the two steps separately.
+    let primary_gene = gene_vote.into_keys().next()?;
+    let mut supp: HashMap<u32, usize> = HashMap::new();
+    for rh in read_hits {
+        if let Some(g2) = rh.gene2_idx {
+            *supp.entry(g2).or_insert(0) += rh.gene2_kmer_count as usize;
+        }
+    }
+    // Pick the partner with the highest total k-mer evidence; break ties by
+    // ascending gene index so the choice is deterministic.
+    let (partner, _) = supp
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))?;
+    let (ga, gb) = (primary_gene, partner);
     Some(if ga <= gb { (ga, gb) } else { (gb, ga) })
+}
+
+/// Check whether a single read shows a coherent A-block→B-block k-mer partition for
+/// the given fusion pair `(ga, gb)`.
+///
+/// Returns `(is_spanning, is_coherent)`:
+/// - `is_spanning`: the read has k-mers assigned to both ga and gb.
+/// - `is_coherent`: the read is spanning AND both gene blocks are non-overlapping
+///   in `kmer_pos_in_read` AND each block has at least `min_anchor` k-mers.
+///
+/// A coherent read indicates a real junction splice (disjoint A-then-B or B-then-A
+/// blocks). An interleaved read indicates homology / paralog artifact — the same
+/// read bases match both genes, not a chimeric junction.
+fn read_coherence(rh: &ReadHit, ga: u32, gb: u32, k: usize, min_anchor: u32) -> (bool, bool) {
+    // Determine which side of the ReadHit corresponds to ga and which to gb.
+    let (a_count, a_min, a_max, b_count, b_min, b_max) = if rh.gene_idx == ga {
+        match rh.gene2_idx {
+            Some(g2) if g2 == gb => (
+                rh.gene1_kmer_count, rh.gene1_kmer_min, rh.gene1_kmer_max,
+                rh.gene2_kmer_count, rh.gene2_kmer_min, rh.gene2_kmer_max,
+            ),
+            _ => return (false, false),
+        }
+    } else if rh.gene_idx == gb {
+        match rh.gene2_idx {
+            Some(g2) if g2 == ga => (
+                rh.gene2_kmer_count, rh.gene2_kmer_min, rh.gene2_kmer_max,
+                rh.gene1_kmer_count, rh.gene1_kmer_min, rh.gene1_kmer_max,
+            ),
+            _ => return (false, false),
+        }
+    } else {
+        return (false, false);
+    };
+
+    // Spanning but without sufficient anchor on both sides → not coherent.
+    if a_count < min_anchor || b_count < min_anchor {
+        return (true, false);
+    }
+
+    // Two k-mer blocks [a_min, a_max+k) and [b_min, b_max+k) are non-overlapping iff
+    // one ends before the other begins.
+    let k32 = k as u32;
+    let coherent = (a_max + k32 <= b_min) || (b_max + k32 <= a_min);
+    (true, coherent)
+}
+
+/// Per-fusion candidate statistics accumulated during fragment aggregation.
+struct FusionStats {
+    count: u32,
+    min_mapq: u8,
+    n_spanning_reads: u32,
+    /// Number of fragments (qnames) where at least one read showed a coherent
+    /// A-block→B-block k-mer partition. Incremented once per fragment, not per read.
+    n_coherent_fragments: u32,
 }
 
 /// Canonical `GENE_A::GENE_B` label for a normalized `(min_index, max_index)` pair.
@@ -262,12 +383,15 @@ fn write_fusion_tsv(records: &[FusionRecord], output: &Path) -> Result<()> {
     let file = std::fs::File::create(output)
         .with_context(|| format!("failed to create TSV: {}", output.display()))?;
     let mut w = BufWriter::new(file);
-    writeln!(w, "sample_id\tgene_a\tgene_b\tchrom_a\tchrom_b\tsupporting_reads\tmin_mapq")?;
+    writeln!(w, "sample_id\tgene_a\tgene_b\tchrom_a\tchrom_b\tsupporting_reads\tmin_mapq\tn_spanning_reads\tn_coherent_fragments\tn_pon_samples\tpon_total_samples\tmax_pon_supporting_reads")?;
     for r in records {
+        let max_pon = r.max_pon_supporting_reads.map(|v| v.to_string()).unwrap_or_else(|| "NA".to_string());
         writeln!(
             w,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            r.sample_id, r.gene_a, r.gene_b, r.chrom_a, r.chrom_b, r.supporting_reads, r.min_mapq
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            r.sample_id, r.gene_a, r.gene_b, r.chrom_a, r.chrom_b, r.supporting_reads, r.min_mapq,
+            r.n_spanning_reads, r.n_coherent_fragments,
+            r.n_pon_samples, r.pon_total_samples, max_pon
         )?;
     }
     Ok(())
@@ -276,6 +400,8 @@ fn write_fusion_tsv(records: &[FusionRecord], output: &Path) -> Result<()> {
 // ─── Parquet output ───────────────────────────────────────────────────────────
 
 struct FusionRecord {
+    // Not written to output — used to rebuild fusion_label after filtering.
+    pair_key: (u32, u32),
     sample_id: String,
     gene_a: String,
     gene_b: String,
@@ -283,6 +409,19 @@ struct FusionRecord {
     chrom_b: String,
     supporting_reads: i32,
     min_mapq: u8,
+    // Junction-coherence counts (from --min-coherent-fragments filter).
+    // n_spanning_reads counts reads where gene2_idx matches the fusion partner,
+    // including reads where the partner-side anchor is < min_anchor_kmers (those
+    // reads are spanning but not coherent). Use n_coherent_fragments as the
+    // quality-gated signal; n_spanning_reads is a raw sensitivity indicator.
+    n_spanning_reads: i32,
+    /// Fragments (qnames) with at least one coherent spanning read.
+    n_coherent_fragments: i32,
+    // Panel-of-Normals annotation. Without --fusion-pon, n_pon_samples and
+    // pon_total_samples are 0 and max_pon_supporting_reads is None.
+    n_pon_samples: i32,
+    pon_total_samples: i32,
+    max_pon_supporting_reads: Option<i32>,
 }
 
 fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
@@ -294,6 +433,11 @@ fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
         Field::new("chrom_b", DataType::Utf8, false),
         Field::new("supporting_reads", DataType::Int32, false),
         Field::new("min_mapq", DataType::UInt8, false),
+        Field::new("n_spanning_reads", DataType::Int32, false),
+        Field::new("n_coherent_fragments", DataType::Int32, false),
+        Field::new("n_pon_samples", DataType::Int32, false),
+        Field::new("pon_total_samples", DataType::Int32, false),
+        Field::new("max_pon_supporting_reads", DataType::Int32, true),
     ]));
 
     let file = std::fs::File::create(output)
@@ -328,6 +472,21 @@ fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
             Arc::new(UInt8Array::from(
                 records.iter().map(|r| r.min_mapq).collect::<Vec<_>>(),
             )) as ArrayRef,
+            Arc::new(Int32Array::from(
+                records.iter().map(|r| r.n_spanning_reads).collect::<Vec<_>>(),
+            )) as ArrayRef,
+            Arc::new(Int32Array::from(
+                records.iter().map(|r| r.n_coherent_fragments).collect::<Vec<_>>(),
+            )) as ArrayRef,
+            Arc::new(Int32Array::from(
+                records.iter().map(|r| r.n_pon_samples).collect::<Vec<_>>(),
+            )) as ArrayRef,
+            Arc::new(Int32Array::from(
+                records.iter().map(|r| r.pon_total_samples).collect::<Vec<_>>(),
+            )) as ArrayRef,
+            Arc::new(Int32Array::from(
+                records.iter().map(|r| r.max_pon_supporting_reads).collect::<Vec<_>>(),
+            )) as ArrayRef,
         ],
     )
     .context("failed to build record batch")?;
@@ -337,11 +496,77 @@ fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
     Ok(())
 }
 
+// ─── Panel-of-Normals annotation ──────────────────────────────────────────────
+
+/// Annotate fusion records against a fusion Panel-of-Normals DuckDB (a `geac merge`
+/// of normal-sample `*.fusions.parquet` files, which carries a `fusions` table).
+///
+/// Matching is by the alphabetically-sorted gene-name pair, so a PoN built with one
+/// k-mer index still matches calls made with another (gene-index order may differ).
+fn annotate_fusion_pon(records: &mut [FusionRecord], pon_db: &Path) -> Result<()> {
+    if !pon_db.exists() {
+        anyhow::bail!("fusion PoN DuckDB not found: {}", pon_db.display());
+    }
+    let conn = Connection::open(pon_db)
+        .with_context(|| format!("failed to open fusion PoN DuckDB: {}", pon_db.display()))?;
+
+    conn.execute_batch("SELECT 1 FROM fusions LIMIT 0").context(
+        "fusion PoN DuckDB does not contain a fusions table — build it with \
+         `geac merge` over normal-sample *.fusions.parquet files",
+    )?;
+
+    let pon_total_samples: i32 =
+        conn.query_row("SELECT COUNT(DISTINCT sample_id) FROM fusions", [], |r| r.get(0))?;
+
+    // Aggregate per normalized (sorted) gene pair: how many distinct PoN samples carry
+    // it and the highest supporting-read count seen.
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT
+            LEAST(gene_a, gene_b)    AS g1,
+            GREATEST(gene_a, gene_b) AS g2,
+            COUNT(DISTINCT sample_id) AS n_samples,
+            MAX(supporting_reads)     AS max_reads
+        FROM fusions
+        GROUP BY g1, g2
+        "#,
+    )?;
+    let mut pon_agg: HashMap<(String, String), (i32, i32)> = HashMap::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let g1: String = row.get(0)?;
+        let g2: String = row.get(1)?;
+        let n_samples: i32 = row.get(2)?;
+        let max_reads: i32 = row.get(3)?;
+        pon_agg.insert((g1, g2), (n_samples, max_reads));
+    }
+
+    for r in records.iter_mut() {
+        r.pon_total_samples = pon_total_samples;
+        let key = if r.gene_a <= r.gene_b {
+            (r.gene_a.clone(), r.gene_b.clone())
+        } else {
+            (r.gene_b.clone(), r.gene_a.clone())
+        };
+        if let Some(&(n_samples, max_reads)) = pon_agg.get(&key) {
+            r.n_pon_samples = n_samples;
+            r.max_pon_supporting_reads = Some(max_reads);
+        }
+    }
+
+    info!(pon_total_samples, n_pon_pairs = pon_agg.len(), "fusion PoN annotation complete");
+    Ok(())
+}
+
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
 pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     let k = args.kmer_size as usize;
     anyhow::ensure!(k > 0 && k <= 31, "--kmer-size must be between 1 and 31");
+    anyhow::ensure!(
+        args.max_pon_samples.is_none() || args.fusion_pon.is_some(),
+        "--max-pon-samples requires --fusion-pon"
+    );
 
     info!(index = %args.index.display(), "loading fusion k-mer index...");
     let index = load_index(&args.index, args.max_kmer_copies)?;
@@ -425,41 +650,84 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     info!(reads_processed, reads_assigned, "BAM scan complete");
 
     // Aggregate: for each fragment with reads assigned to 2+ different genes,
-    // count it as a fusion candidate.
-    let mut fusion_counts: HashMap<(u32, u32), (u32, u8)> = HashMap::new();
+    // count it as a fusion candidate and accumulate junction-coherence statistics.
+    // Also cache qname → pair_key so secondary BAM passes can build fusion_qnames
+    // directly without re-running fragment_top_pair on every fragment.
+    let mut fusion_counts: HashMap<(u32, u32), FusionStats> = HashMap::new();
+    let mut qname_to_pair: HashMap<Vec<u8>, (u32, u32)> = HashMap::new();
+    let min_anchor = args.min_anchor_kmers;
 
-    for read_hits in qname_to_reads.values() {
+    for (qname, read_hits) in &qname_to_reads {
         let Some(key) = fragment_top_pair(read_hits) else {
             continue;
         };
+        qname_to_pair.insert(qname.clone(), key);
+        let (ga, gb) = key;
         let min_mq = read_hits.iter().map(|rh| rh.mapq).min().unwrap_or(0);
-        let entry = fusion_counts.entry(key).or_insert((0, 255));
-        entry.0 += 1;
-        entry.1 = entry.1.min(min_mq);
-    }
 
-    // Determine which (gene_a, gene_b) pairs pass the supporting-read filter.
-    let passing_pairs: HashSet<(u32, u32)> = fusion_counts
-        .iter()
-        .filter(|(_, (count, _))| *count >= args.min_supporting_reads)
-        .map(|(pair, _)| *pair)
-        .collect();
+        let mut n_spanning = 0u32;
+        let mut fragment_coherent = false;
+        for rh in read_hits {
+            let (spanning, coherent) = read_coherence(rh, ga, gb, k, min_anchor);
+            if spanning { n_spanning += 1; }
+            if coherent { fragment_coherent = true; }
+        }
+
+        let entry = fusion_counts.entry(key).or_insert(FusionStats {
+            count: 0,
+            min_mapq: 255,
+            n_spanning_reads: 0,
+            n_coherent_fragments: 0,
+        });
+        entry.count += 1;
+        entry.min_mapq = entry.min_mapq.min(min_mq);
+        entry.n_spanning_reads += n_spanning;
+        if fragment_coherent { entry.n_coherent_fragments += 1; }
+    }
 
     let mut records: Vec<FusionRecord> = fusion_counts
         .into_iter()
-        .filter(|(_, (count, _))| *count >= args.min_supporting_reads)
-        .map(|((ga, gb), (count, min_mq))| FusionRecord {
+        .filter(|(_, s)| s.count >= args.min_supporting_reads)
+        .map(|((ga, gb), s)| FusionRecord {
+            pair_key: (ga, gb),
             sample_id: sample_id.clone(),
             gene_a: index.gene_names[ga as usize].clone(),
             gene_b: index.gene_names[gb as usize].clone(),
             chrom_a: index.gene_chroms[ga as usize].clone(),
             chrom_b: index.gene_chroms[gb as usize].clone(),
-            supporting_reads: count as i32,
-            min_mapq: min_mq,
+            supporting_reads: s.count as i32,
+            min_mapq: s.min_mapq,
+            n_spanning_reads: s.n_spanning_reads as i32,
+            n_coherent_fragments: s.n_coherent_fragments as i32,
+            n_pon_samples: 0,
+            pon_total_samples: 0,
+            max_pon_supporting_reads: None,
         })
         .collect();
 
     records.sort_by(|a, b| b.supporting_reads.cmp(&a.supporting_reads));
+
+    // Panel-of-Normals annotation and optional filtering, before any output is written.
+    if let Some(ref pon_db) = args.fusion_pon {
+        annotate_fusion_pon(&mut records, pon_db)?;
+    }
+    if let Some(max_pon) = args.max_pon_samples {
+        let before = records.len();
+        records.retain(|r| r.n_pon_samples as u32 <= max_pon);
+        let dropped = before - records.len();
+        info!(dropped, max_pon_samples = max_pon, "filtered fusions present in PoN");
+    }
+
+    if args.min_coherent_fragments > 0 {
+        let before = records.len();
+        records.retain(|r| r.n_coherent_fragments >= args.min_coherent_fragments as i32);
+        let dropped = before - records.len();
+        info!(
+            dropped,
+            min_coherent_fragments = args.min_coherent_fragments,
+            "filtered fusions lacking coherent fragments"
+        );
+    }
 
     info!(n_fusions = records.len(), "fusion candidates identified");
     write_fusion_parquet(&records, &args.output)?;
@@ -470,31 +738,32 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         info!(output = %tsv_path.display(), "fusion TSV written");
     }
 
-    // Canonical "GENE_A::GENE_B" label per passing pair — same gene-index order as
-    // the Parquet/TSV gene_a/gene_b columns, so all outputs agree on the label.
-    let fusion_label: HashMap<(u32, u32), String> = passing_pairs
+    // Build fusion_label from the post-filter survivors so secondary outputs
+    // (reads BAM, kmer-hits TSV, breakpoints TSV) only include evidence for
+    // fusions that appear in the Parquet output.
+    let fusion_label: HashMap<(u32, u32), String> = records
         .iter()
-        .map(|&key| (key, fusion_pair_label(key, &index.gene_names)))
+        .map(|r| (r.pair_key, fusion_pair_label(r.pair_key, &index.gene_names)))
         .collect();
 
-    // Given a fragment's read hits, return its fusion key iff it passes the filter.
-    let fragment_fusion_key = |read_hits: &[ReadHit]| -> Option<(u32, u32)> {
-        let key = fragment_top_pair(read_hits)?;
-        passing_pairs.contains(&key).then_some(key)
-    };
+    // Build fusion_qnames once from the cached qname→pair mapping. Filtering by
+    // fusion_label ensures only post-filter survivors appear. Both secondary BAM
+    // passes share this map, avoiding re-running fragment_top_pair per qname.
+    let fusion_qnames: HashMap<Vec<u8>, String> = qname_to_pair
+        .into_iter()
+        .filter_map(|(qname, key)| {
+            let label = fusion_label.get(&key)?;
+            Some((qname, label.clone()))
+        })
+        .collect();
 
     // Optional second BAM pass: write all reads from fusion-supporting fragments.
+    // NOTE: this pass intentionally writes every record for a matching qname —
+    // including duplicates and low-MAPQ mates — so the output BAM contains the
+    // complete fragment for IGV inspection. Only the kmer-hits/breakpoints pass
+    // below applies the same read-quality filters as the first pass, because that
+    // pass uses reads for quantitative analysis (position estimates, k-mer counts).
     if let Some(ref reads_output) = args.reads_output {
-        // Collect qnames of fragments that support a passing fusion, mapping each
-        // to its "GENE_A::GENE_B" label so we can tag every emitted record with FX.
-        let fusion_qnames: HashMap<Vec<u8>, String> = qname_to_reads
-            .iter()
-            .filter_map(|(qname, read_hits)| {
-                let key = fragment_fusion_key(read_hits)?;
-                let label = fusion_label.get(&key)?;
-                Some((qname.clone(), label.clone()))
-            })
-            .collect();
 
         info!(
             n_fragments = fusion_qnames.len(),
@@ -541,15 +810,6 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     // Both outputs share one BAM scan to avoid re-reading the file twice.
     if args.kmer_hits_output.is_some() || args.breakpoints_output.is_some() {
         use std::io::{BufWriter, Write};
-
-        let fusion_qnames: HashMap<Vec<u8>, String> = qname_to_reads
-            .iter()
-            .filter_map(|(qname, read_hits)| {
-                let key = fragment_fusion_key(read_hits)?;
-                let label = fusion_label.get(&key)?;
-                Some((qname.clone(), label.clone()))
-            })
-            .collect();
 
         info!(
             n_fragments = fusion_qnames.len(),
@@ -605,11 +865,20 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             let Some(fusion_label_str) = fusion_qnames.get(record.qname()) else {
                 continue;
             };
+            // Apply the same filters as the first pass so kmer-hits and breakpoint
+            // estimates are consistent with supporting_reads counts in the Parquet.
+            let flags = record.flags();
+            if flags & 0x400 != 0 {
+                continue;
+            }
+            let is_unmapped = flags & 0x4 != 0;
+            if !is_unmapped && record.mapq() < args.min_mapq {
+                continue;
+            }
             let seq = record.seq().as_bytes();
             let Some(rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, true, args.max_kmer_copies) else {
                 continue;
             };
-            let flags = record.flags();
             let read_end = if flags & 0x40 != 0 { "R1" } else { "R2" };
             let tid = record.tid();
             let chrom_str: &str = if tid >= 0 {

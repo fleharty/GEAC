@@ -42,6 +42,7 @@ version 1.0
 ##   bed                     - Merged unique k-mer BED (empty array when write_bed=false)
 ##   beds_by_copies          - Per-copy-tier BED files, one per copy count (empty array when write_bed_by_copies=false)
 ##   gene_stats              - Per-gene uniqueness TSV (empty array when write_gene_stats=false)
+##   geac_version            - geac binary version string (e.g. "0.4.33") for provenance in the data table
 
 workflow GeacBuildFusionIndex {
 
@@ -96,6 +97,7 @@ workflow GeacBuildFusionIndex {
         Array[File] bed            = BuildFusionIndex.bed
         Array[File] beds_by_copies = BuildFusionIndex.beds_by_copies
         Array[File] gene_stats     = BuildFusionIndex.gene_stats
+        String      geac_version   = BuildFusionIndex.geac_version
     }
 }
 
@@ -134,6 +136,10 @@ task BuildFusionIndex {
     command <<<
         set -euo pipefail
 
+        # Record the geac version (e.g. "geac 0.4.33" -> "0.4.33") for the Terra
+        # data table, so each index is traceable to the binary that built it.
+        geac --version | awk '{print $2}' > geac_version.txt
+
         geac experimental build-fusion-index \
             --gtf            ~{gtf} \
             --fasta          ~{fasta} \
@@ -155,6 +161,7 @@ task BuildFusionIndex {
         Array[File] bed            = if write_bed            then [bed_file]            else []
         Array[File] beds_by_copies = glob("*.copies*.bed")
         Array[File] gene_stats     = if write_gene_stats     then [gene_stats_tsv]      else []
+        String      geac_version   = read_string("geac_version.txt")
     }
 
     runtime {

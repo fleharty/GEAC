@@ -923,3 +923,44 @@ sequence-level cross-check that handles strand correctly; the two approaches are
 complementary. WDLs: `wdl/experimental/geac_build_fusion_index.wdl` and
 `geac_fusions.wdl`. Cromwell rejects the `None` literal, so optional task outputs
 use `if cond then [path] else []` (0/1-element arrays) rather than `File?`.
+
+---
+
+## Fusion — junction-coherence / co-linearity filter (2026-06-01)
+
+**Motivation.** The most common recurrent false-positive class is paralog/homology: a
+single non-chimeric read from one locus carries k-mers that the index treats as unique
+to *two* genes, so it looks like a junction. These reads are distinguishable from real
+fusion-spanning reads by the *spatial pattern* of k-mer hits inside the read.
+
+On a real junction-spanning read, Gene-A k-mers occupy a contiguous left block and
+Gene-B k-mers occupy a disjoint right block (or vice versa). On a homology/paralog
+read, k-mers from both genes are *interleaved* — the same bases match both genes.
+`kmer_pos_in_read` already captures this signal.
+
+**Implementation.** `assign_gene` was extended to track per-gene `(count, min_pos,
+max_pos)` for all genes hit by a read (previously only the winner's count was
+tracked). `ReadHit` now stores the top-2 gene indices and their k-mer position ranges.
+
+During fragment aggregation, `read_coherence(rh, ga, gb, k, min_anchor)` classifies
+each read as:
+- **not spanning** — the read only hits one of the two fusion genes
+- **spanning but not anchored** — hits both genes but fewer than `min_anchor` k-mers
+  on one side
+- **spanning and coherent** — hits both genes with enough anchor on both sides, and
+  `max(A_positions) + k ≤ min(B_positions)` or the mirror — disjoint blocks
+
+`FusionRecord` now carries `n_spanning_reads` and `n_coherent_reads` in both Parquet
+and TSV output so users can inspect coherence without re-running.
+
+**New flags.** `--min-coherent-fragments N` (default 0 = disabled): require at least
+N coherent spanning reads. `--min-anchor-kmers N` (default 3): minimum k-mer hits per
+gene to count as anchored. Discordant pairs (R1→GeneA, R2→GeneB, no read spanning
+both) contribute `n_spanning_reads += 0`, so the filter never penalizes clean
+discordant-pair evidence.
+
+**Why default-off.** The filter requires at least one spanning read with a clean
+A/B partition to pass. For low-AF fusions or short insert sizes, all fragments may
+be discordant pairs, so hard-requiring ≥1 coherent read would silently drop real
+calls. The user must opt in with `--min-coherent-fragments 1`. The `n_coherent_reads`
+column is always written, so users can post-filter or inspect without re-running.

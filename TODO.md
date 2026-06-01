@@ -98,6 +98,22 @@ as a bait-bias signal. Design context in `docs/DEVELOPMENT_LOG.md`.
 
 ---
 
+## Fusion caller (experimental)
+
+Full design, rationale, and the niche this caller aims to own are in
+`docs/FUSION_DEVELOPMENT.md`. The highest-value next items (Tier 1, specificity):
+
+- [ ] **Overlap / adjacency filter** — reject pairs whose annotated gene bodies overlap
+  or sit within X bp, or whose breakpoints are same-chromosome within X bp.
+- [ ] **Split-read vs discordant-pair separation** — report `split_reads` and
+  `discordant_mates` as distinct columns.
+- [ ] **VAF-like quantification** — supporting reads as a fraction of local depth;
+  gates the longitudinal low-AF monitoring niche.
+- [ ] **Benchmarking harness** — fusion-positive reference set (SEQC2, EWSR1-FLI1
+  lines) with dilution series; report sensitivity/specificity per release.
+
+---
+
 ## Code health / tech debt
 
 Captured 2026-05-01 from a code review. Items here are not blocking any release;

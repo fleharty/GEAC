@@ -114,6 +114,15 @@ const TABLE_SPECS: &[TableSpec] = &[
         rebuild_samples_summary: false,
         view_only: false,
     },
+    TableSpec {
+        table: "fusions",
+        suffix: Some(".fusions.parquet"),
+        index_sql: Some(
+            "CREATE INDEX IF NOT EXISTS idx_fusions_pair ON fusions (gene_a, gene_b);",
+        ),
+        rebuild_samples_summary: false,
+        view_only: false,
+    },
 ];
 
 fn escape_path(path: &Path) -> String {
@@ -894,6 +903,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["sample.fragments.parquet"]
         );
+
+        // fusions routing test — must not fall through to the alt_bases catch-all
+        let fusion_inputs = vec![PathBuf::from("sample.fusions.parquet")];
+        let (_, fusion_groups) = classify_inputs(&fusion_inputs);
+        assert_eq!(
+            fusion_groups["fusions"]
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>(),
+            vec!["sample.fusions.parquet"]
+        );
+        assert!(fusion_groups["alt_bases"].is_empty());
     }
 
     #[test]
