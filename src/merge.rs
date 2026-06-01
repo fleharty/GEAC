@@ -300,6 +300,64 @@ fn classify_inputs(inputs: &[PathBuf]) -> (Vec<&PathBuf>, BTreeMap<&'static str,
     (duckdb_inputs, parquet_groups)
 }
 
+/// Column names present in a Parquet file (via DuckDB's `DESCRIBE`).
+fn parquet_column_names(conn: &Connection, path: &Path) -> Result<std::collections::HashSet<String>> {
+    let escaped = escape_path(path);
+    let mut stmt = conn
+        .prepare(&format!("DESCRIBE SELECT * FROM read_parquet('{escaped}')"))
+        .with_context(|| format!("failed to read Parquet schema from {}", path.display()))?;
+    let mut rows = stmt.query([])?;
+    let mut cols = std::collections::HashSet::new();
+    while let Some(row) = rows.next()? {
+        // DESCRIBE columns: column_name, column_type, null, key, default, extra.
+        cols.insert(row.get::<_, String>(0)?);
+    }
+    Ok(cols)
+}
+
+/// Guard the `alt_bases` catch-all: any Parquet whose name matches no known GEAC
+/// suffix lands here, so a mis-named fusion/coverage/etc. Parquet would otherwise
+/// be loaded as a locus table and fail later with a cryptic binder error on a
+/// missing provenance column. Detect the mismatch up front and tell the user how
+/// to fix it (rename to the right suffix).
+fn validate_locus_inputs(conn: &Connection, inputs: &[&PathBuf]) -> Result<()> {
+    for path in inputs {
+        let cols = parquet_column_names(conn, path)?;
+
+        // A genuine `geac collect` locus Parquet is keyed on chrom + pos. If those
+        // are present we accept the file regardless of its other columns.
+        if cols.contains("chrom") && cols.contains("pos") {
+            continue;
+        }
+
+        // Identify the most likely intended type from its signature columns so the
+        // error names the exact suffix to use.
+        let (kind, suffix) = if cols.contains("gene_a") && cols.contains("gene_b") {
+            ("fusion-caller", ".fusions.parquet")
+        } else if cols.contains("insert_size") || cols.contains("midpoint") {
+            ("fragments", ".fragments.parquet")
+        } else if cols.contains("mean_coverage") || cols.contains("coverage") {
+            ("coverage", ".coverage.parquet")
+        } else {
+            bail!(
+                "{} does not look like a `geac collect` locus Parquet (missing chrom/pos \
+                 columns) and its name matches no known GEAC output suffix. Rename it to the \
+                 correct suffix (e.g. .fusions.parquet, .coverage.parquet, .fragments.parquet) \
+                 so `geac merge` routes it to the right table.",
+                path.display()
+            );
+        };
+
+        bail!(
+            "{path} looks like a {kind} Parquet but was routed to the locus table because its \
+             name does not end in '{suffix}'. Rename it to '<sample>{suffix}' (or regenerate it \
+             with that --output) so `geac merge` builds the correct table.",
+            path = path.display(),
+        );
+    }
+    Ok(())
+}
+
 fn collect_parquet_input_provenance(
     conn: &Connection,
     spec: &TableSpec,
@@ -375,6 +433,13 @@ fn merge_parquet_group(
 
     if spec.view_only {
         return merge_parquet_view(conn, spec, inputs, input_provenance);
+    }
+
+    // The locus table is the catch-all for any Parquet whose name matches no known
+    // suffix. Validate those inputs really are locus Parquets before building the
+    // table, so a mis-named fusion/coverage Parquet fails with an actionable message.
+    if spec.table == "alt_bases" {
+        validate_locus_inputs(conn, inputs)?;
     }
 
     info!(
@@ -960,6 +1025,58 @@ mod tests {
         assert!(
             n_indices >= 2,
             "expected registry-driven indices to be created"
+        );
+    }
+
+    /// Write a single-row Parquet with the given `SELECT` body to `path`.
+    fn write_parquet(conn: &Connection, path: &Path, select_body: &str) {
+        let escaped = escape_path(path);
+        conn.execute_batch(&format!(
+            "COPY (SELECT {select_body}) TO '{escaped}' (FORMAT PARQUET);"
+        ))
+        .expect("write parquet");
+    }
+
+    #[test]
+    fn validate_locus_inputs_rejects_misnamed_fusion_parquet() {
+        let conn = Connection::open_in_memory().expect("in-memory duckdb");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("Control_1_simplex.parquet");
+        write_parquet(
+            &conn,
+            &path,
+            "'EWSR1' AS gene_a, 'FLI1' AS gene_b, 5 AS supporting_reads",
+        );
+
+        let err = validate_locus_inputs(&conn, &[&path])
+            .expect_err("misnamed fusion parquet must be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains(".fusions.parquet"), "message should name the suffix: {msg}");
+        assert!(msg.contains("fusion-caller"), "message should identify the type: {msg}");
+    }
+
+    #[test]
+    fn validate_locus_inputs_accepts_real_locus_parquet() {
+        let conn = Connection::open_in_memory().expect("in-memory duckdb");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sample.parquet");
+        write_parquet(&conn, &path, "'chr1' AS chrom, 100 AS pos, 3 AS alt_count");
+
+        validate_locus_inputs(&conn, &[&path]).expect("genuine locus parquet must pass");
+    }
+
+    #[test]
+    fn validate_locus_inputs_rejects_unknown_parquet() {
+        let conn = Connection::open_in_memory().expect("in-memory duckdb");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mystery.parquet");
+        write_parquet(&conn, &path, "1 AS foo, 2 AS bar");
+
+        let err = validate_locus_inputs(&conn, &[&path])
+            .expect_err("unrecognized parquet must be rejected");
+        assert!(
+            err.to_string().contains("missing chrom/pos"),
+            "message should explain why: {err}"
         );
     }
 }

@@ -2715,3 +2715,131 @@ fn fusions_junction_coherence_filter() {
     ]);
     assert_eq!(parquet_count(&out), 1, "min-coherent-fragments 1: coherent candidate survives");
 }
+
+/// A fusion present in the PoN above the --max-pon-samples threshold is *tagged*
+/// (filter="pon"), not removed from the output. Annotate-only runs leave filter="PASS".
+#[test]
+fn fusions_pon_tags_calls_instead_of_dropping() {
+    use rust_htslib::bam::{self};
+    let dir = TempDir::new().unwrap();
+
+    let gene_a_seq = fusion_gen_seq(10, 300);
+    let gene_b_seq = fusion_gen_seq(20, 300);
+    let len = 300usize;
+
+    let fa = dir.path().join("ref.fa");
+    std::fs::write(&fa, format!(">chr1\n{gene_a_seq}\n>chr2\n{gene_b_seq}\n")).unwrap();
+    std::fs::write(
+        dir.path().join("ref.fa.fai"),
+        format!(
+            "chr1\t{len}\t6\t{len}\t{}\nchr2\t{len}\t{}\t{len}\t{}\n",
+            len + 1,
+            6 + len + 1 + 6,
+            len + 1,
+        ),
+    ).unwrap();
+
+    let gtf = dir.path().join("genes.gtf");
+    std::fs::write(
+        &gtf,
+        format!(
+            "chr1\tt\tgene\t1\t{len}\t.\t+\t.\tgene_name \"GENE_A\";\n\
+             chr2\tt\tgene\t1\t{len}\t.\t+\t.\tgene_name \"GENE_B\";\n"
+        ),
+    ).unwrap();
+
+    let index = dir.path().join("idx.duckdb");
+    assert_geac_success(&[
+        "experimental", "build-fusion-index",
+        "--gtf", gtf.to_str().unwrap(),
+        "--fasta", fa.to_str().unwrap(),
+        "--min-gene-kmers", "1",
+        "--output", index.to_str().unwrap(),
+    ]);
+
+    // A single spanning read (left half GENE_A, right half GENE_B) → one candidate.
+    let half = 60usize;
+    let k = 23usize;
+    let span_read: Vec<u8> = [
+        gene_a_seq[50..50 + half].as_bytes(),
+        gene_b_seq[50..50 + half].as_bytes(),
+    ].concat();
+    let r2_span = gene_b_seq[100..100 + half + half].as_bytes();
+
+    let bam_path = dir.path().join("reads.bam");
+    {
+        let mut header = bam::Header::new();
+        for (sn, ln) in [("chr1", len), ("chr2", len)] {
+            let mut sq = bam::header::HeaderRecord::new(b"SQ");
+            sq.push_tag(b"SN", sn);
+            sq.push_tag(b"LN", ln as i64);
+            header.push_record(&sq);
+        }
+        let mut writer = bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
+        let qual_span = vec![30u8; span_read.len()];
+        let qual_norm = vec![30u8; half + half];
+        for (qname, flags, seq, qual) in [
+            (b"span1" as &[u8], 77u16, span_read.as_slice(), qual_span.as_slice()),
+            (b"span1", 141, r2_span, qual_norm.as_slice()),
+        ] {
+            let mut rec = bam::record::Record::new();
+            rec.set(qname, None, seq, qual);
+            rec.set_tid(-1); rec.set_pos(-1);
+            rec.set_mtid(-1); rec.set_mpos(-1);
+            rec.set_flags(flags);
+            writer.write(&rec).unwrap();
+        }
+    }
+
+    // Build a one-sample fusion PoN. The file must be named *.fusions.parquet so
+    // `geac merge` routes it to the fusions table.
+    let normal_pq = dir.path().join("normal.fusions.parquet");
+    assert_geac_success(&[
+        "experimental", "fusions",
+        "--bam", bam_path.to_str().unwrap(),
+        "--index", index.to_str().unwrap(),
+        "--sample-id", "HG001",
+        "--output", normal_pq.to_str().unwrap(),
+        "--min-supporting-reads", "1",
+        "--kmer-size", &k.to_string(),
+    ]);
+    let pon_db = dir.path().join("fusion_pon.duckdb");
+    assert_geac_success(&[
+        "merge", normal_pq.to_str().unwrap(),
+        "--output", pon_db.to_str().unwrap(),
+    ]);
+
+    // Annotate-only (no --max-pon-samples): row stays, filter=PASS, n_pon_samples=1.
+    let out = dir.path().join("tumor.fusions.parquet");
+    assert_geac_success(&[
+        "experimental", "fusions",
+        "--bam", bam_path.to_str().unwrap(),
+        "--index", index.to_str().unwrap(),
+        "--sample-id", "HG002",
+        "--output", out.to_str().unwrap(),
+        "--min-supporting-reads", "1",
+        "--kmer-size", &k.to_string(),
+        "--fusion-pon", pon_db.to_str().unwrap(),
+    ]);
+    assert_eq!(parquet_count(&out), 1, "annotate-only: call present");
+    assert_eq!(parquet_query_i32(&out, "n_pon_samples", "supporting_reads >= 1"), 1);
+    assert_eq!(parquet_query_str(&out, "filter", "supporting_reads >= 1"), "PASS");
+
+    // With --max-pon-samples 0: present in 1 > 0 PoN samples → tagged, NOT dropped.
+    assert_geac_success(&[
+        "experimental", "fusions",
+        "--bam", bam_path.to_str().unwrap(),
+        "--index", index.to_str().unwrap(),
+        "--sample-id", "HG002",
+        "--output", out.to_str().unwrap(),
+        "--min-supporting-reads", "1",
+        "--kmer-size", &k.to_string(),
+        "--fusion-pon", pon_db.to_str().unwrap(),
+        "--max-pon-samples", "0",
+    ]);
+    assert_eq!(
+        parquet_count(&out), 1,
+        "max-pon-samples 0: call retained (tagged, not dropped)"
+    );
+    assert_eq!(parquet_query_str(&out, "filter", "supporting_reads >= 1"), "pon");
+}

@@ -691,7 +691,9 @@ pub struct FusionsArgs {
     pub reads_output: Option<PathBuf>,
 
     /// Optional TSV file for human-readable fusion results.
-    /// Columns: sample_id, gene_a, gene_b, chrom_a, chrom_b, supporting_reads, min_mapq
+    /// Columns: sample_id, gene_a, gene_b, chrom_a, chrom_b, supporting_reads, min_mapq,
+    /// n_spanning_reads, n_coherent_fragments, n_pon_samples, pon_total_samples,
+    /// max_pon_supporting_reads, filter
     #[arg(long)]
     pub tsv_output: Option<PathBuf>,
 
@@ -720,8 +722,9 @@ pub struct FusionsArgs {
     #[arg(long)]
     pub fusion_pon: Option<PathBuf>,
 
-    /// Drop fusions seen in strictly more than this many PoN samples. Requires
-    /// --fusion-pon. Default: annotate only, never filter.
+    /// Flag fusions seen in strictly more than this many PoN samples with
+    /// filter="pon" (rows are kept, not dropped — downstream can exclude them).
+    /// Requires --fusion-pon. Default: annotate only, every row stays filter="PASS".
     #[arg(long)]
     pub max_pon_samples: Option<u32>,
 

@@ -129,6 +129,7 @@ fn write_index(
     kmer_to_pos: &HashMap<u64, (String, u32)>,
     genes: &[GeneBody],
     genome_counts: Option<&HashMap<u64, u8>>,
+    k: usize,
     output: &Path,
 ) -> Result<()> {
     if output.exists() {
@@ -142,9 +143,18 @@ fn write_index(
     // genome_copies is the genome-wide occurrence count of each k-mer, populated
     // only when --check-genome-uniqueness ran; NULL otherwise (count unknown).
     conn.execute_batch(
-        "CREATE TABLE genes (gene_index UINTEGER, gene_name VARCHAR, chrom VARCHAR);
+        "CREATE TABLE meta (key VARCHAR, value VARCHAR);
+         CREATE TABLE genes (gene_index UINTEGER, gene_name VARCHAR, chrom VARCHAR);
          CREATE TABLE kmers (kmer_hash BIGINT, gene_index UINTEGER, genome_copies INTEGER);
          CREATE TABLE kmer_positions (kmer_hash BIGINT, chrom VARCHAR, pos INTEGER);",
+    )?;
+
+    // Record the k-mer size so `geac fusions` can verify the --kmer-size it was
+    // given matches the value the index was built with. A mismatch otherwise
+    // produces silently empty/garbage results (every hash fails to match).
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('kmer_size', ?)",
+        duckdb::params![k.to_string()],
     )?;
 
     {
@@ -965,7 +975,7 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
 
     // Step 4 — write the index.
     info!(output = %args.output.display(), "writing fusion index...");
-    write_index(&kmer_to_gene, &kmer_to_pos, &genes, genome_copies.as_ref(), &args.output)?;
+    write_index(&kmer_to_gene, &kmer_to_pos, &genes, genome_copies.as_ref(), k, &args.output)?;
 
     // Step 5 — optional BED of merged k-mer intervals (all retained k-mers).
     if let Some(ref bed_path) = args.bed_output {

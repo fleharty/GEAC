@@ -23,9 +23,48 @@ struct FusionIndex {
     kmer_to_gene: HashMap<u64, u32>,
     gene_names: Vec<String>,
     gene_chroms: Vec<String>,
-    /// Genome-wide copy number per k-mer. Populated only when a copy filter is
-    /// requested and the index carries `genome_copies`; empty otherwise.
-    kmer_to_copies: HashMap<u64, u8>,
+}
+
+/// Read the build-time k-mer size recorded in the index `meta` table, if present.
+///
+/// Returns `None` for indexes built before the `meta` table existed (so callers
+/// can fall back to skipping the check rather than erroring on older indexes).
+fn index_kmer_size(conn: &Connection) -> Result<Option<usize>> {
+    // Is there a `meta` table at all?
+    let has_meta: bool = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='meta'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .or_else(|_| {
+            // DuckDB exposes catalog info via duckdb_tables(); fall back to it if
+            // sqlite_master is unavailable.
+            conn.query_row(
+                "SELECT count(*) FROM duckdb_tables() WHERE table_name='meta'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+        })
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    if !has_meta {
+        return Ok(None);
+    }
+    let val: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key='kmer_size'",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    match val {
+        Some(s) => Ok(Some(
+            s.parse::<usize>()
+                .with_context(|| format!("index meta kmer_size is not an integer: {s:?}"))?,
+        )),
+        None => Ok(None),
+    }
 }
 
 /// Return true if the `kmers` table has a `genome_copies` column.
@@ -42,9 +81,21 @@ fn kmers_has_copies_column(conn: &Connection) -> Result<bool> {
     Ok(false)
 }
 
-fn load_index(index_path: &Path, max_kmer_copies: Option<u32>) -> Result<FusionIndex> {
+fn load_index(index_path: &Path, k: usize, max_kmer_copies: Option<u32>) -> Result<FusionIndex> {
     let conn = Connection::open(index_path)
         .with_context(|| format!("failed to open fusion index: {}", index_path.display()))?;
+
+    // Guard against a --kmer-size that disagrees with the index. A mismatch makes
+    // every k-mer hash fail to match, silently yielding zero fusions. Older indexes
+    // without a recorded size skip the check (the caller still relies on the user
+    // passing the correct --kmer-size).
+    if let Some(index_k) = index_kmer_size(&conn)? {
+        anyhow::ensure!(
+            index_k == k,
+            "--kmer-size {k} does not match the index (built with k={index_k}); \
+             pass --kmer-size {index_k} or rebuild the index with k={k}"
+        );
+    }
 
     let mut stmt =
         conn.prepare("SELECT gene_index, gene_name, chrom FROM genes ORDER BY gene_index")?;
@@ -59,10 +110,16 @@ fn load_index(index_path: &Path, max_kmer_copies: Option<u32>) -> Result<FusionI
     }
     info!(n_genes = gene_names.len(), "loaded genes from index");
 
+    // The k-mer table dominates memory on large indexes (tens-to-hundreds of
+    // millions of entries). Reserve up front from the row count so the map is
+    // allocated once instead of repeatedly doubling — each doubling holds the old
+    // and new buffers simultaneously, briefly spiking peak RSS to ~1.7x the final
+    // size, which is enough to OOM a job that otherwise fits.
+    let n_total: i64 = conn.query_row("SELECT count(*) FROM kmers", [], |r| r.get(0))?;
+
     // Only read genome_copies when a copy filter is active. This keeps the default
     // path identical (and compatible with indexes built before the column existed).
-    let load_copies = max_kmer_copies.is_some();
-    if load_copies {
+    if max_kmer_copies.is_some() {
         anyhow::ensure!(
             kmers_has_copies_column(&conn)?,
             "--max-kmer-copies requires an index built with --check-genome-uniqueness \
@@ -70,8 +127,6 @@ fn load_index(index_path: &Path, max_kmer_copies: Option<u32>) -> Result<FusionI
         );
         // Fail fast on indexes whose genome_copies are all NULL (column present but
         // the genome pass never ran) before loading the whole kmers table into RAM.
-        let n_total: i64 =
-            conn.query_row("SELECT count(*) FROM kmers", [], |r| r.get(0))?;
         let n_with_copies: i64 =
             conn.query_row("SELECT count(genome_copies) FROM kmers", [], |r| r.get(0))?;
         anyhow::ensure!(
@@ -82,28 +137,36 @@ fn load_index(index_path: &Path, max_kmer_copies: Option<u32>) -> Result<FusionI
     }
 
     let mut kmer_to_gene: HashMap<u64, u32> = HashMap::new();
-    let mut kmer_to_copies: HashMap<u64, u8> = HashMap::new();
 
-    if load_copies {
+    if let Some(max) = max_kmer_copies {
+        // Apply the copy filter at load time and store only k-mers that pass.
+        // Excluded k-mers (copies > max, or NULL/unknown) never enter the map, so
+        // we avoid keeping a second copies HashMap of identical size and the
+        // per-read lookup that went with it. Semantics are unchanged: filtered
+        // k-mers simply never match a read.
         let mut stmt = conn.prepare("SELECT kmer_hash, gene_index, genome_copies FROM kmers")?;
         let mut rows = stmt.query([])?;
-        let mut n_null: u64 = 0;
+        let mut n_excluded: u64 = 0;
         while let Some(row) = rows.next()? {
             let kmer_i64: i64 = row.get(0)?;
             let gene_idx: u32 = row.get(1)?;
             let copies: Option<i32> = row.get(2)?;
-            kmer_to_gene.insert(kmer_i64 as u64, gene_idx);
             match copies {
-                Some(c) => {
-                    kmer_to_copies.insert(kmer_i64 as u64, c.clamp(0, u8::MAX as i32) as u8);
+                Some(c) if c >= 0 && (c as u32) <= max => {
+                    kmer_to_gene.insert(kmer_i64 as u64, gene_idx);
                 }
-                None => n_null += 1,
+                _ => n_excluded += 1,
             }
         }
-        if n_null > 0 {
-            info!(n_null, "some k-mers have NULL genome_copies and will be excluded by the copy filter");
+        if n_excluded > 0 {
+            info!(
+                n_excluded,
+                max_kmer_copies = max,
+                "k-mers excluded by the genome-copy filter (too common or copy count unknown)"
+            );
         }
     } else {
+        kmer_to_gene.reserve(n_total.max(0) as usize);
         let mut stmt = conn.prepare("SELECT kmer_hash, gene_index FROM kmers")?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
@@ -118,7 +181,6 @@ fn load_index(index_path: &Path, max_kmer_copies: Option<u32>) -> Result<FusionI
         kmer_to_gene,
         gene_names,
         gene_chroms,
-        kmer_to_copies,
     })
 }
 
@@ -147,21 +209,14 @@ fn assign_gene(
     k: usize,
     min_hits: u32,
     collect_detail: bool,
-    max_copies: Option<u32>,
 ) -> Option<ReadHit> {
     // gene_idx → (count, min_pos, max_pos)
     let mut gene_hits: HashMap<u32, (u32, usize, usize)> = HashMap::new();
     let mut kmer_hits: Vec<(u64, u32, usize)> = Vec::new();
+    // The genome-copy filter (--max-kmer-copies) is applied at index load time:
+    // excluded k-mers are absent from kmer_to_gene, so a plain lookup is correct.
     for (kmer, pos_in_read) in kmer_iter(seq, k) {
         if let Some(&gene_idx) = index.kmer_to_gene.get(&kmer) {
-            // Optional genome-wide copy filter: skip k-mers that occur too often
-            // (or whose copy number is unknown — NULL in the index).
-            if let Some(max) = max_copies {
-                match index.kmer_to_copies.get(&kmer) {
-                    Some(&c) if c as u32 <= max => {}
-                    _ => continue,
-                }
-            }
             let e = gene_hits.entry(gene_idx).or_insert((0, pos_in_read, pos_in_read));
             e.0 += 1;
             e.1 = e.1.min(pos_in_read);
@@ -345,7 +400,7 @@ struct BreakpointAccumulator {
     spanning_reads: Vec<SpanningReadData>,
 }
 
-fn median_i64(values: &mut Vec<i64>) -> Option<f64> {
+fn median_i64(values: &mut [i64]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
@@ -383,15 +438,15 @@ fn write_fusion_tsv(records: &[FusionRecord], output: &Path) -> Result<()> {
     let file = std::fs::File::create(output)
         .with_context(|| format!("failed to create TSV: {}", output.display()))?;
     let mut w = BufWriter::new(file);
-    writeln!(w, "sample_id\tgene_a\tgene_b\tchrom_a\tchrom_b\tsupporting_reads\tmin_mapq\tn_spanning_reads\tn_coherent_fragments\tn_pon_samples\tpon_total_samples\tmax_pon_supporting_reads")?;
+    writeln!(w, "sample_id\tgene_a\tgene_b\tchrom_a\tchrom_b\tsupporting_reads\tmin_mapq\tn_spanning_reads\tn_coherent_fragments\tn_pon_samples\tpon_total_samples\tmax_pon_supporting_reads\tfilter")?;
     for r in records {
         let max_pon = r.max_pon_supporting_reads.map(|v| v.to_string()).unwrap_or_else(|| "NA".to_string());
         writeln!(
             w,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             r.sample_id, r.gene_a, r.gene_b, r.chrom_a, r.chrom_b, r.supporting_reads, r.min_mapq,
             r.n_spanning_reads, r.n_coherent_fragments,
-            r.n_pon_samples, r.pon_total_samples, max_pon
+            r.n_pon_samples, r.pon_total_samples, max_pon, r.filter
         )?;
     }
     Ok(())
@@ -422,6 +477,10 @@ struct FusionRecord {
     n_pon_samples: i32,
     pon_total_samples: i32,
     max_pon_supporting_reads: Option<i32>,
+    // VCF-style filter status: "PASS" by default, or "pon" when --max-pon-samples
+    // is set and the call appears in more PoN samples than the threshold. Rows are
+    // never dropped — the label lets downstream tools include or exclude them.
+    filter: String,
 }
 
 fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
@@ -438,6 +497,7 @@ fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
         Field::new("n_pon_samples", DataType::Int32, false),
         Field::new("pon_total_samples", DataType::Int32, false),
         Field::new("max_pon_supporting_reads", DataType::Int32, true),
+        Field::new("filter", DataType::Utf8, false),
     ]));
 
     let file = std::fs::File::create(output)
@@ -486,6 +546,9 @@ fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
             )) as ArrayRef,
             Arc::new(Int32Array::from(
                 records.iter().map(|r| r.max_pon_supporting_reads).collect::<Vec<_>>(),
+            )) as ArrayRef,
+            Arc::new(StringArray::from(
+                records.iter().map(|r| r.filter.as_str()).collect::<Vec<_>>(),
             )) as ArrayRef,
         ],
     )
@@ -569,7 +632,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     );
 
     info!(index = %args.index.display(), "loading fusion k-mer index...");
-    let index = load_index(&args.index, args.max_kmer_copies)?;
+    let index = load_index(&args.index, k, args.max_kmer_copies)?;
 
     let mut reader = bam::Reader::from_path(&args.bam)
         .with_context(|| format!("failed to open BAM/CRAM: {}", args.bam.display()))?;
@@ -633,7 +696,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         }
 
         let seq = record.seq().as_bytes();
-        if let Some(mut rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, false, args.max_kmer_copies) {
+        if let Some(mut rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, false) {
             rh.mapq = record.mapq();
             qname_to_reads
                 .entry(record.qname().to_vec())
@@ -702,20 +765,34 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             n_pon_samples: 0,
             pon_total_samples: 0,
             max_pon_supporting_reads: None,
+            filter: "PASS".to_string(),
         })
         .collect();
 
-    records.sort_by(|a, b| b.supporting_reads.cmp(&a.supporting_reads));
+    // Sort by support descending; break ties on the normalized gene-pair key so the
+    // output row order is deterministic (fusion_counts is a HashMap).
+    records.sort_by(|a, b| {
+        b.supporting_reads
+            .cmp(&a.supporting_reads)
+            .then_with(|| a.pair_key.cmp(&b.pair_key))
+    });
 
     // Panel-of-Normals annotation and optional filtering, before any output is written.
     if let Some(ref pon_db) = args.fusion_pon {
         annotate_fusion_pon(&mut records, pon_db)?;
     }
+    // Tag (don't drop) fusions seen in more PoN samples than the threshold. The
+    // rows stay in the output with filter="pon" so downstream tooling can include
+    // or exclude them; nothing is removed here.
     if let Some(max_pon) = args.max_pon_samples {
-        let before = records.len();
-        records.retain(|r| r.n_pon_samples as u32 <= max_pon);
-        let dropped = before - records.len();
-        info!(dropped, max_pon_samples = max_pon, "filtered fusions present in PoN");
+        let mut flagged = 0usize;
+        for r in records.iter_mut() {
+            if r.n_pon_samples as u32 > max_pon {
+                r.filter = "pon".to_string();
+                flagged += 1;
+            }
+        }
+        info!(flagged, max_pon_samples = max_pon, "flagged fusions present in PoN (filter=pon)");
     }
 
     if args.min_coherent_fragments > 0 {
@@ -876,7 +953,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 continue;
             }
             let seq = record.seq().as_bytes();
-            let Some(rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, true, args.max_kmer_copies) else {
+            let Some(rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, true) else {
                 continue;
             };
             let read_end = if flags & 0x40 != 0 { "R1" } else { "R2" };
@@ -960,14 +1037,23 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 let gene_a = &index.gene_names[acc.gene_a_idx as usize];
                 let gene_b = &index.gene_names[acc.gene_b_idx as usize];
 
-                let modal_chrom = |votes: &HashMap<String, u32>| -> String {
-                    votes.iter()
-                        .max_by_key(|(_, &v)| v)
+                // Most-voted chromosome, ties broken by lexicographically smallest
+                // name so the choice is deterministic (HashMap iteration order must
+                // not influence the result). When there are no single-gene reads to
+                // vote (e.g. every supporting read spans the junction), fall back to
+                // the gene's annotated chromosome so breakpoints can still be
+                // estimated against the spanning reads.
+                let modal_chrom = |votes: &HashMap<String, u32>, fallback: &str| -> String {
+                    votes
+                        .iter()
+                        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
                         .map(|(c, _)| c.clone())
-                        .unwrap_or_else(|| "*".to_string())
+                        .unwrap_or_else(|| fallback.to_string())
                 };
-                let chrom_a = modal_chrom(&acc.gene_a_chrom_votes);
-                let chrom_b = modal_chrom(&acc.gene_b_chrom_votes);
+                let chrom_a =
+                    modal_chrom(&acc.gene_a_chrom_votes, &index.gene_chroms[acc.gene_a_idx as usize]);
+                let chrom_b =
+                    modal_chrom(&acc.gene_b_chrom_votes, &index.gene_chroms[acc.gene_b_idx as usize]);
 
                 let mut bp_a_estimates: Vec<i64> = Vec::new();
                 let mut bp_b_estimates: Vec<i64> = Vec::new();
@@ -1018,4 +1104,132 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a ReadHit with the given primary/second gene assignments. Positions
+    /// and counts default sensibly; tests override what they exercise.
+    fn mk_read(
+        gene_idx: u32,
+        g1: (u32, u32, u32), // (count, min, max)
+        gene2: Option<(u32, u32, u32, u32)>, // (idx, count, min, max)
+    ) -> ReadHit {
+        let (g2_idx, g2_count, g2_min, g2_max) = match gene2 {
+            Some((i, c, mn, mx)) => (Some(i), c, mn, mx),
+            None => (None, 0, 0, 0),
+        };
+        ReadHit {
+            gene_idx,
+            gene1_kmer_count: g1.0,
+            gene1_kmer_min: g1.1,
+            gene1_kmer_max: g1.2,
+            gene2_idx: g2_idx,
+            gene2_kmer_count: g2_count,
+            gene2_kmer_min: g2_min,
+            gene2_kmer_max: g2_max,
+            mapq: 60,
+            kmer_hits: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn median_handles_parity_and_empty() {
+        assert_eq!(median_i64(&mut []), None);
+        assert_eq!(median_i64(&mut [5]), Some(5.0));
+        assert_eq!(median_i64(&mut [3, 1, 2]), Some(2.0)); // odd, sorted internally
+        assert_eq!(median_i64(&mut [4, 1, 3, 2]), Some(2.5)); // even → mean of middle two
+    }
+
+    #[test]
+    fn std_dev_requires_two_values() {
+        assert_eq!(std_dev_i64(&[]), None);
+        assert_eq!(std_dev_i64(&[7]), None);
+        // sample std dev of {2,4}: mean 3, variance (1+1)/(2-1)=2
+        let s = std_dev_i64(&[2, 4]).unwrap();
+        assert!((s - 2f64.sqrt()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn decode_kmer_roundtrips_known_values() {
+        assert_eq!(decode_kmer(0, 4), "AAAA");
+        assert_eq!(decode_kmer(255, 4), "TTTT");
+        // Forward encoding of ACGT (A=0,C=1,G=2,T=3) = 0b00_01_10_11 = 27.
+        assert_eq!(decode_kmer(27, 4), "ACGT");
+    }
+
+    #[test]
+    fn fusion_pair_label_uses_index_order() {
+        let names = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        assert_eq!(fusion_pair_label((0, 2), &names), "A::C");
+        assert_eq!(fusion_pair_label((1, 2), &names), "B::C");
+    }
+
+    #[test]
+    fn top_pair_from_two_primary_genes() {
+        let reads = vec![mk_read(0, (5, 0, 10), None), mk_read(3, (4, 0, 8), None)];
+        assert_eq!(fragment_top_pair(&reads), Some((0, 3)));
+    }
+
+    #[test]
+    fn top_pair_breaks_ties_by_ascending_index() {
+        // Three genes, one primary vote each → top two by ascending index.
+        let reads = vec![
+            mk_read(5, (3, 0, 6), None),
+            mk_read(1, (3, 0, 6), None),
+            mk_read(3, (3, 0, 6), None),
+        ];
+        assert_eq!(fragment_top_pair(&reads), Some((1, 3)));
+    }
+
+    #[test]
+    fn top_pair_uses_supplemental_votes_when_single_primary() {
+        // Single primary gene (0); partner chosen from gene2 k-mer evidence.
+        let reads = vec![
+            mk_read(0, (8, 0, 20), Some((2, 6, 30, 50))),
+            mk_read(0, (7, 0, 18), Some((2, 5, 28, 48))),
+        ];
+        assert_eq!(fragment_top_pair(&reads), Some((0, 2)));
+    }
+
+    #[test]
+    fn top_pair_none_for_single_gene_no_partner() {
+        let reads = vec![mk_read(0, (4, 0, 9), None)];
+        assert_eq!(fragment_top_pair(&reads), None);
+    }
+
+    #[test]
+    fn coherence_disjoint_blocks_are_coherent() {
+        // gene0 k-mers in [0,10], gene1 k-mers in [40,50], k=20 → A ends (30) before B (40).
+        let rh = mk_read(0, (5, 0, 10), Some((1, 5, 40, 50)));
+        assert_eq!(read_coherence(&rh, 0, 1, 20, 3), (true, true));
+    }
+
+    #[test]
+    fn coherence_interleaved_blocks_not_coherent() {
+        // Overlapping position ranges → homology artifact, spanning but not coherent.
+        let rh = mk_read(0, (5, 0, 50), Some((1, 5, 10, 60)));
+        assert_eq!(read_coherence(&rh, 0, 1, 20, 3), (true, false));
+    }
+
+    #[test]
+    fn coherence_requires_anchor_on_both_sides() {
+        // gene1 has only 2 k-mers but min_anchor is 3 → spanning, not coherent.
+        let rh = mk_read(0, (5, 0, 10), Some((1, 2, 40, 50)));
+        assert_eq!(read_coherence(&rh, 0, 1, 20, 3), (true, false));
+    }
+
+    #[test]
+    fn coherence_false_when_pair_absent() {
+        // Read only hit gene0 → not spanning for the (0,1) pair.
+        let rh = mk_read(0, (5, 0, 10), None);
+        assert_eq!(read_coherence(&rh, 0, 1, 20, 3), (false, false));
+        // Read's second gene is not the partner.
+        let rh2 = mk_read(0, (5, 0, 10), Some((9, 5, 40, 50)));
+        assert_eq!(read_coherence(&rh2, 0, 1, 20, 3), (false, false));
+    }
 }
