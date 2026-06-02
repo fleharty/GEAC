@@ -62,10 +62,11 @@ workflow GeacFusions {
         Int?    max_kmer_copies
         File?   fusion_pon
         Int?    max_pon_samples
-        File?   fusion_kmer_blacklist
-        Int?    min_kmer_blacklist_samples
-        Int     min_coherent_fragments = 0
-        Int     min_anchor_kmers       = 3
+        File?    fusion_kmer_blacklist
+        Int?     min_kmer_blacklist_samples
+        Boolean? skip_version_check
+        Int      min_coherent_fragments = 0
+        Int      min_anchor_kmers       = 3
 
         String docker_image
         Int    memory_gb   = 32
@@ -90,6 +91,7 @@ workflow GeacFusions {
             max_pon_samples            = max_pon_samples,
             fusion_kmer_blacklist      = fusion_kmer_blacklist,
             min_kmer_blacklist_samples = min_kmer_blacklist_samples,
+            skip_version_check         = skip_version_check,
             min_coherent_fragments     = min_coherent_fragments,
             min_anchor_kmers           = min_anchor_kmers,
             docker_image           = docker_image,
@@ -126,10 +128,11 @@ task Fusions {
         Int?    max_kmer_copies
         File?   fusion_pon
         Int?    max_pon_samples
-        File?   fusion_kmer_blacklist
-        Int?    min_kmer_blacklist_samples
-        Int     min_coherent_fragments
-        Int     min_anchor_kmers
+        File?    fusion_kmer_blacklist
+        Int?     min_kmer_blacklist_samples
+        Boolean? skip_version_check
+        Int      min_coherent_fragments
+        Int      min_anchor_kmers
 
         String docker_image
         Int    memory_gb
@@ -171,6 +174,7 @@ task Fusions {
             ~{"--max-pon-samples "             + max_pon_samples} \
             ~{"--fusion-kmer-blacklist "       + fusion_kmer_blacklist} \
             ~{"--min-kmer-blacklist-samples "  + min_kmer_blacklist_samples} \
+            ~{true="--skip-version-check" false="" skip_version_check} \
             --min-coherent-fragments ~{min_coherent_fragments} \
             --min-anchor-kmers       ~{min_anchor_kmers}
     >>>
