@@ -71,6 +71,26 @@ pub enum ExperimentalCommand {
 
     /// [EXPERIMENTAL] Scan a read sequence against a fusion index and report every k-mer hit
     ScanRead(ScanReadArgs),
+
+    /// [EXPERIMENTAL] Aggregate per-sample kmer-hits TSVs from normal samples into a k-mer blacklist Parquet
+    BuildFusionKmerBlacklist(BuildFusionKmerBlacklistArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct BuildFusionKmerBlacklistArgs {
+    /// One or more kmer-hits TSV files produced by `geac experimental fusions --kmer-hits-output`
+    /// from normal (PoN) samples
+    #[arg(long = "kmer-hits", required = true, num_args = 1..)]
+    pub kmer_hits: Vec<PathBuf>,
+
+    /// Output Parquet file (e.g. normals.fusion_kmer_blacklist.parquet)
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// A k-mer must appear in at least this many distinct PoN samples to be included in the
+    /// blacklist. Default 1 means any k-mer seen in any normal sample is blacklisted.
+    #[arg(long, default_value_t = 1)]
+    pub min_pon_samples: u32,
 }
 
 #[derive(Parser, Debug)]
@@ -742,6 +762,26 @@ pub struct FusionsArgs {
     /// Only relevant when --min-coherent-fragments > 0.
     #[arg(long, default_value_t = 3)]
     pub min_anchor_kmers: u32,
+
+    /// Optional k-mer blacklist Parquet produced by `geac experimental build-fusion-kmer-blacklist`.
+    /// K-mers in this file are considered PoN-noisy: a read must have at least `--min-kmer-hits`
+    /// *non-blacklisted* k-mer matches to contribute to fusion evidence. Blacklisted k-mers
+    /// are not stripped — they still help once a read has already passed on clean evidence.
+    #[arg(long)]
+    pub fusion_kmer_blacklist: Option<PathBuf>,
+
+    /// A k-mer must appear in at least this many PoN samples (n_pon_samples column in the
+    /// blacklist Parquet) to be treated as blacklisted at call time.
+    /// Allows reusing one blacklist file with different stringency thresholds.
+    #[arg(long, default_value_t = 1)]
+    pub min_kmer_blacklist_samples: u32,
+
+    /// Warn instead of failing when the fusion index or PoN was built with a
+    /// different GEAC version than the running binary. The warning names both
+    /// versions. Omitting this flag is the safe default: a version mismatch is
+    /// an error so schema or algorithm changes do not silently corrupt results.
+    #[arg(long, default_value_t = false)]
+    pub skip_version_check: bool,
 }
 
 #[derive(Parser, Debug)]

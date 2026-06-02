@@ -22,6 +22,7 @@ genes — a signature of a fusion or chimeric read.
 |---------|---------|
 | [`build-fusion-index`](#build-fusion-index) | Build the per-gene unique-k-mer index (DuckDB) from a GTF + reference FASTA |
 | [`fusions`](#fusions) | Scan a BAM/CRAM and report candidate gene fusions |
+| [`build-fusion-kmer-blacklist`](#build-fusion-kmer-blacklist) | Aggregate per-sample kmer-hits TSVs from normal samples into a k-mer blacklist Parquet |
 | [`extract-gene`](#extract-gene) | Pull all reads whose fragments hit a named gene's k-mers |
 | [`locate-kmer`](#locate-kmer) | Find every occurrence of a single k-mer in the reference FASTA |
 | [`lookup-kmer`](#lookup-kmer) | Look up which gene a single k-mer is assigned to in an index |
@@ -180,7 +181,9 @@ geac experimental fusions \
 | `--breakpoints-output <PATH>` | — | Per-fusion breakpoint TSV. Projects the k-mer transition on junction-spanning reads onto genomic coordinates; shares the same second BAM pass as `--kmer-hits-output` (only one extra scan when both are set). |
 | `--max-kmer-copies <N>` | — | Ignore k-mers occurring > `N` times genome-wide (or with unknown copy count). Requires an index built with `--check-genome-uniqueness`; errors clearly otherwise. Lets you re-tighten or relax uniqueness at call time without rebuilding. |
 | `--fusion-pon <PATH>` | — | Fusion Panel-of-Normals DuckDB (a `geac merge` of normal-sample `*.fusions.parquet` files). Annotates every call with `n_pon_samples`, `pon_total_samples`, `max_pon_supporting_reads`. Matching is by alphabetically-sorted gene-name pair, so PoN and call may use different indexes. |
-| `--max-pon-samples <N>` | — | Drop fusions seen in strictly more than `N` PoN samples. Requires `--fusion-pon`. Default: annotate only, never filter. |
+| `--max-pon-samples <N>` | — | Tag fusions seen in strictly more than `N` PoN samples with `filter=pon` (rows are kept). Requires `--fusion-pon`. Default: annotate only, every row stays `filter=PASS`. |
+| `--fusion-kmer-blacklist <PATH>` | — | K-mer blacklist Parquet from `build-fusion-kmer-blacklist`. A read must have at least `--min-kmer-hits` *non-blacklisted* k-mer matches to contribute to fusion evidence. Blacklisted k-mers still contribute once a read has passed on clean evidence — they just cannot be the sole basis for including a read. Complementary to `--fusion-pon`: the PoN filters at the gene-pair level; the k-mer blacklist filters at the read level, upstream. |
+| `--min-kmer-blacklist-samples <N>` | `1` | Treat a k-mer as blacklisted only if it appears in at least `N` PoN samples in the blacklist Parquet (`n_pon_samples` column). Allows reusing one blacklist file at different stringency thresholds without rebuilding. |
 
 Output Parquet/TSV columns: `sample_id, gene_a, gene_b, chrom_a, chrom_b,
 supporting_reads, min_mapq, n_pon_samples, pon_total_samples,
@@ -195,6 +198,67 @@ bp_a_std, gene_b, chrom_b, breakpoint_b, bp_b_n, bp_b_std, n_spanning_reads`. Th
 `bp_*_n` columns count spanning reads contributing to each side and `bp_*_std` is
 the spread in bp (low = tight consensus). Coordinates are 1-based; partners with no
 spanning-read support report `NA`.
+
+---
+
+## `build-fusion-kmer-blacklist`
+
+Aggregate per-sample `--kmer-hits-output` TSV files from normal (PoN) samples into a
+k-mer blacklist Parquet. Each row in the output records a k-mer hash and the number of
+distinct normal samples in which that k-mer was observed supporting a fusion candidate.
+
+The blacklist works at the read level: rather than suppressing entire gene pairs at call
+time, individual reads are disqualified from contributing to fusion evidence if they do
+not have enough *clean* (non-blacklisted) k-mer hits. This lets a genuine junction call
+survive even when some of its supporting k-mers are noisy in normals, as long as the
+read also carries clean junction-spanning k-mers.
+
+```bash
+# Step 1: run fusions on each normal with --kmer-hits-output.
+for n in normal1 normal2; do
+  geac experimental fusions --bam $n.bam --index panel.duckdb \
+      --output $n.fusions.parquet \
+      --kmer-hits-output $n.kmer_hits.tsv \
+      --min-supporting-reads 1
+done
+
+# Step 2: aggregate into a k-mer blacklist.
+geac experimental build-fusion-kmer-blacklist \
+    --kmer-hits normal1.kmer_hits.tsv normal2.kmer_hits.tsv \
+    --output normals.fusion_kmer_blacklist.parquet \
+    --min-pon-samples 1
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--kmer-hits <PATH>...` | — | One or more `--kmer-hits-output` TSV files from normal-sample `fusions` runs. |
+| `--output <PATH>` | — | Output Parquet. Schema: `kmer_hash BIGINT, n_pon_samples BIGINT`. |
+| `--min-pon-samples <N>` | `1` | Only write k-mers seen in at least `N` distinct normal samples. `1` captures any k-mer observed in any normal; increase to require recurrence across multiple normals before blacklisting. |
+
+### Output schema
+
+```
+kmer_hash    BIGINT   -- same encoding as the kmer_hash column in --kmer-hits-output
+n_pon_samples BIGINT  -- number of distinct normal samples carrying this k-mer
+```
+
+### Using the blacklist at call time
+
+Pass the blacklist Parquet to `fusions` with `--fusion-kmer-blacklist`. The
+`--min-kmer-blacklist-samples` flag lets you re-apply a different threshold at call time
+without rebuilding:
+
+```bash
+geac experimental fusions --bam tumor.bam --index panel.duckdb \
+    --output tumor.fusions.parquet --tsv-output tumor.fusions.tsv \
+    --fusion-pon fusion_pon.duckdb \
+    --fusion-kmer-blacklist normals.fusion_kmer_blacklist.parquet \
+    --min-kmer-blacklist-samples 1
+```
+
+The gene-pair PoN (`--fusion-pon`) and the k-mer blacklist (`--fusion-kmer-blacklist`)
+are complementary and can be used together. The k-mer blacklist acts upstream (at read
+assignment), the gene-pair PoN acts downstream (at call annotation/tagging).
 
 ---
 
@@ -303,26 +367,43 @@ scripts/reconstruct_fusions.sh -b sample.fusion_reads.bam -r two_gene_miniref.fa
 
 ### Building a fusion Panel-of-Normals
 
-A fusion PoN suppresses recurrent false positives (paralog crosstalk, alignment
-artifacts, read-through, lab-specific chimeras). Run `fusions` on a set of normal
-samples with a **low `--min-supporting-reads`** so even weak artifacts are captured,
-then `geac merge` their `*.fusions.parquet` files into a DuckDB. `merge` routes them
-into a `fusions` table.
+GEAC provides two complementary PoN mechanisms:
+
+- **Gene-pair PoN** (`--fusion-pon`): suppresses entire gene pairs that recur across
+  normals at the call level. Simple but coarse — a real low-AF tumor call can be
+  suppressed if the same pair appears in normals due to unrelated noise.
+- **K-mer blacklist** (`--fusion-kmer-blacklist`): identifies the specific k-mers
+  driving noise in normals. A read must have enough *clean* (non-blacklisted) k-mer
+  support to count as evidence. Finer-grained: a tumor call can survive even if some
+  of its k-mers appear in normals, as long as it also has junction-spanning k-mers
+  that are clean.
+
+Both can be built from the same normal runs and used together.
 
 ```bash
-# Run each normal with sensitive settings (capture weak artifacts).
+# Step 1: run each normal with sensitive settings and capture kmer-hits.
 for n in normal1 normal2 normal3; do
   geac experimental fusions --bam $n.bam --index panel.duckdb \
-      --output $n.fusions.parquet --min-supporting-reads 1
+      --output $n.fusions.parquet \
+      --kmer-hits-output $n.kmer_hits.tsv \
+      --min-supporting-reads 1
 done
 
-# Build the PoN DuckDB.
-geac merge --output fusion_pon.duckdb normal1.fusions.parquet normal2.fusions.parquet normal3.fusions.parquet
+# Step 2a: build the gene-pair PoN DuckDB.
+geac merge --output fusion_pon.duckdb \
+    normal1.fusions.parquet normal2.fusions.parquet normal3.fusions.parquet
 
-# Apply it: annotate (and optionally filter) a tumor sample's calls.
+# Step 2b: build the k-mer blacklist.
+geac experimental build-fusion-kmer-blacklist \
+    --kmer-hits normal1.kmer_hits.tsv normal2.kmer_hits.tsv normal3.kmer_hits.tsv \
+    --output fusion_kmer_blacklist.parquet \
+    --min-pon-samples 1
+
+# Step 3: call fusions on a tumor, applying both PoN layers.
 geac experimental fusions --bam tumor.bam --index panel.duckdb \
     --output tumor.fusions.parquet --tsv-output tumor.fusions.tsv \
-    --fusion-pon fusion_pon.duckdb --max-pon-samples 0
+    --fusion-pon fusion_pon.duckdb \
+    --fusion-kmer-blacklist fusion_kmer_blacklist.parquet
 ```
 
 ---

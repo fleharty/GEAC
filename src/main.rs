@@ -2,6 +2,7 @@
 #![deny(unsafe_code)]
 mod bam;
 mod build_fusion_index;
+mod build_fusion_kmer_blacklist;
 mod cli;
 mod cohort;
 mod coverage;
@@ -363,6 +364,10 @@ fn main() -> Result<()> {
                         "scanning read sequence against fusion index"
                     );
                     scan_read::scan_read(&args)?;
+                }
+
+                ExperimentalCommand::BuildFusionKmerBlacklist(args) => {
+                    build_fusion_kmer_blacklist::build_fusion_kmer_blacklist(&args)?;
                 }
             }
         }

@@ -62,6 +62,8 @@ workflow GeacFusions {
         Int?    max_kmer_copies
         File?   fusion_pon
         Int?    max_pon_samples
+        File?   fusion_kmer_blacklist
+        Int?    min_kmer_blacklist_samples
         Int     min_coherent_fragments = 0
         Int     min_anchor_kmers       = 3
 
@@ -73,21 +75,23 @@ workflow GeacFusions {
 
     call Fusions {
         input:
-            input_bam              = input_bam,
-            input_bam_index        = input_bam_index,
-            fusion_index           = fusion_index,
-            reference_fasta        = reference_fasta,
-            reference_fasta_index  = reference_fasta_index,
-            sample_id              = sample_id,
-            kmer_size              = kmer_size,
-            min_kmer_hits          = min_kmer_hits,
-            min_supporting_reads   = min_supporting_reads,
-            min_mapq               = min_mapq,
-            max_kmer_copies        = max_kmer_copies,
-            fusion_pon             = fusion_pon,
-            max_pon_samples        = max_pon_samples,
-            min_coherent_fragments = min_coherent_fragments,
-            min_anchor_kmers       = min_anchor_kmers,
+            input_bam                  = input_bam,
+            input_bam_index            = input_bam_index,
+            fusion_index               = fusion_index,
+            reference_fasta            = reference_fasta,
+            reference_fasta_index      = reference_fasta_index,
+            sample_id                  = sample_id,
+            kmer_size                  = kmer_size,
+            min_kmer_hits              = min_kmer_hits,
+            min_supporting_reads       = min_supporting_reads,
+            min_mapq                   = min_mapq,
+            max_kmer_copies            = max_kmer_copies,
+            fusion_pon                 = fusion_pon,
+            max_pon_samples            = max_pon_samples,
+            fusion_kmer_blacklist      = fusion_kmer_blacklist,
+            min_kmer_blacklist_samples = min_kmer_blacklist_samples,
+            min_coherent_fragments     = min_coherent_fragments,
+            min_anchor_kmers           = min_anchor_kmers,
             docker_image           = docker_image,
             memory_gb              = memory_gb,
             disk_gb                = disk_gb,
@@ -122,6 +126,8 @@ task Fusions {
         Int?    max_kmer_copies
         File?   fusion_pon
         Int?    max_pon_samples
+        File?   fusion_kmer_blacklist
+        Int?    min_kmer_blacklist_samples
         Int     min_coherent_fragments
         Int     min_anchor_kmers
 
@@ -161,8 +167,10 @@ task Fusions {
             ~{"--reference "             + reference_fasta} \
             ~{"--sample-id "             + sample_id} \
             ~{"--max-kmer-copies "       + max_kmer_copies} \
-            ~{"--fusion-pon "            + fusion_pon} \
-            ~{"--max-pon-samples "       + max_pon_samples} \
+            ~{"--fusion-pon "                  + fusion_pon} \
+            ~{"--max-pon-samples "             + max_pon_samples} \
+            ~{"--fusion-kmer-blacklist "       + fusion_kmer_blacklist} \
+            ~{"--min-kmer-blacklist-samples "  + min_kmer_blacklist_samples} \
             --min-coherent-fragments ~{min_coherent_fragments} \
             --min-anchor-kmers       ~{min_anchor_kmers}
     >>>

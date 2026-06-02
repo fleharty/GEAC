@@ -25,12 +25,11 @@ struct FusionIndex {
     gene_chroms: Vec<String>,
 }
 
-/// Read the build-time k-mer size recorded in the index `meta` table, if present.
+/// Read a value from the index `meta` table by key.
 ///
-/// Returns `None` for indexes built before the `meta` table existed (so callers
-/// can fall back to skipping the check rather than erroring on older indexes).
-fn index_kmer_size(conn: &Connection) -> Result<Option<usize>> {
-    // Is there a `meta` table at all?
+/// Returns `None` if the `meta` table does not exist (older indexes) or the key
+/// is absent, so callers can gracefully skip checks against legacy indexes.
+fn index_meta_value(conn: &Connection, key: &str) -> Result<Option<String>> {
     let has_meta: bool = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='meta'",
@@ -38,8 +37,6 @@ fn index_kmer_size(conn: &Connection) -> Result<Option<usize>> {
             |r| r.get::<_, i64>(0),
         )
         .or_else(|_| {
-            // DuckDB exposes catalog info via duckdb_tables(); fall back to it if
-            // sqlite_master is unavailable.
             conn.query_row(
                 "SELECT count(*) FROM duckdb_tables() WHERE table_name='meta'",
                 [],
@@ -51,20 +48,27 @@ fn index_kmer_size(conn: &Connection) -> Result<Option<usize>> {
     if !has_meta {
         return Ok(None);
     }
-    let val: Option<String> = conn
+    Ok(conn
         .query_row(
-            "SELECT value FROM meta WHERE key='kmer_size'",
-            [],
+            "SELECT value FROM meta WHERE key=?",
+            duckdb::params![key],
             |r| r.get(0),
         )
-        .ok();
-    match val {
+        .ok())
+}
+
+fn index_kmer_size(conn: &Connection) -> Result<Option<usize>> {
+    match index_meta_value(conn, "kmer_size")? {
         Some(s) => Ok(Some(
             s.parse::<usize>()
                 .with_context(|| format!("index meta kmer_size is not an integer: {s:?}"))?,
         )),
         None => Ok(None),
     }
+}
+
+fn index_geac_version(conn: &Connection) -> Result<Option<String>> {
+    index_meta_value(conn, "geac_version")
 }
 
 /// Return true if the `kmers` table has a `genome_copies` column.
@@ -81,20 +85,36 @@ fn kmers_has_copies_column(conn: &Connection) -> Result<bool> {
     Ok(false)
 }
 
-fn load_index(index_path: &Path, k: usize, max_kmer_copies: Option<u32>) -> Result<FusionIndex> {
+fn load_index(
+    index_path: &Path,
+    k: usize,
+    max_kmer_copies: Option<u32>,
+    skip_version_check: bool,
+) -> Result<FusionIndex> {
     let conn = Connection::open(index_path)
         .with_context(|| format!("failed to open fusion index: {}", index_path.display()))?;
 
-    // Guard against a --kmer-size that disagrees with the index. A mismatch makes
-    // every k-mer hash fail to match, silently yielding zero fusions. Older indexes
-    // without a recorded size skip the check (the caller still relies on the user
-    // passing the correct --kmer-size).
     if let Some(index_k) = index_kmer_size(&conn)? {
         anyhow::ensure!(
             index_k == k,
             "--kmer-size {k} does not match the index (built with k={index_k}); \
              pass --kmer-size {index_k} or rebuild the index with k={k}"
         );
+    }
+
+    let running = env!("CARGO_PKG_VERSION");
+    if let Some(index_v) = index_geac_version(&conn)? {
+        if index_v != running {
+            let msg = format!(
+                "fusion index was built with GEAC v{index_v} but this binary is v{running}; \
+                 rebuild the index with the current version or pass --skip-version-check to run anyway"
+            );
+            if skip_version_check {
+                tracing::warn!("{msg}");
+            } else {
+                anyhow::bail!("{msg}");
+            }
+        }
     }
 
     let mut stmt =
@@ -209,18 +229,28 @@ fn assign_gene(
     k: usize,
     min_hits: u32,
     collect_detail: bool,
+    kmer_blacklist: Option<&std::collections::HashSet<u64>>,
 ) -> Option<ReadHit> {
-    // gene_idx → (count, min_pos, max_pos)
-    let mut gene_hits: HashMap<u32, (u32, usize, usize)> = HashMap::new();
+    // gene_idx → (total_count, clean_count, min_pos, max_pos)
+    // total_count: all matching k-mers; clean_count: non-blacklisted k-mers only.
+    // Gene winner selection uses total_count for stability; the min_hits gate uses
+    // clean_count so blacklisted k-mers alone cannot qualify a read.
+    let mut gene_hits: HashMap<u32, (u32, u32, usize, usize)> = HashMap::new();
     let mut kmer_hits: Vec<(u64, u32, usize)> = Vec::new();
     // The genome-copy filter (--max-kmer-copies) is applied at index load time:
     // excluded k-mers are absent from kmer_to_gene, so a plain lookup is correct.
     for (kmer, pos_in_read) in kmer_iter(seq, k) {
         if let Some(&gene_idx) = index.kmer_to_gene.get(&kmer) {
-            let e = gene_hits.entry(gene_idx).or_insert((0, pos_in_read, pos_in_read));
+            let e = gene_hits
+                .entry(gene_idx)
+                .or_insert((0, 0, pos_in_read, pos_in_read));
             e.0 += 1;
-            e.1 = e.1.min(pos_in_read);
-            e.2 = e.2.max(pos_in_read);
+            let is_clean = kmer_blacklist.map_or(true, |bl| !bl.contains(&kmer));
+            if is_clean {
+                e.1 += 1;
+            }
+            e.2 = e.2.min(pos_in_read);
+            e.3 = e.3.max(pos_in_read);
             // Retaining every matching k-mer for every assigned read costs
             // gigabytes on deep BAMs; only do it when the detail TSV is requested.
             if collect_detail {
@@ -229,16 +259,18 @@ fn assign_gene(
         }
     }
 
-    // Sort by count desc, then gene_idx asc so the result is deterministic
+    // Sort by total_count desc, then gene_idx asc so the result is deterministic
     // (HashMap iteration order must not influence the winner choice).
-    let mut sorted: Vec<(u32, u32, usize, usize)> = gene_hits
+    let mut sorted: Vec<(u32, u32, u32, usize, usize)> = gene_hits
         .into_iter()
-        .map(|(gi, (cnt, mn, mx))| (gi, cnt, mn, mx))
+        .map(|(gi, (total, clean, mn, mx))| (gi, total, clean, mn, mx))
         .collect();
     sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-    let (winning_gene, count, g1_min, g1_max) = *sorted.first()?;
-    if count < min_hits {
+    let (winning_gene, count, clean_count, g1_min, g1_max) = *sorted.first()?;
+    // Gate on clean (non-blacklisted) k-mer count: blacklisted k-mers alone cannot
+    // qualify a read, but they still contribute once clean evidence is sufficient.
+    if clean_count < min_hits {
         return None;
     }
 
@@ -250,7 +282,7 @@ fn assign_gene(
     // n_spanning_reads correctly reflects all reads that cross the junction,
     // even when the anchor on one side is short (asymmetric junction coverage).
     let (gene2_idx, gene2_kmer_count, g2_min, g2_max) = if sorted.len() >= 2 {
-        let (g2, c2, mn2, mx2) = sorted[1];
+        let (g2, c2, _clean2, mn2, mx2) = sorted[1];
         (Some(g2), c2, mn2, mx2)
     } else {
         (None, 0, 0, 0)
@@ -566,7 +598,11 @@ fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
 ///
 /// Matching is by the alphabetically-sorted gene-name pair, so a PoN built with one
 /// k-mer index still matches calls made with another (gene-index order may differ).
-fn annotate_fusion_pon(records: &mut [FusionRecord], pon_db: &Path) -> Result<()> {
+fn annotate_fusion_pon(
+    records: &mut [FusionRecord],
+    pon_db: &Path,
+    skip_version_check: bool,
+) -> Result<()> {
     if !pon_db.exists() {
         anyhow::bail!("fusion PoN DuckDB not found: {}", pon_db.display());
     }
@@ -577,6 +613,28 @@ fn annotate_fusion_pon(records: &mut [FusionRecord], pon_db: &Path) -> Result<()
         "fusion PoN DuckDB does not contain a fusions table — build it with \
          `geac merge` over normal-sample *.fusions.parquet files",
     )?;
+
+    let running = env!("CARGO_PKG_VERSION");
+    let pon_version: Option<String> = conn
+        .query_row(
+            "SELECT geac_version FROM geac_metadata LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    if let Some(pon_v) = pon_version {
+        if pon_v != running {
+            let msg = format!(
+                "fusion PoN was built with GEAC v{pon_v} but this binary is v{running}; \
+                 rebuild the PoN with the current version or pass --skip-version-check to run anyway"
+            );
+            if skip_version_check {
+                tracing::warn!("{msg}");
+            } else {
+                anyhow::bail!("{msg}");
+            }
+        }
+    }
 
     let pon_total_samples: i32 =
         conn.query_row("SELECT COUNT(DISTINCT sample_id) FROM fusions", [], |r| r.get(0))?;
@@ -632,7 +690,35 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     );
 
     info!(index = %args.index.display(), "loading fusion k-mer index...");
-    let index = load_index(&args.index, k, args.max_kmer_copies)?;
+    let index = load_index(&args.index, k, args.max_kmer_copies, args.skip_version_check)?;
+
+    let kmer_blacklist: Option<std::collections::HashSet<u64>> =
+        if let Some(ref bl_path) = args.fusion_kmer_blacklist {
+            let bl_conn = Connection::open_in_memory()
+                .context("failed to open DuckDB for k-mer blacklist")?;
+            let escaped = bl_path.display().to_string().replace('\'', "''");
+            let threshold = args.min_kmer_blacklist_samples;
+            let mut stmt = bl_conn
+                .prepare(&format!(
+                    "SELECT kmer_hash FROM read_parquet('{escaped}') WHERE n_pon_samples >= {threshold}"
+                ))
+                .context("failed to query k-mer blacklist Parquet")?;
+            let mut rows = stmt.query([]).context("failed to read k-mer blacklist")?;
+            let mut set = std::collections::HashSet::new();
+            while let Some(row) = rows.next()? {
+                let h: i64 = row.get(0)?;
+                set.insert(h as u64);
+            }
+            info!(
+                n_blacklisted = set.len(),
+                min_pon_samples = threshold,
+                path = %bl_path.display(),
+                "loaded k-mer blacklist"
+            );
+            Some(set)
+        } else {
+            None
+        };
 
     let mut reader = bam::Reader::from_path(&args.bam)
         .with_context(|| format!("failed to open BAM/CRAM: {}", args.bam.display()))?;
@@ -696,7 +782,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         }
 
         let seq = record.seq().as_bytes();
-        if let Some(mut rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, false) {
+        if let Some(mut rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, false, kmer_blacklist.as_ref()) {
             rh.mapq = record.mapq();
             qname_to_reads
                 .entry(record.qname().to_vec())
@@ -779,7 +865,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
 
     // Panel-of-Normals annotation and optional filtering, before any output is written.
     if let Some(ref pon_db) = args.fusion_pon {
-        annotate_fusion_pon(&mut records, pon_db)?;
+        annotate_fusion_pon(&mut records, pon_db, args.skip_version_check)?;
     }
     // Tag (don't drop) fusions seen in more PoN samples than the threshold. The
     // rows stay in the output with filter="pon" so downstream tooling can include
@@ -937,8 +1023,13 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             };
 
         let mut rows_written: u64 = 0;
+        let mut detail_reads_processed: u64 = 0;
         for result in reader2.records() {
             let record = result.context("error reading BAM record in detail pass")?;
+            detail_reads_processed += 1;
+            if detail_reads_processed % 5_000_000 == 0 {
+                info!(detail_reads_processed, rows_written, "detail pass progress");
+            }
             let Some(fusion_label_str) = fusion_qnames.get(record.qname()) else {
                 continue;
             };
@@ -953,7 +1044,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 continue;
             }
             let seq = record.seq().as_bytes();
-            let Some(rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, true) else {
+            let Some(rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, true, kmer_blacklist.as_ref()) else {
                 continue;
             };
             let read_end = if flags & 0x40 != 0 { "R1" } else { "R2" };

@@ -149,12 +149,13 @@ fn write_index(
          CREATE TABLE kmer_positions (kmer_hash BIGINT, chrom VARCHAR, pos INTEGER);",
     )?;
 
-    // Record the k-mer size so `geac fusions` can verify the --kmer-size it was
-    // given matches the value the index was built with. A mismatch otherwise
-    // produces silently empty/garbage results (every hash fails to match).
     conn.execute(
         "INSERT INTO meta (key, value) VALUES ('kmer_size', ?)",
         duckdb::params![k.to_string()],
+    )?;
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('geac_version', ?)",
+        duckdb::params![env!("CARGO_PKG_VERSION")],
     )?;
 
     {
