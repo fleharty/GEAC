@@ -2,6 +2,7 @@
 #![deny(unsafe_code)]
 mod bam;
 mod build_fusion_index;
+mod compute_uniqueness_map;
 mod build_fusion_kmer_blacklist;
 mod cli;
 mod cohort;
@@ -368,6 +369,17 @@ fn main() -> Result<()> {
 
                 ExperimentalCommand::BuildFusionKmerBlacklist(args) => {
                     build_fusion_kmer_blacklist::build_fusion_kmer_blacklist(&args)?;
+                }
+
+                ExperimentalCommand::ComputeUniquenessMap(args) => {
+                    info!(
+                        fasta = %args.fasta.display(),
+                        output = %args.output.display(),
+                        min_k = args.min_k,
+                        max_k = args.max_k,
+                        "computing per-locus minimum unique k"
+                    );
+                    compute_uniqueness_map::compute_uniqueness_map(&args)?;
                 }
             }
         }

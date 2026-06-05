@@ -15,7 +15,7 @@ version 1.0
 ##   fasta_index             - Corresponding .fai index (localized alongside fasta by Cromwell)
 ##   index_name              - Base name for the output DuckDB index (default: fusion_index)
 ##   kmer_size               - K-mer length; must match geac_fusions.wdl (default: 23)
-##   min_gene_kmers          - Drop genes with fewer unique k-mers than this (default: 100)
+##   min_gene_kmers          - Drop genes with fewer unique k-mers than this (default: 1)
 ##   genes                   - (optional) text file listing gene names to index, one per line;
 ##                             blank lines and lines starting with '#' are ignored;
 ##                             when provided only those genes are indexed (e.g. a fusion panel)
@@ -53,7 +53,7 @@ workflow GeacBuildFusionIndex {
         String index_name = "fusion_index"
 
         Int    kmer_size       = 23
-        Int    min_gene_kmers  = 100
+        Int    min_gene_kmers  = 1
         File?  genes
 
         Boolean check_genome_uniqueness = false

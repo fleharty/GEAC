@@ -97,7 +97,7 @@ fn load_gene_list(path: &Path) -> Result<HashSet<String>> {
 
 // ─── FASTA index parsing ──────────────────────────────────────────────────────
 
-fn read_fai_sequences(fasta: &Path) -> Result<Vec<(String, usize)>> {
+pub fn read_fai_sequences(fasta: &Path) -> Result<Vec<(String, usize)>> {
     let mut fai_str = fasta.to_string_lossy().into_owned();
     fai_str.push_str(".fai");
     let fai_path = std::path::PathBuf::from(&fai_str);

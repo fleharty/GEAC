@@ -27,6 +27,7 @@ genes — a signature of a fusion or chimeric read.
 | [`locate-kmer`](#locate-kmer) | Find every occurrence of a single k-mer in the reference FASTA |
 | [`lookup-kmer`](#lookup-kmer) | Look up which gene a single k-mer is assigned to in an index |
 | [`scan-read`](#scan-read) | Show per-k-mer matches for one read sequence against an index |
+| [`compute-uniqueness-map`](#compute-uniqueness-map) | For every genomic locus, compute the smallest k for which the k-mer at that position is genome-unique |
 
 `lookup-kmer` and `scan-read` are debugging aids for inspecting the index.
 
@@ -78,7 +79,7 @@ geac experimental build-fusion-index \
 | `--gtf <PATH>` | — | Gene annotation (`.gtf` / `.gtf.gz`). Only `gene` feature lines are read. |
 | `--fasta <PATH>` | — | Reference FASTA; requires a `.fai` (`samtools faidx`). |
 | `--kmer-size <N>` | `23` | K-mer length (1–31). Must match the value used by `fusions`/`extract-gene`. |
-| `--min-gene-kmers <N>` | `100` | Drop genes with fewer than `N` retained unique k-mers. Applied **after** the genome-copy filter. |
+| `--min-gene-kmers <N>` | `1` | Drop genes with fewer than `N` retained unique k-mers. Applied **after** the genome-copy filter. Default `1` keeps any gene with at least one usable k-mer; raise it to suppress repetitive genes. |
 | `--output <PATH>` | — | Output DuckDB index. |
 | `--genes <PATH>` | — | Restrict to the gene names in this file (one per line; `#` comments allowed). Builds a small targeted panel. |
 | `--check-genome-uniqueness` | off | Scan the whole FASTA and record per-k-mer genome-wide copy counts. Required for `--max-genome-copies > 1`, `--copy-histogram-output`, and `--bed-output-by-copies`. Holds the candidate k-mer set in RAM (~20 bytes × n_candidates — tens of GB for a whole-genome build; cheap for a panel). |
@@ -337,6 +338,88 @@ geac experimental scan-read --index panel_fusion_index.duckdb --read ACGT... --k
 ```
 
 `N` bases reset the sliding window exactly as in `fusions`.
+
+---
+
+## `compute-uniqueness-map`
+
+For every position in the genome, compute the smallest k such that the k-mer starting
+at that locus appears **exactly once** genome-wide (in canonical / strand-collapsed
+form). The result is a per-base signal: repetitive regions receive large values; regions
+with high-complexity, unique sequence receive small values. It is useful for:
+
+- Understanding which loci in a fusion gene panel are accessible at a given k-mer size.
+- Choosing `--kmer-size` for `build-fusion-index` by inspecting the distribution over
+  panel gene bodies.
+- Loading alongside a `copies1.bed` track in IGV to see uniqueness dropouts in context.
+
+```bash
+# Whole-genome map (see RAM note below)
+geac experimental compute-uniqueness-map \
+    --fasta Homo_sapiens_assembly38.fasta \
+    --output hg38_min_unique_k.bedgraph
+
+# Targeted: write only positions overlapping a panel BED
+geac experimental compute-uniqueness-map \
+    --fasta Homo_sapiens_assembly38.fasta \
+    --output panel_min_unique_k.bedgraph \
+    --regions panel_fusion_kmers.bed
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--fasta <PATH>` | — | Reference FASTA; requires a `.fai` (`samtools faidx`). |
+| `--output <PATH>` | — | Output bedgraph (see [output format](#output-format) below). |
+| `--min-k <N>` | `15` | Smallest k to test. |
+| `--max-k <N>` | `31` | Largest k to test (hard ceiling: 31, set by the 2-bit k-mer encoder). Positions with no unique k in `[min-k, max-k]` are assigned `max-k + 1`. |
+| `--regions <PATH>` | — | Optional BED of output regions. The genome-wide count passes always scan the full FASTA (uniqueness is global), but only positions overlapping these regions appear in the output. |
+| `--no-merge` | off | Write one line per base instead of merging adjacent equal-value positions. Produces a larger file; content is identical. |
+
+### Output format
+
+The output is a **bedgraph** (0-based half-open coordinates):
+
+```
+chrom   start   end   min_unique_k
+chr1    0       1     18
+chr1    1       2     22
+chr1    2       3     17
+chr1    950     952   32   ← repetitive; no unique k found in [15,31] → sentinel max_k+1
+```
+
+The value at position `p` is the smallest k such that the k-mer `[p, p+k)` appears
+exactly once genome-wide. Adjacent positions with the same value are merged into a
+single interval (run-length encoding). Because adjacent k-mer start positions almost
+always differ in their min-unique-k, most intervals are 1 bp wide in practice. The
+format is full base-pair resolution; IGV and bedtools load it correctly. Use
+`--no-merge` if you need a strictly fixed-step layout.
+
+Positions in N-runs are never yielded by the k-mer iterator and receive the sentinel
+value `max-k + 1`.
+
+### Algorithm
+
+For each k from `min-k` to `max-k`:
+
+1. **Count pass** — scan the full genome with the rolling canonical k-mer iterator,
+   accumulating a `HashMap<u64, u8>` of genome-wide occurrence counts (capped at 2).
+2. **Query pass** — scan again; for each position not yet resolved, check whether its
+   k-mer has count == 1. If so, record `k` as that position's minimum unique k.
+3. Drop the count map and advance k. Stop early if all positions are resolved.
+
+### Resource requirements
+
+| Genome | RAM (peak) | Typical runtime |
+|--------|-----------|-----------------|
+| Targeted panel (~few Mb output, genome-wide counting) | ~50–60 GB | 30–60 min |
+| Full hg38 | ~55–65 GB | 3–8 hours |
+
+The dominant cost is the `HashMap<u64, u8>` in the count pass. At k ≈ 23, nearly every
+k-mer in hg38 is distinct (~3 billion entries × ~20 bytes ≈ 60 GB). A machine with
+**≥ 64 GB RAM** is required for whole-genome use; a 128 GB server is comfortable.
+
+`--regions` limits the output file size but does not reduce counting RAM — uniqueness
+is a global property that requires scanning the whole genome regardless.
 
 ---
 

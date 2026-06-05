@@ -860,6 +860,90 @@ fn write_metadata(
     Ok(())
 }
 
+fn alt_bases_column_names(conn: &Connection) -> Result<std::collections::HashSet<String>> {
+    conn.prepare("DESCRIBE SELECT * FROM alt_bases LIMIT 0")
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .map(|rows| rows.filter_map(|r| r.ok()).collect::<std::collections::HashSet<String>>())
+        })
+        .context("failed to describe alt_bases columns")
+}
+
+fn write_on_target_tsv(conn: &Connection, path: &std::path::Path) -> Result<()> {
+    if !dst_table_exists(conn, "alt_bases")? {
+        info!("alt_bases table not found; skipping on-target TSV");
+        return Ok(());
+    }
+
+    let cols = alt_bases_column_names(conn)?;
+
+    if !cols.contains("on_target") {
+        info!("on_target column absent from alt_bases (no --targets BED was used); skipping on-target TSV");
+        return Ok(());
+    }
+
+    // Columns in explorer display order: always-present first, then conditional.
+    // Each entry is (sql_expression, output_alias, optional_guard_column).
+    // When optional_guard_column is Some(c), the column is included only if c exists.
+    let column_specs: &[(&str, &str, Option<&str>)] = &[
+        ("sample_id",                                "sample_id",            None),
+        ("chrom",                                    "chrom",                None),
+        ("pos + 1",                                  "pos",                  None),
+        ("ref_allele",                               "ref_allele",           Some("ref_allele")),
+        ("alt_allele",                               "alt_allele",           None),
+        ("variant_type",                             "variant_type",         Some("variant_type")),
+        ("ROUND(alt_count * 1.0 / total_depth, 4)", "vaf",                  None),
+        ("alt_count",                                "alt_count",            None),
+        ("ref_count",                                "ref_count",            Some("ref_count")),
+        ("total_depth",                              "total_depth",          None),
+        ("fwd_alt_count",                            "fwd_alt_count",        Some("fwd_alt_count")),
+        ("rev_alt_count",                            "rev_alt_count",        Some("rev_alt_count")),
+        ("overlap_alt_agree",                        "overlap_alt_agree",    Some("overlap_alt_agree")),
+        ("overlap_alt_disagree",                     "overlap_alt_disagree", Some("overlap_alt_disagree")),
+        ("variant_called",                           "variant_called",       Some("variant_called")),
+        ("variant_filter",                           "variant_filter",       Some("variant_filter")),
+        ("gene",                                     "gene",                 Some("gene")),
+        ("gnomad_af",                                "gnomad_af",            Some("gnomad_af")),
+    ];
+
+    let select_parts: Vec<String> = column_specs
+        .iter()
+        .filter(|(_, _, guard)| guard.map_or(true, |c| cols.contains(c)))
+        .map(|(expr, alias, _)| {
+            if *expr == *alias {
+                expr.to_string()
+            } else {
+                format!("{expr} AS {alias}")
+            }
+        })
+        .collect();
+
+    let select_sql = select_parts.join(",\n            ");
+    let escaped_path = escape_path(path);
+
+    conn.execute_batch(&format!(
+        "COPY (
+            SELECT
+                {select_sql}
+            FROM alt_bases
+            WHERE on_target = true
+            ORDER BY chrom, pos, alt_allele, sample_id
+        ) TO '{escaped_path}' (FORMAT CSV, HEADER true, DELIMITER '\t');"
+    ))
+    .with_context(|| format!("failed to write on-target TSV to {}", path.display()))?;
+
+    let n_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM alt_bases WHERE on_target = true",
+            [],
+            |row| row.get(0),
+        )
+        .context("failed to count on-target rows")?;
+    info!(n_rows, path = %path.display(), "on-target TSV written");
+
+    Ok(())
+}
+
 pub fn merge(args: &MergeArgs) -> Result<()> {
     if args.output.exists() {
         bail!(
@@ -912,6 +996,10 @@ pub fn merge(args: &MergeArgs) -> Result<()> {
     build_indices_and_derived_tables(&conn)?;
     write_input_provenance(&conn, &input_provenance)?;
     write_metadata(&conn, args, &parquet_groups, &duckdb_inputs)?;
+
+    if let Some(tsv_path) = &args.on_target_tsv {
+        write_on_target_tsv(&conn, tsv_path)?;
+    }
 
     info!(output = %args.output.display(), "merge complete");
     Ok(())

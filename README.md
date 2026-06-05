@@ -313,6 +313,15 @@ SQL query.
 
 See [docs/provenance.md](docs/provenance.md) for the full provenance schema.
 
+**On-target TSV export** — pass `--on-target-tsv <path>` to write a TSV of
+`on_target = true` rows from `alt_bases`, with columns matching the explorer's main
+summary table (`sample_id`, `chrom`, `pos` (1-based), `ref_allele`, `alt_allele`,
+`variant_type`, `vaf`, `alt_count`, `ref_count`, `total_depth`, `fwd_alt_count`,
+`rev_alt_count`, `overlap_alt_agree`, `overlap_alt_disagree`, `variant_called`,
+`variant_filter`, `gene`, `gnomad_af`). Columns absent from the data are omitted
+silently. Skipped if no `on_target` column is present (i.e. no `--targets` BED was
+supplied to `geac collect`).
+
 The output file must not already exist (use a new path or delete the old file first).
 
 ### Annotate Normal — cross-check tumor loci against a paired normal BAM
@@ -956,8 +965,10 @@ Shared inputs applied to all samples: `reference_fasta`, `targets`, `gene_annota
 Set `run_fragments=true` to run `geac fragments` in parallel with `geac collect` for each
 sample; fragment Parquets are passed to `geac merge` and registered as an external
 DuckDB view. Increase `fragments_disk_gb` (default 200) for WGS cohorts.
+Set `export_on_target_tsv=true` to write a TSV of on-target calls alongside the DuckDB
+(requires `targets` to have been provided so the `on_target` column exists).
 
-Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty when `reads_output=false`), `sample_metrics_parquets` (Array[File], empty when `targets` is absent), `fragments_parquets` (Array[File], empty when `run_fragments=false`), `cohort_db` (File, the merged DuckDB).
+Outputs: `locus_parquets` (Array[File]), `reads_parquets` (Array[File], empty when `reads_output=false`), `sample_metrics_parquets` (Array[File], empty when `targets` is absent), `fragments_parquets` (Array[File], empty when `run_fragments=false`), `cohort_db` (File, the merged DuckDB), `cohort_manifest` (File, TSV of sample BAM paths and metadata), `cohort_on_target_tsv` (File?, on-target calls TSV; present only when `export_on_target_tsv=true` and `targets` was provided).
 
 ### `geac_merge.wdl` inputs
 

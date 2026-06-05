@@ -74,6 +74,9 @@ pub enum ExperimentalCommand {
 
     /// [EXPERIMENTAL] Aggregate per-sample kmer-hits TSVs from normal samples into a k-mer blacklist Parquet
     BuildFusionKmerBlacklist(BuildFusionKmerBlacklistArgs),
+
+    /// [EXPERIMENTAL] For every genomic locus, compute the smallest k such that the k-mer at that position is unique genome-wide
+    ComputeUniquenessMap(ComputeUniquenessMapArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -327,6 +330,13 @@ pub struct MergeArgs {
     /// Output DuckDB database file
     #[arg(short, long)]
     pub output: PathBuf,
+
+    /// Write a TSV of on-target alt-base calls to this path.
+    /// Columns mirror the main summary table in the GEAC explorer, ordered by
+    /// chrom, pos, alt_allele, sample_id.  Silently skipped when alt_bases has
+    /// no on_target column (i.e. no --targets BED was supplied to geac collect).
+    #[arg(long)]
+    pub on_target_tsv: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
@@ -603,8 +613,10 @@ pub struct BuildFusionIndexArgs {
     pub kmer_size: u8,
 
     /// Drop genes with fewer than this many genome-unique k-mers; these genes
-    /// have too little unique sequence to reliably detect fusions (default: 100)
-    #[arg(long, default_value_t = 100)]
+    /// have too little unique sequence to reliably detect fusions. Default 1
+    /// keeps any gene with at least one usable k-mer; raise it to suppress
+    /// repetitive genes with little unique sequence.
+    #[arg(long, default_value_t = 1)]
     pub min_gene_kmers: u32,
 
     /// Output DuckDB index file (e.g. hg38_fusion_index.duckdb)
@@ -903,6 +915,43 @@ pub struct ScanReadArgs {
     /// K-mer size used when building the index.
     #[arg(long, default_value = "23")]
     pub kmer_size: u8,
+}
+
+#[derive(Parser, Debug)]
+pub struct ComputeUniquenessMapArgs {
+    /// Reference FASTA (must be indexed with samtools faidx — .fai required)
+    #[arg(long)]
+    pub fasta: PathBuf,
+
+    /// Output bedgraph file. Each position records the smallest k for which its
+    /// k-mer is genome-unique. Adjacent positions with the same value are merged
+    /// into a single interval (run-length encoding). The bedgraph is full base-
+    /// pair resolution; most intervals will be 1 bp wide in practice.
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Minimum k-mer size to test. K-mers shorter than this are never checked.
+    #[arg(long, default_value_t = 15)]
+    pub min_k: usize,
+
+    /// Maximum k-mer size to test. Positions with no unique k-mer in [min_k,
+    /// max_k] are assigned max_k + 1. Must be ≤ 31 (hardware limit of the 2-bit
+    /// rolling k-mer encoder).
+    #[arg(long, default_value_t = 31)]
+    pub max_k: usize,
+
+    /// Optional BED file of regions to include in the output. The genome-wide
+    /// count pass always scans the full FASTA (uniqueness is a global property),
+    /// but only positions overlapping these regions are written to the output.
+    /// When omitted, every genomic position is written.
+    #[arg(long)]
+    pub regions: Option<PathBuf>,
+
+    /// Write one output line per base rather than merging adjacent positions
+    /// with the same value. Produces a larger file but guarantees a fixed-step
+    /// layout. Equivalent in content to the default run-length-encoded output.
+    #[arg(long, default_value_t = false)]
+    pub no_merge: bool,
 }
 
 // Allow clap to parse ReadType and Pipeline from strings

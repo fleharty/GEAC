@@ -31,6 +31,8 @@ version 1.0
 ##                           k-mer partition; 0 = disabled (default); set to 1+ to filter homology artifacts
 ##   min_anchor_kmers      - minimum k-mer hits from each gene for a spanning read to count as anchored
 ##                           (default: 3; only relevant when min_coherent_fragments > 0)
+##   comment_text          - (optional) free-text note echoed straight to the data table (as the
+##                           `comment` output); not processed by geac, never written to the Parquet/TSV
 ##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##   memory_gb             - Memory in GB (default: 32; increase to 64 for high-coverage WGS)
 ##   disk_gb               - Disk space in GB (default: 100)
@@ -44,6 +46,7 @@ version 1.0
 ##   kmer_hits_tsv         - Per-k-mer hits TSV for fusion-supporting reads (header-only when no fusions)
 ##   breakpoints_tsv       - Per-fusion breakpoint coordinates derived from junction-spanning reads
 ##   geac_version          - geac binary version string (e.g. "0.4.33") for provenance in the data table
+##   comment               - the free-text note passed in via comment_text (if any), as a data-table column
 
 workflow GeacFusions {
 
@@ -67,6 +70,8 @@ workflow GeacFusions {
         Boolean? skip_version_check
         Int      min_coherent_fragments = 0
         Int      min_anchor_kmers       = 3
+
+        String?  comment_text
 
         String docker_image
         Int    memory_gb   = 32
@@ -108,6 +113,7 @@ workflow GeacFusions {
         File   kmer_hits_tsv   = Fusions.kmer_hits_tsv
         File   breakpoints_tsv = Fusions.breakpoints_tsv
         String geac_version    = Fusions.geac_version
+        String? comment        = comment_text
     }
 }
 

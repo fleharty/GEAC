@@ -964,3 +964,46 @@ A/B partition to pass. For low-AF fusions or short insert sizes, all fragments m
 be discordant pairs, so hard-requiring ≥1 coherent read would silently drop real
 calls. The user must opt in with `--min-coherent-fragments 1`. The `n_coherent_reads`
 column is always written, so users can post-filter or inspect without re-running.
+
+---
+
+## `compute-uniqueness-map` command (2026-06-05)
+
+New experimental command that walks every genomic position and finds the smallest k
+for which the k-mer starting there is genome-unique (appears exactly once
+canonically). Output is a bedgraph with adjacent equal-value positions merged
+(run-length encoded). `--regions <BED>` restricts the output to panel regions without
+reducing counting RAM — uniqueness is a global property requiring a full-genome scan
+regardless.
+
+The algorithm is iterative: for each k from `min-k` to `max-k`, a count pass
+accumulates a `HashMap<u64, u8>` (capped at 2) then a query pass resolves any
+position whose k-mer now has count 1. RAM peaks at the k where the most k-mers are
+nearly-unique (≈ k 23 for hg38, ~60 GB). `read_fai_sequences` in
+`build_fusion_index.rs` was made `pub` to share the FASTA index parser.
+
+**Use case.** Choosing `--kmer-size` for `build-fusion-index`: inspecting the
+min-unique-k distribution over panel gene bodies reveals which genes have repetitive
+regions that won't be covered at a given k.
+
+---
+
+## `geac merge --on-target-tsv` and `geac_cohort.wdl` manifest (2026-06-05)
+
+**`--on-target-tsv`** writes a flat TSV of `on_target = true` rows from `alt_bases`
+immediately after the DuckDB is finalized. Column list mirrors the explorer's main
+summary table and is built dynamically — columns absent from the data (e.g. `gene`,
+`gnomad_af` when those flags weren't used) are omitted silently. Silently skipped if
+no `on_target` column exists. This lets downstream pipelines consume on-target calls
+without opening DuckDB.
+
+**`geac_cohort.wdl` manifest** — the scatter now builds a `manifest_row` per sample
+using WDL `File`→`String` coercion at workflow scope (pre-localization, so GCS URIs
+are preserved). After the scatter, `write_tsv(manifest_header + manifest_row)`
+produces a cohort manifest TSV (`bam_path`, `bai_path`, `sample_id`, `subject_id`,
+`sample_type`, `batch`, `read_type`, `pipeline`, `label1`–`label3`, `timepoint`).
+The Merge task `cp`s it to `<cohort_name>.manifest.tsv` and surfaces it as a named
+workflow output `cohort_manifest`.
+
+`export_on_target_tsv=true` (default false) passes `--on-target-tsv` to `geac merge`
+and exposes the result as `cohort_on_target_tsv` (`File?`, null when flag is false).
