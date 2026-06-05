@@ -266,7 +266,7 @@ workflow GeacCohort {
         Array[File] fragments_parquets      = all_fragments_parquets
         File        cohort_db               = Merge.cohort_db
         File        cohort_manifest         = Merge.cohort_manifest
-        File?       cohort_on_target_tsv    = Merge.cohort_on_target_tsv
+        Array[File] cohort_on_target_tsvs   = Merge.cohort_on_target_tsvs
     }
 }
 
@@ -401,9 +401,9 @@ task Merge {
     >>>
 
     output {
-        File        cohort_db          = output_db
-        File        cohort_manifest    = output_manifest
-        File?       cohort_on_target_tsv = if export_on_target_tsv then output_on_target else None
+        File        cohort_db             = output_db
+        File        cohort_manifest       = output_manifest
+        Array[File] cohort_on_target_tsvs = if export_on_target_tsv then [output_on_target] else []
     }
 
     runtime {
