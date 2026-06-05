@@ -244,8 +244,10 @@ workflow GeacCohort {
 
     # Build manifest with original (pre-localization) BAM/BAI URIs and per-sample metadata.
     # File→String coercion at workflow scope preserves GCS URIs; localization only happens inside tasks.
-    Array[Array[String]] manifest_header = [["bam_path", "bai_path", "sample_id", "subject_id", "sample_type", "batch", "read_type", "pipeline", "label1", "label2", "label3", "timepoint"]]
-    File cohort_manifest_tsv = write_tsv(manifest_header + manifest_row)
+    # write_tsv receives only the data rows; the Merge task prepends the header in bash
+    # because Cromwell cannot concatenate a static Array[Array[String]] with the
+    # WomMaybeEmptyArrayType that scatter produces for manifest_row.
+    File cohort_manifest_tsv = write_tsv(manifest_row)
 
     call Merge {
         input:
@@ -392,7 +394,8 @@ task Merge {
     command <<<
         set -euo pipefail
 
-        cp ~{manifest} ~{output_manifest}
+        printf 'bam_path\tbai_path\tsample_id\tsubject_id\tsample_type\tbatch\tread_type\tpipeline\tlabel1\tlabel2\tlabel3\ttimepoint\n' > ~{output_manifest}
+        cat ~{manifest} >> ~{output_manifest}
 
         geac merge \
             --output ~{output_db} \
