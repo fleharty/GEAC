@@ -97,7 +97,6 @@ workflow GeacCohort {
         Boolean reads_output  = false
         Boolean input_checksum_sha256 = true
         Boolean run_fragments = false
-        Boolean export_on_target_tsv = false
         Int     threads       = 1
 
         String cohort_name = "cohort"
@@ -251,24 +250,19 @@ workflow GeacCohort {
 
     call Merge {
         input:
-            parquets              = flatten([Collect.locus_parquet, all_reads_parquets, all_sample_metrics_parquets, all_fragments_parquets]),
-            manifest              = cohort_manifest_tsv,
-            cohort_name           = cohort_name,
-            export_on_target_tsv  = export_on_target_tsv,
-            docker_image          = docker_image,
-            memory_gb             = merge_memory_gb,
-            disk_gb               = merge_disk_gb,
-            preemptible           = preemptible,
+            parquets     = flatten([Collect.locus_parquet, all_reads_parquets, all_sample_metrics_parquets, all_fragments_parquets]),
+            manifest     = cohort_manifest_tsv,
+            cohort_name  = cohort_name,
+            docker_image = docker_image,
+            memory_gb    = merge_memory_gb,
+            disk_gb      = merge_disk_gb,
+            preemptible  = preemptible,
     }
 
     output {
-        Array[File] locus_parquets          = Collect.locus_parquet
-        Array[File] reads_parquets          = all_reads_parquets
-        Array[File] sample_metrics_parquets = all_sample_metrics_parquets
-        Array[File] fragments_parquets      = all_fragments_parquets
-        File        cohort_db               = Merge.cohort_db
-        File        cohort_manifest         = Merge.cohort_manifest
-        Array[File] cohort_on_target_tsvs   = Merge.cohort_on_target_tsvs
+        File cohort_db              = Merge.cohort_db
+        File cohort_manifest        = Merge.cohort_manifest
+        File cohort_on_target_tsv   = Merge.cohort_on_target_tsv
     }
 }
 
@@ -379,7 +373,6 @@ task Merge {
         Array[File] parquets
         File        manifest
         String      cohort_name
-        Boolean     export_on_target_tsv = false
 
         String docker_image
         Int    memory_gb
@@ -387,9 +380,9 @@ task Merge {
         Int    preemptible
     }
 
-    String output_db          = cohort_name + ".duckdb"
-    String output_manifest    = cohort_name + ".manifest.tsv"
-    String output_on_target   = cohort_name + ".on_target.tsv"
+    String output_db        = cohort_name + ".duckdb"
+    String output_manifest  = cohort_name + ".manifest.tsv"
+    String output_on_target = cohort_name + ".on_target.tsv"
 
     command <<<
         set -euo pipefail
@@ -397,16 +390,18 @@ task Merge {
         printf 'bam_path\tbai_path\tsample_id\tsubject_id\tsample_type\tbatch\tread_type\tpipeline\tlabel1\tlabel2\tlabel3\ttimepoint\n' > ~{output_manifest}
         cat ~{manifest} >> ~{output_manifest}
 
+        touch ~{output_on_target}
+
         geac merge \
             --output ~{output_db} \
-            ~{if export_on_target_tsv then "--on-target-tsv " + output_on_target else ""} \
+            --on-target-tsv ~{output_on_target} \
             ~{sep=" " parquets}
     >>>
 
     output {
-        File        cohort_db             = output_db
-        File        cohort_manifest       = output_manifest
-        Array[File] cohort_on_target_tsvs = if export_on_target_tsv then [output_on_target] else []
+        File cohort_db            = output_db
+        File cohort_manifest      = output_manifest
+        File cohort_on_target_tsv = output_on_target
     }
 
     runtime {
