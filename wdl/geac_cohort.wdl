@@ -241,22 +241,15 @@ workflow GeacCohort {
     Array[File] all_sample_metrics_parquets = flatten(Collect.sample_metrics_parquets)
     Array[File] all_fragments_parquets = select_all(Fragments.fragments_parquet)
 
-    # Build manifest with original (pre-localization) BAM/BAI URIs and per-sample metadata.
-    # File→String coercion at workflow scope preserves GCS URIs; localization only happens inside tasks.
-    # write_tsv receives only the data rows; the Merge task prepends the header in bash
-    # because Cromwell cannot concatenate a static Array[Array[String]] with the
-    # WomMaybeEmptyArrayType that scatter produces for manifest_row.
-    File cohort_manifest_tsv = write_tsv(manifest_row)
-
     call Merge {
         input:
-            parquets     = flatten([Collect.locus_parquet, all_reads_parquets, all_sample_metrics_parquets, all_fragments_parquets]),
-            manifest     = cohort_manifest_tsv,
-            cohort_name  = cohort_name,
-            docker_image = docker_image,
-            memory_gb    = merge_memory_gb,
-            disk_gb      = merge_disk_gb,
-            preemptible  = preemptible,
+            parquets       = flatten([Collect.locus_parquet, all_reads_parquets, all_sample_metrics_parquets, all_fragments_parquets]),
+            manifest_rows  = manifest_row,
+            cohort_name    = cohort_name,
+            docker_image   = docker_image,
+            memory_gb      = merge_memory_gb,
+            disk_gb        = merge_disk_gb,
+            preemptible    = preemptible,
     }
 
     output {
@@ -370,15 +363,19 @@ task Collect {
 task Merge {
 
     input {
-        Array[File] parquets
-        File        manifest
-        String      cohort_name
+        Array[File]          parquets
+        Array[Array[String]] manifest_rows
+        String               cohort_name
 
         String docker_image
         Int    memory_gb
         Int    disk_gb
         Int    preemptible
     }
+
+    # write_tsv is called inside the task so it writes to the worker VM's local disk,
+    # avoiding the GCS-only filesystem restriction that applies at workflow scope.
+    File manifest_data = write_tsv(manifest_rows)
 
     String output_db        = cohort_name + ".duckdb"
     String output_manifest  = cohort_name + ".manifest.tsv"
@@ -388,7 +385,7 @@ task Merge {
         set -euo pipefail
 
         printf 'bam_path\tbai_path\tsample_id\tsubject_id\tsample_type\tbatch\tread_type\tpipeline\tlabel1\tlabel2\tlabel3\ttimepoint\n' > ~{output_manifest}
-        cat ~{manifest} >> ~{output_manifest}
+        cat ~{manifest_data} >> ~{output_manifest}
 
         touch ~{output_on_target}
 
