@@ -3,6 +3,8 @@
 Active backlog. Only unchecked, actionable items live here. For shipped work, design
 notes, and historical context, see [docs/DEVELOPMENT_LOG.md](docs/DEVELOPMENT_LOG.md).
 For high-level milestones and release themes, see [ROADMAP.md](ROADMAP.md).
+For targeted review findings that have not yet been scheduled, see
+[docs/CODE_AUDIT.md](docs/CODE_AUDIT.md).
 
 Conventions:
 - Items are grouped by area, not chronology.
@@ -21,6 +23,38 @@ Conventions:
   the Explorer to manipulate family size and dist-from-read-end sliders; verify
   `alt_count` changes as expected. Confirm include vs exclude toggle behaviour
   matches intuition.
+
+---
+
+## Sample Identity tab (Explorer)
+
+Audit findings captured 2026-06-08. The tab shipped as a DuckDB-only cohort
+analysis; these are follow-up hardening items before treating it as production
+QC.
+
+- [ ] **Add a large-cohort execution guard** — `compute_pairwise_identity()` caps
+  marker count (`max_markers`) but not sample count. The core self-join is still
+  effectively `sum(marker_sample_count^2)`, so a cohort with hundreds/thousands
+  of samples and common markers can make the first tab load very expensive before
+  the heatmap's 60-sample display guard helps. Add a hard sample/pair budget, a
+  required explicit "Run" action for large cohorts, or a more scalable pairwise
+  overlap implementation.
+- [ ] **Fix Sample Identity cache invalidation for `si_t_low`** —
+  `app/explorer/tabs/sample_identity.py` builds `_si_all_loci` from candidate
+  pairs using `p.t_low`, but `_si_cache_key` omits `p.t_low`. Changing the swap
+  Jaccard threshold can reuse stale all-loci scores, so newly relevant flagged
+  pairs may show missing `all_loci_jaccard` until another cache-keyed control
+  changes.
+- [ ] **Decide whether Sample Identity honors sidebar filters** — helper SQL
+  queries `alt_bases` directly instead of `ctx.table_expr` / `ctx.where`, so
+  batch, pipeline, subject, sample, timepoint, and other sidebar filters do not
+  affect identity analysis. Either thread the filtered table expression into the
+  helpers, or label the tab clearly as a global whole-cohort analysis.
+- [ ] **Detect conflicting `subject_id` values per sample** — `subject_map()` uses
+  `ANY_VALUE(subject_id)` grouped by `sample_id`. If merged inputs contain the
+  same sample with conflicting subjects, classification becomes arbitrary and can
+  hide the labeling problem the tab is meant to surface. Report such conflicts
+  explicitly and avoid flagging dependent pairs until they are resolved.
 
 ---
 
