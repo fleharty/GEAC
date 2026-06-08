@@ -326,6 +326,38 @@ supplied to `geac collect`).
 
 The output file must not already exist (use a new path or delete the old file first).
 
+### Sample Identity — find likely duplicate / same-individual samples
+
+`geac sample-identity` scans a merged `cohort.duckdb` for samples whose germline
+SNV fingerprints look like the same individual. It builds a common-marker panel
+from `alt_bases`, compares sample fingerprints with a dense bitset algorithm, and
+writes same-individual candidate pairs to TSV.
+
+```bash
+geac sample-identity \
+  --input  cohort.duckdb \
+  --output sample_identity_pairs.tsv
+```
+
+Useful options:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--min-depth` | 20 | Minimum total depth for a marker call |
+| `--min-vaf` | 0.15 | Minimum VAF for a germline non-reference marker |
+| `--hom-vaf` | 0.85 | VAF threshold for hom-alt genotype assignment |
+| `--min-recurrence` | 2 | Marker must be observed in at least this many samples |
+| `--max-markers` | 5000 | Maximum marker panel size |
+| `--max-samples` | 5000 | Guardrail for pairwise comparisons; set 0 to disable |
+| `--min-jaccard` | 0.70 | Jaccard threshold for reporting candidate pairs |
+| `--min-concordance` | 0.95 | Genotype concordance threshold at shared markers |
+| `--common-gnomad-only` | off | Restrict markers to common gnomAD AF when `gnomad_af` is present |
+| `--all-pairs` | off | Write every pair sharing at least one marker, not just threshold-passing pairs |
+
+Output columns include `sample_a`, `sample_b`, optional `subject_id` values,
+marker counts, shared-marker count, Jaccard, genotype concordance, and `flag`
+(`SAME_INDIVIDUAL` or `EXPECTED_MATCH` when thresholds pass).
+
 ### Annotate Normal — cross-check tumor loci against a paired normal BAM
 
 For each alt locus in the tumor Parquet, `geac annotate-normal` piles up the paired normal
@@ -564,6 +596,16 @@ Features:
     balance scatter; alt loci count vs mean base quality scatter (outlier detection); SNV
     count bar chart stacked by SBS6 substitution type; click a sample row to focus all
     other views
+  - *Sample Identity* (DuckDB only) — germline-SNP fingerprinting to detect unknown
+    duplicates, sample swaps, technical replicates, and possible cross-contamination.
+    Builds a common-SNP marker panel from `alt_bases` and computes pairwise Jaccard
+    overlap of each sample's germline-variant set (primary signal) plus genotype
+    concordance at shared sites (confirmation). When `subject_id` is populated, pairs are
+    auto-flagged `UNKNOWN_DUPLICATE` (genetically identical, different/absent subject_id)
+    or `POSSIBLE_SWAP` (same subject_id, genetically divergent). Outputs a flagged-pairs
+    table (CSV download), a pairwise similarity heatmap, and per-sample contamination
+    indicators (het-VAF dispersion + low-VAF SNV burden). Marker depth/VAF/recurrence and
+    flag thresholds are adjustable in-tab
   - *Reads* (DuckDB only, requires `--reads-output`) — family size histogram; read position
     bias (cycle number); mean base quality by cycle; read-context N burden around
     alt-supporting reads (trailing N runs, fraction N after alt, before-vs-after asymmetry,

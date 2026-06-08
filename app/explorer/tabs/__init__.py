@@ -9,6 +9,7 @@ from . import panel_of_normals
 from . import pipeline_comparison
 from . import read_type_comparison
 from . import reads
+from . import sample_identity
 from . import strand_bias
 from . import summary
 from . import tumor_normal
@@ -21,6 +22,7 @@ TAB_VAF_DISTRIBUTION = vaf_distribution
 TAB_ERROR_SPECTRUM = error_spectrum
 TAB_STRAND_BIAS = strand_bias
 TAB_COHORT = cohort
+TAB_SAMPLE_IDENTITY = sample_identity
 TAB_READS = reads
 TAB_DUPLEX_SIMPLEX = duplex_simplex
 TAB_TUMOR_NORMAL = tumor_normal
@@ -38,6 +40,7 @@ TAB_MODULES = (
     TAB_ERROR_SPECTRUM,
     TAB_STRAND_BIAS,
     TAB_COHORT,
+    TAB_SAMPLE_IDENTITY,
     TAB_READS,
     TAB_DUPLEX_SIMPLEX,
     TAB_TUMOR_NORMAL,

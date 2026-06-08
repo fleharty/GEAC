@@ -58,6 +58,31 @@ QC.
 
 ---
 
+## WDL / Terra pipeline
+
+- [ ] **`geac_cohort.wdl` Collect call-cache misses** — on Terra, the per-sample
+  `Collect` scatter shards re-run on every submission instead of call-caching,
+  even on an immediate rerun with identical inputs. Inputs come from a stable
+  data-table column (fixed gs:// paths) and docker is digest-pinned, so the
+  command/inputs *should* hash identically. Prime suspect: v0.4.38 added
+  `--bam-uri`/`--bai-uri` to the `Collect` command via `File→String` coercion
+  (`bam_uri = input_bams[i]`, `wdl/geac_cohort.wdl:210-211` and `:356-357`). The
+  intent (`docs/DEVELOPMENT_LOG.md:1001`) is that workflow-scope coercion
+  preserves the gs:// URI pre-localization; if this Cromwell version instead
+  renders a run-varying value, the command template hash changes every run.
+  - **Fast test (no API):** temporarily drop the two `--bam-uri`/`--bai-uri`
+    command lines, submit twice — if `Collect` becomes a Cache Hit, confirmed.
+  - **Fix if confirmed:** replace the `File→String` coercion with genuine
+    `Array[String] bam_uris`/`bai_uris` workflow inputs from the same data-table
+    column (stable by construction; preserves IGV path embedding). Apply the same
+    to `manifest_row` (`:155-168`), which would bust `Merge` for the same reason.
+  - **Authoritative:** diff the two runs' `callCaching.hashes` for
+    `GeacCohort.Collect` via Cromwell's `/api/workflows/v1/callcaching/diff`
+    endpoint — it names the exact differing hash key.
+  - Record the pitfall in `CHALLENGES.md` once root-caused.
+
+---
+
 ## Reads tab (Explorer)
 
 Requires `alt_reads` table. Plots already shipped are listed in

@@ -424,6 +424,82 @@ fn cohort_finds_recurrent_locus() {
     assert!(content.contains("chr1"), "cohort TSV should contain chr1");
 }
 
+// ── geac sample-identity ─────────────────────────────────────────────────────
+
+fn insert_identity_rows(
+    conn: &duckdb::Connection,
+    sample_id: &str,
+    subject_id: &str,
+    positions: &[i64],
+    vaf: f64,
+) {
+    let alt_count = (vaf * 100.0).round() as i32;
+    for pos in positions {
+        conn.execute(
+            "INSERT INTO alt_bases
+             (sample_id, subject_id, chrom, pos, ref_allele, alt_allele, variant_type, total_depth, alt_count)
+             VALUES (?, ?, 'chr1', ?, 'A', 'G', 'SNV', 100, ?)",
+            duckdb::params![sample_id, subject_id, pos, alt_count],
+        )
+        .expect("insert identity row");
+    }
+}
+
+#[test]
+fn sample_identity_reports_duplicate_pair() {
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("identity.duckdb");
+    let conn = duckdb::Connection::open(&db).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE alt_bases (
+            sample_id VARCHAR,
+            subject_id VARCHAR,
+            chrom VARCHAR,
+            pos BIGINT,
+            ref_allele VARCHAR,
+            alt_allele VARCHAR,
+            variant_type VARCHAR,
+            total_depth INTEGER,
+            alt_count INTEGER
+        );",
+    )
+    .unwrap();
+
+    let common = (1_i64..=10).collect::<Vec<_>>();
+    let duplicate_private = (101_i64..=140).collect::<Vec<_>>();
+    let mut duplicate_markers = common.clone();
+    duplicate_markers.extend(duplicate_private);
+
+    insert_identity_rows(&conn, "S1", "P1a", &duplicate_markers, 0.50);
+    insert_identity_rows(&conn, "S2", "P1b", &duplicate_markers, 0.50);
+    insert_identity_rows(&conn, "S3", "P2", &common, 0.50);
+    insert_identity_rows(&conn, "S4", "P2", &common, 0.95);
+    drop(conn);
+
+    let out = dir.path().join("identity.tsv");
+    assert_geac_success(&[
+        "sample-identity",
+        "--input",
+        db.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+    ]);
+
+    let content = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        content.contains("S1\tP1a\tS2\tP1b"),
+        "expected S1/S2 duplicate pair in output:\n{content}"
+    );
+    assert!(
+        !content.contains("S1\tP1a\tS3\tP2"),
+        "unrelated pair should not pass default thresholds:\n{content}"
+    );
+    assert!(
+        !content.contains("S3\tP2\tS4\tP2"),
+        "same-subject genotype-discordant pair should not pass default thresholds:\n{content}"
+    );
+}
+
 // ── geac annotate-normal ───────────────────────────────────────────────────────
 
 /// Basic annotate-normal: normal has 10 ref reads at the tumor alt position.

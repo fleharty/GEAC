@@ -6,7 +6,6 @@ from typing import Iterable, Optional
 
 import duckdb
 import pandas as pd
-import streamlit as st
 
 from .schema import SchemaManifest, load_schema_manifest
 
@@ -23,6 +22,8 @@ def cached_distinct_values(
     cache_key: str,
 ) -> list[str]:
     """Return cached distinct non-null values for a column."""
+    import streamlit as st  # lazy: keeps this data-access module importable without the Streamlit runtime
+
     if cache_key not in st.session_state:
         st.session_state[cache_key] = con.execute(
             f"SELECT DISTINCT {col} FROM {table_expr} WHERE {col} IS NOT NULL ORDER BY {col}"

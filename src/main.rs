@@ -24,6 +24,7 @@ mod qc;
 mod record;
 mod region;
 mod repeat;
+mod sample_identity;
 mod targets;
 mod track;
 mod variants_tsv;
@@ -174,6 +175,15 @@ fn main() -> Result<()> {
 
         Command::Cohort(args) => {
             cohort::run_cohort(&args)?;
+        }
+
+        Command::SampleIdentity(args) => {
+            info!(
+                input = %args.input.display(),
+                output = %args.output.display(),
+                "running sample identity analysis"
+            );
+            sample_identity::run_sample_identity(&args)?;
         }
 
         Command::AnnotatePon(args) => {

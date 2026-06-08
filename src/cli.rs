@@ -29,6 +29,9 @@ pub enum Command {
     /// Summarise recurrent loci across a cohort of Parquet files
     Cohort(CohortArgs),
 
+    /// Find samples in a merged cohort DuckDB that appear to be from the same individual
+    SampleIdentity(SampleIdentityArgs),
+
     /// Cross-annotate tumor alt-base loci against a paired normal BAM/CRAM
     AnnotateNormal(AnnotateNormalArgs),
 
@@ -321,6 +324,65 @@ pub struct CohortArgs {
     /// Number of top loci to print to stdout (by sample fraction, default: 20)
     #[arg(long, default_value_t = 20)]
     pub top_n: usize,
+}
+
+#[derive(Parser, Debug)]
+pub struct SampleIdentityArgs {
+    /// Merged cohort DuckDB produced by `geac merge`
+    #[arg(short, long)]
+    pub input: PathBuf,
+
+    /// Output TSV of pairwise same-individual candidates
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Minimum total_depth for an SNV call to be usable as a fingerprint marker
+    #[arg(long, default_value_t = 20)]
+    pub min_depth: i32,
+
+    /// Minimum VAF to treat an alt-base row as a germline non-reference call
+    #[arg(long, default_value_t = 0.15)]
+    pub min_vaf: f64,
+
+    /// VAF at or above this threshold is treated as homozygous-alt; lower passing calls are heterozygous
+    #[arg(long, default_value_t = 0.85)]
+    pub hom_vaf: f64,
+
+    /// Marker must be observed in at least this many samples
+    #[arg(long, default_value_t = 2)]
+    pub min_recurrence: i32,
+
+    /// Maximum number of marker loci to use, ranked by recurrence
+    #[arg(long, default_value_t = 5000)]
+    pub max_markers: i32,
+
+    /// Maximum number of samples to compare; set 0 to disable the guard
+    #[arg(long, default_value_t = 5000)]
+    pub max_samples: usize,
+
+    /// Jaccard threshold for reporting likely same-individual pairs
+    #[arg(long, default_value_t = 0.70)]
+    pub min_jaccard: f64,
+
+    /// Genotype concordance threshold at shared markers for reporting likely same-individual pairs
+    #[arg(long, default_value_t = 0.95)]
+    pub min_concordance: f64,
+
+    /// Restrict marker panel to common gnomAD alleles when gnomad_af is present
+    #[arg(long)]
+    pub common_gnomad_only: bool,
+
+    /// Lower gnomAD AF bound used with --common-gnomad-only
+    #[arg(long, default_value_t = 0.05)]
+    pub gnomad_min_af: f64,
+
+    /// Upper gnomAD AF bound used with --common-gnomad-only
+    #[arg(long, default_value_t = 0.95)]
+    pub gnomad_max_af: f64,
+
+    /// Write every pair sharing at least one marker instead of only threshold-passing pairs
+    #[arg(long)]
+    pub all_pairs: bool,
 }
 
 #[derive(Parser, Debug)]

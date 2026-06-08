@@ -217,6 +217,13 @@ MAIN_FILTER_STATE = FilterState(
         "fm_gc_smooth": 3,
         "fm_gc_columns": 4,
         "fm_samples": [],
+        # Sample Identity / Duplicates tab
+        "si_min_depth": 20,
+        "si_het_lo": 0.15,
+        "si_min_recurrence": 2,
+        "si_use_gnomad": False,
+        "si_t_high": 0.7,
+        "si_t_low": 0.3,
     },
 )
 

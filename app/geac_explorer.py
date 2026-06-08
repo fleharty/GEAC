@@ -78,6 +78,7 @@ from explorer.tabs import (
     TAB_ERROR_SPECTRUM,
     TAB_STRAND_BIAS,
     TAB_COHORT,
+    TAB_SAMPLE_IDENTITY,
     TAB_READS,
     TAB_DUPLEX_SIMPLEX,
     TAB_TUMOR_NORMAL,
@@ -1950,6 +1951,9 @@ if _active_main_tab == TAB_STRAND_BIAS.LABEL:
 
 if _active_main_tab == TAB_COHORT.LABEL:
     TAB_COHORT.render(ctx)
+
+if _active_main_tab == TAB_SAMPLE_IDENTITY.LABEL:
+    TAB_SAMPLE_IDENTITY.render(ctx)
 
 
 if _active_main_tab == TAB_READS.LABEL:

@@ -1007,3 +1007,46 @@ workflow output `cohort_manifest`.
 
 `export_on_target_tsv=true` (default false) passes `--on-target-tsv` to `geac merge`
 and exposes the result as `cohort_on_target_tsv` (`File?`, null when flag is false).
+
+---
+
+## Sample Identity / Duplicates Explorer tab (2026-06-08)
+
+**Goal.** Surface duplicate samples a cohort owner isn't already aware of —
+unknown duplicates, sample swaps, technical replicates, and cross-contamination —
+directly from a merged `cohort.duckdb`, with no extra collection pass.
+
+**Why it works without a genotyper.** `geac collect` records every non-reference
+pileup position in `alt_bases`, so germline het SNVs (VAF≈0.5) and hom-alt SNVs
+(VAF≈1.0) are present as a byproduct. The set + genotypes of an individual's
+germline SNPs is a genetic fingerprint — the same principle as somalier /
+NGSCheckMate.
+
+**Method (coverage-robust by design).** The core discriminator is the **Jaccard
+overlap of each sample's germline-variant set**, computed from *observed*
+non-reference records only. This deliberately avoids inferring hom-ref at
+unrecorded sites — `alt_bases` is sparse (a missing site could be hom-ref *or*
+uncovered), so any hom-ref imputation would be unreliable. Genotype **concordance**
+(het vs hom-alt match) at the shared sites is a second axis that confirms identity.
+Same-individual pairs score ~1.0 on both; unrelated pairs share only common SNPs
+(low Jaccard). Markers are SNVs passing depth/VAF floors and a recurrence threshold
+(seen in ≥K samples → common population SNPs), optionally restricted to common
+gnomAD AF when `gnomad_af` is present.
+
+**Flags (when `subject_id` is populated).** `UNKNOWN_DUPLICATE` = high Jaccard +
+high concordance + different/absent subject_id; `POSSIBLE_SWAP` = same subject_id
+but low Jaccard or low concordance; `EXPECTED_MATCH` = same subject_id + high
+similarity (sanity check). A flagged same-individual pair whose *all-loci* Jaccard
+(including low-VAF/somatic loci) is also near 1.0 is likely a technical replicate
+rather than two distinct biological samples — surfaced as a secondary column.
+Contamination is a clearly-labeled heuristic (het-VAF dispersion + sub-germline
+low-VAF SNV burden), not a calibrated VerifyBamID-style estimate.
+
+**Implementation.** SQL lives in `app/explorer/sample_identity_helpers.py` (takes a
+DuckDB connection, imports no Streamlit, unit-tested in
+`app/tests/test_sample_identity_helpers.py`). The tab
+`app/explorer/tabs/sample_identity.py` caches the O(S²·M) pairwise self-join in
+`st.session_state` keyed on the control values (per the CHALLENGES.md note on
+uncached tab-body queries) and caps the marker panel size; the heatmap is omitted
+above 60 marker-sharing samples for legibility. No Rust/schema change — all columns
+used already exist.
