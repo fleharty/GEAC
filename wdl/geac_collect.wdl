@@ -142,6 +142,7 @@ workflow GeacCollect {
             # original URI here, so geac stores the cloud path rather than the
             # ephemeral local path.
             bam_uri               = input_bam,
+            bai_uri               = input_bam_index,
             variants_uri          = if defined(vcf) then vcf else variants_tsv,
             gnomad_uri            = gnomad,
             docker_image          = docker_image,
@@ -198,6 +199,7 @@ task Collect {
         Int     threads
 
         String? bam_uri
+        String? bai_uri
         String? variants_uri
         String? gnomad_uri
 
@@ -247,6 +249,7 @@ task Collect {
             ~{if input_checksum_sha256 then "--input-checksum-sha256" else ""} \
             ~{if reads_output then "--reads-output" else ""} \
             ~{"--bam-uri "      + bam_uri} \
+            ~{"--bai-uri "      + bai_uri} \
             ~{"--variants-uri " + variants_uri} \
             ~{"--gnomad-uri "   + gnomad_uri}
     >>>

@@ -40,6 +40,7 @@ pub(super) struct LocusContext {
     timepoint: Option<String>,
     input_checksum_sha256: Option<String>,
     bam_path: Option<String>,
+    bai_path: Option<String>,
     variants_path: Option<String>,
     gnomad_path: Option<String>,
     on_target: Option<bool>,
@@ -97,6 +98,7 @@ impl LocusContext {
                     .clone()
                     .unwrap_or_else(|| abs_path(&args.input)),
             ),
+            bai_path: args.bai_uri.clone(),
             variants_path: args.variants_uri.clone().or_else(|| {
                 args.vcf
                     .as_ref()
@@ -178,6 +180,7 @@ impl LocusContext {
             timepoint: self.timepoint.clone(),
             input_checksum_sha256: self.input_checksum_sha256.clone(),
             bam_path: self.bam_path.clone(),
+            bai_path: self.bai_path.clone(),
             variants_path: self.variants_path.clone(),
             gnomad_path: self.gnomad_path.clone(),
             variant_called,

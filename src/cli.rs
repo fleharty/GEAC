@@ -261,6 +261,11 @@ pub struct CollectArgs {
     #[arg(long)]
     pub bam_uri: Option<String>,
 
+    /// Canonical URI for the BAM/CRAM index (e.g. gs://bucket/sample.bam.bai).
+    /// When set, stored in output Parquet alongside bam_path for IGV session generation.
+    #[arg(long)]
+    pub bai_uri: Option<String>,
+
     /// Canonical URI for the variants file (VCF or TSV) passed via --vcf/--variants-tsv.
     /// When set, stored in output Parquet instead of the local file path.
     #[arg(long)]

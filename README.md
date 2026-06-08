@@ -95,6 +95,8 @@ Optional flags:
 | `--region` | whole genome | Restrict to a region string (`chr1:1-1000000`) **or** a BED/Picard interval list file path; when a file is given, the pileup runs over each interval in the file |
 | `--progress-interval` | 30 | Seconds between progress reports to stderr |
 | `--reads-output` | off | Also write per-read detail Parquet (see below) |
+| `--bam-uri` | — | Canonical URI for the input BAM/CRAM (e.g. `gs://bucket/sample.bam`). Stored as `bam_path` instead of the local path. Set automatically by the WDL workflows. |
+| `--bai-uri` | — | Canonical URI for the BAM/CRAM index (e.g. `gs://bucket/sample.bam.bai`). Stored as `bai_path` for IGV session generation. Set automatically by the WDL workflows. |
 
 #### Per-read detail output (`--reads-output`)
 
@@ -666,10 +668,13 @@ Features:
   reflect the full pileup. Per-read filters are best used as an exploratory tool:
   do variants hold up under quality thresholds?
 
-- **IGV integration** — provide a manifest TSV (`sample_id`, `bam_path`) in the sidebar
-  to enable "Download IGV session" buttons throughout the app. Downloads a zip containing
-  `session.xml` (BAM tracks + BED track) and `positions.bed` (one row per unique locus).
-  Sessions are capped at 5 samples by default with an override option.
+- **IGV integration** — BAM and index paths are automatically read from the DuckDB when
+  `geac collect` was run with `--bam-uri`/`--bai-uri` (set automatically by the WDL
+  workflows). A manifest TSV (`sample_id`, `bam_path`, `bai_path`) can be provided in the
+  sidebar to override or supplement embedded paths. Enables "Download IGV session" buttons
+  throughout the app; downloads a zip containing `session.xml` (BAM tracks + BED track)
+  and `positions.bed` (one row per unique locus). Sessions are capped at 5 samples by
+  default with an override option.
 
 ### Coverage Explorer (`geac-coverage-explorer`)
 

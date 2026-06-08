@@ -255,7 +255,7 @@ _has_sample_metrics = data_source.has_optional_table("sample_metrics")
 _has_fragments = data_source.has_optional_table("fragments")
 
 # Extract per-sample resource paths and cohort-level gnomAD path embedded in the DuckDB.
-# These are populated by `geac collect` when the new bam_path/gnomad_path columns are present.
+# These are populated by `geac collect` when bam_path/bai_path/gnomad_path columns are present.
 # Falls back gracefully to empty results for Parquet sources or older DuckDB files.
 _db_resources = data_source.sample_resources()
 _db_gnomad_paths = data_source.embedded_gnomad_paths()

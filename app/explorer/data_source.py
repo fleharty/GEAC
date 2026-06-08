@@ -293,7 +293,7 @@ class DataSource:
         """Return a manifest-compatible dict built from paths embedded in the DuckDB samples table.
 
         Keys and values match the format returned by load_manifest() in geac_explorer.py:
-            sample_id -> {"bam": str | None, "bai": None, "variants_tsv": str | None}
+            sample_id -> {"bam": str | None, "bai": str | None, "variants_tsv": str | None}
 
         Returns an empty dict for Parquet sources or older DuckDB files that pre-date the
         bam_path/variants_path columns (gracefully degrades).
@@ -309,10 +309,16 @@ class DataSource:
             if "bam_path" not in samples_cols:
                 return {}
             select_parts = ["sample_id", "ANY_VALUE(bam_path) AS bam_path"]
-            if "variants_path" in samples_cols:
-                select_parts.append("ANY_VALUE(variants_path) AS variants_path")
-            else:
-                select_parts.append("NULL AS variants_path")
+            select_parts.append(
+                "ANY_VALUE(bai_path) AS bai_path"
+                if "bai_path" in samples_cols
+                else "NULL AS bai_path"
+            )
+            select_parts.append(
+                "ANY_VALUE(variants_path) AS variants_path"
+                if "variants_path" in samples_cols
+                else "NULL AS variants_path"
+            )
             rows = self.con.execute(
                 f"SELECT {', '.join(select_parts)} FROM samples GROUP BY sample_id"
             ).fetchall()
@@ -322,9 +328,10 @@ class DataSource:
         for row in rows:
             sid = row[0]
             bam = row[1] if row[1] else None
-            variants = row[2] if row[2] else None
+            bai = row[2] if row[2] else None
+            variants = row[3] if row[3] else None
             if bam is not None:
-                result[sid] = {"bam": bam, "bai": None, "variants_tsv": variants}
+                result[sid] = {"bam": bam, "bai": bai, "variants_tsv": variants}
         return result
 
     def embedded_gnomad_paths(self) -> list:

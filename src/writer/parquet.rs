@@ -80,6 +80,7 @@ fn alt_base_schema() -> Arc<Schema> {
         Field::new("mean_delta_n_frac", DataType::Float32, true),
         Field::new("frac_reads_asymmetric", DataType::Float32, true),
         Field::new("bam_path", DataType::Utf8, true),
+        Field::new("bai_path", DataType::Utf8, true),
         Field::new("variants_path", DataType::Utf8, true),
         Field::new("gnomad_path", DataType::Utf8, true),
     ]))
@@ -270,6 +271,12 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
             .map(|r| r.bam_path.as_deref())
             .collect::<Vec<_>>(),
     ));
+    let bai_path: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.bai_path.as_deref())
+            .collect::<Vec<_>>(),
+    ));
     let variants_path: ArrayRef = Arc::new(StringArray::from(
         records
             .iter()
@@ -330,6 +337,7 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
             mean_delta_n_frac,
             frac_reads_asymmetric,
             bam_path,
+            bai_path,
             variants_path,
             gnomad_path,
         ],

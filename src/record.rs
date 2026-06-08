@@ -163,6 +163,8 @@ pub struct AltBase {
     // original cloud URIs instead of the localized local paths.
     /// Path or URI of the input BAM/CRAM file used to generate this record.
     pub bam_path: Option<String>,
+    /// Path or URI of the BAM/CRAM index file.
+    pub bai_path: Option<String>,
     /// Path or URI of the variants file (VCF or TSV) used for annotation, if any.
     pub variants_path: Option<String>,
     /// Path or URI of the gnomAD VCF used for allele-frequency annotation, if any.
