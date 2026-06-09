@@ -15,6 +15,7 @@ mod lookup_kmer;
 mod scan_read;
 mod gene_annotations;
 mod gnomad;
+mod inspect;
 mod kmer;
 mod merge;
 mod normal;
@@ -167,6 +168,10 @@ fn main() -> Result<()> {
 
         Command::Merge(args) => {
             merge::merge(&args)?;
+        }
+
+        Command::Inspect(args) => {
+            inspect::run_inspect(&args)?;
         }
 
         Command::Qc(args) => {

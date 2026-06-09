@@ -7,6 +7,7 @@ import json
 import streamlit.components.v1 as components
 from coverage_profile import (
     profile_position_count,
+    profile_bin_count,
     load_expanded_depth_profile,
     load_expanded_sample_profile,
 )
@@ -772,8 +773,8 @@ with tab_profile:
     st.caption(
         "Aggregate depth across a gene or genomic region across all selected samples. "
         "The band shows the min–max range; the shaded area shows the IQR (p25–p75); "
-        "the line shows the mean. Mixed 1 bp and wider coverage bins are expanded back "
-        "to genomic base positions for this view."
+        "the line shows the mean. Mixed 1 bp and wider coverage bins are plotted at "
+        "their bin-start positions, with wider bins weighted by genomic width."
     )
 
     _prof_mode = "gene" if _has_gene else "region"
@@ -881,16 +882,22 @@ with tab_profile:
 
     _prof_where = ("WHERE " + " AND ".join(_prof_clauses)) if _prof_clauses else ""
 
-    _prof_n_pos = profile_position_count(con, table_expr, _prof_where)
+    _prof_span = profile_position_count(con, table_expr, _prof_where)
+    _prof_n_bins = profile_bin_count(con, table_expr, _prof_where)
 
-    if _prof_n_pos == 0:
+    if _prof_n_bins == 0:
         st.info("No data for the selected region/gene.")
-    elif _prof_n_pos > 50_000:
+    elif _prof_n_bins > 50_000:
         st.warning(
-            f"This region spans {_prof_n_pos:,} genomic positions. "
+            f"This profile would render {_prof_n_bins:,} plotted bins "
+            f"across {_prof_span:,} genomic positions. "
             "Consider using a smaller region or re-running `geac coverage` with a larger `--bin-size`."
         )
     else:
+        if _prof_span > 50_000:
+            st.caption(
+                f"Selected span: {_prof_span:,} genomic positions; plotted bins: {_prof_n_bins:,}."
+            )
         _prof_df = load_expanded_depth_profile(con, table_expr, _prof_where)
 
         _show_samples = st.checkbox(

@@ -83,6 +83,7 @@ fn alt_base_schema() -> Arc<Schema> {
         Field::new("bai_path", DataType::Utf8, true),
         Field::new("variants_path", DataType::Utf8, true),
         Field::new("gnomad_path", DataType::Utf8, true),
+        Field::new("targets_path", DataType::Utf8, true),
     ]))
 }
 
@@ -289,6 +290,12 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
             .map(|r| r.gnomad_path.as_deref())
             .collect::<Vec<_>>(),
     ));
+    let targets_path: ArrayRef = Arc::new(StringArray::from(
+        records
+            .iter()
+            .map(|r| r.targets_path.as_deref())
+            .collect::<Vec<_>>(),
+    ));
 
     RecordBatch::try_new(
         schema,
@@ -340,6 +347,7 @@ fn records_to_batch(records: &[AltBase], schema: Arc<Schema>) -> Result<RecordBa
             bai_path,
             variants_path,
             gnomad_path,
+            targets_path,
         ],
     )
     .context("failed to create Arrow record batch")

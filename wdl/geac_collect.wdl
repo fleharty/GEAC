@@ -9,6 +9,8 @@ version 1.0
 ## Inputs:
 ##   input_bam            - BAM or CRAM file
 ##   input_bam_index      - Corresponding .bai / .crai index
+##   bam_uri              - (optional) canonical BAM/CRAM URI stored in output metadata for IGV
+##   bai_uri              - (optional) canonical index URI stored in output metadata for IGV
 ##   reference_fasta      - Reference FASTA
 ##   reference_fasta_index - Corresponding .fai index
 ##   read_type            - duplex | simplex | raw
@@ -27,8 +29,10 @@ version 1.0
 ##                          Alternative to vcf; mutually exclusive.
 ##   gnomad               - (optional) bgzip+tabix-indexed gnomAD VCF/BCF for AF annotation
 ##   gnomad_index         - (optional) Corresponding .tbi / .csi index
+##   gnomad_uri           - (optional) canonical gnomAD URI stored in output metadata for IGV
 ##   gnomad_af_field      - INFO field to use as allele frequency (default "AF")
 ##   targets              - (optional) BED or Picard interval list; annotates on_target column
+##   targets_uri          - (optional) canonical target-interval URI stored in output metadata for IGV
 ##   gene_annotations     - (optional) GFF3, GTF, or UCSC genePred; annotates gene column
 ##   region               - (optional) restrict to a region string, e.g. chr1:1-1000000
 ##   region_bed           - (optional) BED or Picard interval list; restricts pileup to those intervals
@@ -77,6 +81,11 @@ workflow GeacCollect {
         File?   variants_tsv
         File?   gnomad
         File?   gnomad_index
+        String? bam_uri
+        String? bai_uri
+        String? variants_uri
+        String? gnomad_uri
+        String? targets_uri
         String  gnomad_af_field = "AF"
         File?   targets
         File?   gene_annotations
@@ -136,15 +145,11 @@ workflow GeacCollect {
             reads_output          = reads_output,
             input_checksum_sha256 = input_checksum_sha256,
             threads               = threads,
-            # Derive cloud URIs from the File inputs via File→String coercion.
-            # On Terra the workflow-level File value is the original gs:// URI;
-            # the task receives the localized path via the File parameter and the
-            # original URI here, so geac stores the cloud path rather than the
-            # ephemeral local path.
-            bam_uri               = input_bam,
-            bai_uri               = input_bam_index,
-            variants_uri          = if defined(vcf) then vcf else variants_tsv,
-            gnomad_uri            = gnomad,
+            bam_uri               = if defined(bam_uri) then select_first([bam_uri]) else input_bam,
+            bai_uri               = if defined(bai_uri) then select_first([bai_uri]) else input_bam_index,
+            variants_uri          = if defined(variants_uri) then variants_uri else if defined(vcf) then vcf else variants_tsv,
+            gnomad_uri            = if defined(gnomad_uri) then gnomad_uri else gnomad,
+            targets_uri           = if defined(targets_uri) then targets_uri else targets,
             docker_image          = docker_image,
             memory_gb             = memory_gb,
             disk_gb               = disk_gb,
@@ -202,6 +207,7 @@ task Collect {
         String? bai_uri
         String? variants_uri
         String? gnomad_uri
+        String? targets_uri
 
         String docker_image
         Int    memory_gb
@@ -251,7 +257,8 @@ task Collect {
             ~{"--bam-uri "      + bam_uri} \
             ~{"--bai-uri "      + bai_uri} \
             ~{"--variants-uri " + variants_uri} \
-            ~{"--gnomad-uri "   + gnomad_uri}
+            ~{"--gnomad-uri "   + gnomad_uri} \
+            ~{"--targets-uri "  + targets_uri}
     >>>
 
     output {

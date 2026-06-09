@@ -10,6 +10,7 @@ import duckdb
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from coverage_profile import (
     profile_position_count,
+    profile_bin_count,
     load_expanded_depth_profile,
     load_expanded_sample_profile,
 )
@@ -57,6 +58,7 @@ def test_depth_profile_bin_weighted_aggregation():
 
     # Genomic span: MAX(end=300) - MIN(pos=100) = 200
     assert profile_position_count(con, "coverage", "") == 200
+    assert profile_bin_count(con, "coverage", "") == 2
 
     profile = load_expanded_depth_profile(con, "coverage", "")
     assert profile["pos"].tolist() == [100, 200]
@@ -71,3 +73,36 @@ def test_depth_profile_bin_weighted_aggregation():
         "sample_a", "sample_b", "sample_a", "sample_b"
     ]
     assert sample_profile["depth"].tolist() == [40.0, 10.0, 20.0, 40.0]
+
+
+def test_profile_bin_count_tracks_rendered_positions_not_genomic_span():
+    con = duckdb.connect()
+    con.execute(
+        """
+        CREATE TABLE coverage (
+            sample_id VARCHAR,
+            pos BIGINT,
+            "end" BIGINT,
+            total_depth INTEGER,
+            mean_mapq DOUBLE,
+            frac_mapq0 DOUBLE,
+            frac_low_mapq DOUBLE,
+            gc_content DOUBLE
+        )
+        """
+    )
+    con.executemany(
+        """
+        INSERT INTO coverage
+            (sample_id, pos, "end", total_depth, mean_mapq, frac_mapq0, frac_low_mapq, gc_content)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("sample_a", 100, 110, 40, 60, 0.0, 0.0, 0.40),
+            ("sample_a", 1_000_000, 1_000_010, 20, 58, 0.0, 0.0, 0.30),
+        ],
+    )
+
+    assert profile_position_count(con, "coverage", "") == 999_910
+    assert profile_bin_count(con, "coverage", "") == 2
+    assert profile_bin_count(con, "coverage", "WHERE pos > 2000000") == 0

@@ -337,6 +337,8 @@ fn merge_produces_duckdb_with_both_samples() {
         input_rows, 2,
         "expected one geac_inputs row per merged parquet"
     );
+
+    assert_geac_success(&["inspect", "--input", db.to_str().unwrap()]);
 }
 
 // ── geac qc ───────────────────────────────────────────────────────────────────

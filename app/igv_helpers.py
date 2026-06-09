@@ -191,29 +191,31 @@ def gs_to_signed_url(gs_uri: str, expiry_minutes: int = 60) -> str:
 def load_manifest(path: str) -> dict:
     """Load a manifest TSV and return a dict keyed by sample_id.
 
-    Expected columns: collaborator_sample_id, duplex_output_bam,
-    duplex_output_bam_index (optional), final_annotated_variants (optional).
+    Expected columns: sample_id/bam_path or collaborator_sample_id/duplex_output_bam.
+    Optional columns: bai_path/duplex_output_bam_index, variants_path/final_annotated_variants.
 
     The returned dict maps sample_id → {"bam": str, "bai": str|None, "variants_tsv": str|None}.
     """
     import pandas as pd
 
+    def first_attr(row, names: list[str]) -> str | None:
+        for name in names:
+            if hasattr(row, name):
+                val = getattr(row, name)
+                if pd.notna(val) and str(val).strip():
+                    return str(val)
+        return None
+
     mdf = pd.read_csv(path.strip(), sep="\t")
     result = {}
     for row in mdf.itertuples(index=False):
-        bai = (
-            str(row.duplex_output_bam_index)
-            if hasattr(row, "duplex_output_bam_index") and pd.notna(row.duplex_output_bam_index)
-            else None
-        )
-        variants = (
-            str(row.final_annotated_variants)
-            if hasattr(row, "final_annotated_variants") and pd.notna(row.final_annotated_variants)
-            else None
-        )
-        result[str(row.collaborator_sample_id)] = {
-            "bam": str(row.duplex_output_bam),
-            "bai": bai,
-            "variants_tsv": variants,
+        sid = first_attr(row, ["sample_id", "collaborator_sample_id"])
+        bam = first_attr(row, ["bam_path", "duplex_output_bam"])
+        if not sid or not bam:
+            continue
+        result[sid] = {
+            "bam": bam,
+            "bai": first_attr(row, ["bai_path", "duplex_output_bam_index"]),
+            "variants_tsv": first_attr(row, ["variants_path", "final_annotated_variants"]),
         }
     return result

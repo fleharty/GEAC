@@ -93,9 +93,10 @@ as `gs://`, `http://`, and `https://` are preserved.
 ## IGV Manifest
 
 ```tsv
-sample_id	bam_path	bai_path
-SAMPLE_001	gs://bucket/SAMPLE_001.bam	gs://bucket/SAMPLE_001.bam.bai
+sample_id	bam_path	bai_path	gnomad_path	targets_path
+SAMPLE_001	gs://bucket/SAMPLE_001.bam	gs://bucket/SAMPLE_001.bam.bai	gs://bucket/gnomad.vcf.gz	gs://bucket/panel.bed
 SAMPLE_002	/local/SAMPLE_002.bam	/local/SAMPLE_002.bam.bai
 ```
 
 `bai_path` is optional; if it is blank, IGV attempts to infer the index path.
+`gnomad_path` and `targets_path` are optional shared resource columns.

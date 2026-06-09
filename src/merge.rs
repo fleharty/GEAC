@@ -643,7 +643,13 @@ fn rebuild_samples_summary(conn: &Connection) -> Result<()> {
         .into_iter()
         .collect();
 
-    let resource_cols = ["bam_path", "bai_path", "variants_path", "gnomad_path"];
+    let resource_cols = [
+        "bam_path",
+        "bai_path",
+        "variants_path",
+        "gnomad_path",
+        "targets_path",
+    ];
     let resource_selects: String = resource_cols
         .iter()
         .map(|col| {

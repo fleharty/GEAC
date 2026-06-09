@@ -335,11 +335,11 @@ class DataSource:
                 result[sid] = {"bam": bam, "bai": bai, "variants_tsv": variants}
         return result
 
-    def embedded_gnomad_paths(self) -> list:
-        """Return distinct non-null gnomad_path values from the samples table.
+    def _embedded_sample_paths(self, column: str) -> list:
+        """Return distinct non-null resource paths from the samples table.
 
-        Returns an empty list for Parquet sources, older DuckDB files, or when no
-        gnomad_path was stored.
+        Returns an empty list for Parquet sources, older DuckDB files, or when the
+        requested resource column was not stored.
         """
         if not self.is_duckdb or "samples" not in self.available_tables:
             return []
@@ -349,12 +349,20 @@ class DataSource:
                 .df()["column_name"]
                 .tolist()
             )
-            if "gnomad_path" not in samples_cols:
+            if column not in samples_cols:
                 return []
             rows = self.con.execute(
-                "SELECT DISTINCT gnomad_path FROM samples "
-                "WHERE gnomad_path IS NOT NULL ORDER BY gnomad_path"
+                f"SELECT DISTINCT {column} FROM samples "
+                f"WHERE {column} IS NOT NULL ORDER BY {column}"
             ).fetchall()
             return [row[0] for row in rows]
         except Exception:
             return []
+
+    def embedded_gnomad_paths(self) -> list:
+        """Return distinct non-null gnomad_path values from the samples table."""
+        return self._embedded_sample_paths("gnomad_path")
+
+    def embedded_target_paths(self) -> list:
+        """Return distinct non-null targets_path values from the samples table."""
+        return self._embedded_sample_paths("targets_path")

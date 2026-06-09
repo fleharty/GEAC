@@ -23,6 +23,9 @@ pub enum Command {
     /// Merge per-sample Parquet files or existing DuckDB databases into a cohort DuckDB
     Merge(MergeArgs),
 
+    /// Inspect a merged cohort DuckDB for schema, metadata, and resource-path issues
+    Inspect(InspectArgs),
+
     /// Print a per-sample QC summary from one or more Parquet files
     Qc(QcArgs),
 
@@ -279,6 +282,11 @@ pub struct CollectArgs {
     #[arg(long)]
     pub gnomad_uri: Option<String>,
 
+    /// Canonical URI for the target BED / interval list passed via --targets.
+    /// When set, stored in output Parquet instead of the local file path.
+    #[arg(long)]
+    pub targets_uri: Option<String>,
+
     /// Progress reporting interval in seconds (0 to disable)
     #[arg(long, default_value_t = 30)]
     pub progress_interval: u64,
@@ -404,6 +412,17 @@ pub struct MergeArgs {
     /// no on_target column (i.e. no --targets BED was supplied to geac collect).
     #[arg(long)]
     pub on_target_tsv: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct InspectArgs {
+    /// Merged cohort DuckDB produced by `geac merge`
+    #[arg(short, long)]
+    pub input: PathBuf,
+
+    /// Exit non-zero when warnings are found, not only on structural errors
+    #[arg(long)]
+    pub strict: bool,
 }
 
 #[derive(Parser, Debug)]

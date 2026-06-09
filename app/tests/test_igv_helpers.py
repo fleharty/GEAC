@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from igv_helpers import make_vcf, query_distinct_samples, resolve_index_uri
+from igv_helpers import make_vcf, query_distinct_samples, resolve_index_uri, load_manifest
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -119,6 +119,26 @@ class TestResolveIndexUri:
     def test_infers_absolute_variant_index_when_track_path_is_absolute(self, tmp_path):
         track = str((tmp_path / "refs" / "gnomad.vcf.gz").resolve())
         assert resolve_index_uri(track, None) == track + ".tbi"
+
+
+class TestLoadManifest:
+
+    def test_accepts_cohort_manifest_column_names(self, tmp_path):
+        manifest = tmp_path / "cohort.manifest.tsv"
+        manifest.write_text(
+            "sample_id\tbam_path\tbai_path\tvariants_path\tgnomad_path\ttargets_path\n"
+            "S1\tgs://bucket/S1.bam\tgs://bucket/S1.bam.bai\tgs://bucket/S1.vcf.gz\tgs://bucket/gnomad.vcf.gz\tgs://bucket/panel.bed\n"
+        )
+
+        result = load_manifest(str(manifest))
+
+        assert result == {
+            "S1": {
+                "bam": "gs://bucket/S1.bam",
+                "bai": "gs://bucket/S1.bam.bai",
+                "variants_tsv": "gs://bucket/S1.vcf.gz",
+            }
+        }
 
 
 _MISSING = "./.:.:.:."

@@ -27,6 +27,18 @@ def profile_position_count(
     return int(result) if result else 0
 
 
+def profile_bin_count(
+    con: duckdb.DuckDBPyConnection,
+    table_expr: str,
+    where_clause: str,
+) -> int:
+    """Return the number of distinct plotted bin starts in the queried records."""
+    result = con.execute(
+        f"SELECT COUNT(DISTINCT pos) FROM {table_expr} {where_clause}"
+    ).fetchone()[0]
+    return int(result) if result else 0
+
+
 def load_expanded_depth_profile(
     con: duckdb.DuckDBPyConnection,
     table_expr: str,

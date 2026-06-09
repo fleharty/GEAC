@@ -1165,3 +1165,30 @@ BCR-before-ABL1 specifically so a regression to per-output ordering fails.
 files, derive its label once from one canonical ordering — don't re-derive it
 per-output. And never let `HashMap` iteration order leak into output: sort with an
 explicit tie-break.
+
+---
+
+### Terra WDL embedded localized resource paths instead of `gs://` paths
+
+**Symptom:** A `cohort.duckdb` produced by `geac_cohort.wdl` could not load IGV
+tracks without an external manifest. The embedded `bam_path` / `bai_path` values
+came from Cromwell-localized worker paths rather than the original `gs://` URIs.
+
+**Root cause:** `geac_cohort.wdl` passed `--bam-uri` / `--bai-uri` by coercing
+`Array[File] input_bams` / `input_bam_indices` to strings, and also used the same
+File values in the generated `cohort_manifest`. We assumed workflow-scope
+File-to-String coercion would preserve the original cloud URI. On the observed
+Terra/Cromwell setup, the value rendered as a localized path.
+
+**Fix:** Add explicit string URI inputs: `Array[String]? bam_uris` /
+`bai_uris` in `geac_cohort.wdl`, `String? bam_uri` / `bai_uri` in
+`geac_collect.wdl`, and shared `gnomad_uri` / `targets_uri` inputs for cohort-level
+resources. Use those string inputs for GEAC metadata and manifests while keeping
+the `File` inputs for compute localization. If the string inputs are not provided,
+the workflows fall back to the previous File coercion behavior for backward
+compatibility.
+
+**Lesson:** Do not rely on WDL `File→String` coercion for durable provenance or
+browser-facing resource URIs. Keep compute inputs (`File`) and canonical metadata
+URIs (`String`) as separate workflow inputs when the original URI matters after
+the task finishes.

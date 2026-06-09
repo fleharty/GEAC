@@ -8,6 +8,7 @@ authoritative flag list for your installed binary.
 ```text
 collect          Process one BAM/CRAM into alt-base Parquet records
 merge            Merge Parquet files or DuckDB databases into one cohort DuckDB
+inspect          Check a merged cohort DuckDB for schema, metadata, and resource issues
 qc               Print per-sample QC summaries from Parquet files
 cohort           Summarize recurrent loci across per-sample Parquet files
 sample-identity  Find samples in a merged cohort that look like the same individual
@@ -50,6 +51,7 @@ Important options:
 | `--gnomad` | none | bgzip+tabix gnomAD VCF/BCF for AF annotation |
 | `--gnomad-af-field` | `AF` | gnomAD INFO field to read |
 | `--targets` | none | BED or Picard interval list for target annotation and sample metrics |
+| `--targets-uri` | none | Canonical target path or URI to store in output metadata |
 | `--gene-annotations` | none | GFF3, GTF, or UCSC genePred gene annotations |
 | `--min-base-qual` | `1` | Minimum base quality |
 | `--min-map-qual` | `0` | Minimum mapping quality |
@@ -99,6 +101,23 @@ Useful option:
 | Flag | Description |
 |---|---|
 | `--on-target-tsv <PATH>` | Write a TSV of `on_target = true` alt-base calls |
+
+## `geac inspect`
+
+Checks a merged cohort DuckDB for common operational issues: missing provenance
+tables, missing required `alt_bases` columns, empty core tables, optional feature
+tables, conflicting sample metadata, missing embedded BAM/BAI/resource columns, and
+local/non-URI resource paths that may not work in cloud or IGV contexts.
+
+```bash
+geac inspect --input cohort.duckdb
+```
+
+Useful option:
+
+| Flag | Description |
+|---|---|
+| `--strict` | Exit non-zero when warnings are found, not only errors |
 
 ## `geac sample-identity`
 

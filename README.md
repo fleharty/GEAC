@@ -10,6 +10,7 @@ The stable CLI includes:
 ```text
 collect          Process one BAM/CRAM into alt-base Parquet records
 merge            Merge Parquet files or DuckDB databases into one cohort DuckDB
+inspect          Check a merged cohort DuckDB for schema, metadata, and resource issues
 qc               Print per-sample QC summaries
 cohort           Summarize recurrent loci across samples
 sample-identity  Find likely duplicate / same-individual samples

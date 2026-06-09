@@ -249,12 +249,14 @@ _has_pon_evidence = data_source.has_optional_table("pon_evidence")
 _has_sample_metrics = data_source.has_optional_table("sample_metrics")
 _has_fragments = data_source.has_optional_table("fragments")
 
-# Extract per-sample resource paths and cohort-level gnomAD path embedded in the DuckDB.
-# These are populated by `geac collect` when bam_path/bai_path/gnomad_path columns are present.
+# Extract resource paths embedded in the DuckDB. These are populated by
+# `geac collect` when bam_path/bai_path/gnomad_path/targets_path columns are present.
 # Falls back gracefully to empty results for Parquet sources or older DuckDB files.
 _db_resources = data_source.sample_resources()
 _db_gnomad_paths = data_source.embedded_gnomad_paths()
 _embedded_gnomad = _db_gnomad_paths[0] if len(_db_gnomad_paths) == 1 else ""
+_db_target_paths = data_source.embedded_target_paths()
+_embedded_targets = _db_target_paths[0] if len(_db_target_paths) == 1 else ""
 if "_alt_reads_cols_cached" not in st.session_state:
     st.session_state["_alt_reads_cols_cached"] = (
         set(con.execute("SELECT * FROM alt_reads LIMIT 0").df().columns)
@@ -932,9 +934,14 @@ manifest_path = st.sidebar.text_input(
 )
 target_regions = st.sidebar.text_input(
     "Target regions (optional)",
-    value=_cfg.get("target_regions", ""),
+    value=_cfg.get("target_regions") or _embedded_targets,
     help="Path to a BED or interval list file. When set, it is added as a track in every IGV session.",
 )
+if len(_db_target_paths) > 1:
+    st.sidebar.warning(
+        "Multiple target-region paths found in database; set 'Target regions' explicitly or via geac.toml.",
+        icon="⚠️",
+    )
 if _has_data("gnomad_af"):
     if len(_db_gnomad_paths) > 1:
         st.sidebar.warning(
@@ -1009,14 +1016,25 @@ def load_manifest(p: str) -> dict:
             return _os.path.normpath(_os.path.join(manifest_dir, val))
         return val
 
+    def _first_attr(row, names: list[str]) -> str | None:
+        for name in names:
+            if hasattr(row, name):
+                val = getattr(row, name)
+                if pd.notna(val) and str(val).strip():
+                    return str(val)
+        return None
+
     mdf = pd.read_csv(p.strip(), sep="\t")
     _has_pipeline_col = "pipeline" in mdf.columns
     result = {}
     for row in mdf.itertuples(index=False):
-        bai = str(row.duplex_output_bam_index) if hasattr(row, "duplex_output_bam_index") and pd.notna(row.duplex_output_bam_index) else None
-        variants = str(row.final_annotated_variants) if hasattr(row, "final_annotated_variants") and pd.notna(row.final_annotated_variants) else None
-        entry = {"bam": _abs(str(row.duplex_output_bam)), "bai": _abs(bai), "variants_tsv": variants}
-        sid = str(row.collaborator_sample_id)
+        sid = _first_attr(row, ["sample_id", "collaborator_sample_id"])
+        bam = _first_attr(row, ["bam_path", "duplex_output_bam"])
+        if not sid or not bam:
+            continue
+        bai = _first_attr(row, ["bai_path", "duplex_output_bam_index"])
+        variants = _first_attr(row, ["variants_path", "final_annotated_variants"])
+        entry = {"bam": _abs(bam), "bai": _abs(bai), "variants_tsv": _abs(variants)}
         if _has_pipeline_col and pd.notna(row.pipeline) and str(row.pipeline).strip():
             result[(sid, str(row.pipeline).strip())] = entry
         else:

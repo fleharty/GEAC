@@ -60,26 +60,14 @@ QC.
 
 ## WDL / Terra pipeline
 
-- [ ] **`geac_cohort.wdl` Collect call-cache misses** — on Terra, the per-sample
-  `Collect` scatter shards re-run on every submission instead of call-caching,
-  even on an immediate rerun with identical inputs. Inputs come from a stable
-  data-table column (fixed gs:// paths) and docker is digest-pinned, so the
-  command/inputs *should* hash identically. Prime suspect: v0.4.38 added
-  `--bam-uri`/`--bai-uri` to the `Collect` command via `File→String` coercion
-  (`bam_uri = input_bams[i]`, `wdl/geac_cohort.wdl:210-211` and `:356-357`). The
-  intent (`docs/DEVELOPMENT_LOG.md:1001`) is that workflow-scope coercion
-  preserves the gs:// URI pre-localization; if this Cromwell version instead
-  renders a run-varying value, the command template hash changes every run.
-  - **Fast test (no API):** temporarily drop the two `--bam-uri`/`--bai-uri`
-    command lines, submit twice — if `Collect` becomes a Cache Hit, confirmed.
-  - **Fix if confirmed:** replace the `File→String` coercion with genuine
-    `Array[String] bam_uris`/`bai_uris` workflow inputs from the same data-table
-    column (stable by construction; preserves IGV path embedding). Apply the same
-    to `manifest_row` (`:155-168`), which would bust `Merge` for the same reason.
-  - **Authoritative:** diff the two runs' `callCaching.hashes` for
-    `GeacCohort.Collect` via Cromwell's `/api/workflows/v1/callcaching/diff`
-    endpoint — it names the exact differing hash key.
-  - Record the pitfall in `CHALLENGES.md` once root-caused.
+- [ ] **Verify Terra call-caching after explicit resource URI inputs** — WDL now
+  accepts `bam_uris` / `bai_uris`, `gnomad_uri`, and `targets_uri` string inputs
+  so embedded IGV paths do not depend on Cromwell `File→String` coercion. Submit
+  the same `geac_cohort.wdl` inputs twice with those values bound to stable
+  `gs://` string columns and confirm `GeacCohort.Collect` shards are cache hits.
+  If not, diff the two runs'
+  `callCaching.hashes` via Cromwell's `/api/workflows/v1/callcaching/diff`
+  endpoint to identify the remaining differing hash key.
 
 ---
 
@@ -113,15 +101,6 @@ Requires `alt_reads` table. Plots already shipped are listed in
 Audit findings captured 2026-06-08. The tab should remain, but it should behave
 more like a QC workflow first and a locus drill-down second.
 
-- [ ] **Handle empty filtered result sets** — `app/explorer/tabs/strand_bias.py`
-  currently continues into plot-domain and CI-band calculations when sidebar
-  filters produce zero loci. Add an explicit empty-state return before calling
-  `max()` / `int()` on dataframe columns.
-- [ ] **Harden selected-point drill-down SQL** — the click drill-down interpolates
-  selected `sample_id`, `chrom`, `ref_allele`, and `alt_allele` values directly
-  into SQL. Route selected values through shared SQL literal escaping,
-  parameterized DuckDB queries, or a dataframe join so quoted sample IDs and
-  allele strings cannot break the query.
 - [ ] **Add QC eligibility controls/defaults** — the scatter currently includes
   all alt loci, including single-read and very low-depth observations. Add
   minimum alt-count/depth controls or a default "QC-eligible loci" mode so the
@@ -175,20 +154,11 @@ workflow beyond pipeline-only comparisons.
   start from `coverage_intervals`: low-coverage interval table, exon/interval
   heatmap, and interval-level QC summaries. Keep base/bin depth profiles as the
   detail view opened from a selected gene/exon/interval.
-- [ ] **Revisit Depth Profile span guarding** — `profile_position_count()` uses
-  `MAX(end) - MIN(pos)` to decide whether a profile is too large, which can block
-  sparse/discontinuous targeted regions and does not directly measure rendered
-  rows. Gate on actual bin count / chart row count, or distinguish genomic span
-  from number of plotted bins in the warning.
 - [ ] **Clarify and harden coverage profile bin semantics** —
   `load_expanded_depth_profile()` groups by `pos` after width-weighting bins. That
   is reasonable when bins align across samples, but can be misleading if bin
   boundaries differ. Either document/enforce aligned-bin input or move toward
   interval-overlap aggregation for mixed-bin datasets.
-- [ ] **Fix Depth Profile wording around bin expansion** — the UI says mixed 1 bp
-  and wider bins are "expanded back to genomic base positions", but the helper
-  plots one aggregate row per bin start. Reword to describe bin-start/profile
-  resolution accurately.
 - [ ] **Broaden coverage profile tests** — add cases for empty filters, sparse
   discontinuous targets, mixed bin widths, invalid/zero-width bins, and non-aligned
   bins across samples.

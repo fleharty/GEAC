@@ -11,6 +11,8 @@ version 1.0
 ## Inputs (per-sample, parallel arrays — lengths must match):
 ##   input_bams              - BAM or CRAM files (localized by Cromwell for geac collect)
 ##   input_bam_indices       - Corresponding .bai / .crai indices
+##   bam_uris                - (optional) canonical BAM/CRAM URIs stored in output metadata for IGV
+##   bai_uris                - (optional) canonical index URIs stored in output metadata for IGV
 ##   sample_ids              - (optional) override sample IDs; defaults to SM tag per BAM
 ##   subject_ids             - (optional) per-sample biological subject identifier
 ##   sample_types            - (optional) per-sample sample substrate type (e.g. cfDNA, tumor_tissue)
@@ -30,8 +32,10 @@ version 1.0
 ##   timepoints              - (optional) per-sample timepoint label for longitudinal studies (e.g. "T0", "week12")
 ##   gnomad                  - (optional) bgzip+tabix-indexed gnomAD VCF/BCF for AF annotation
 ##   gnomad_index            - (optional) Corresponding .tbi / .csi index
+##   gnomad_uri              - (optional) canonical gnomAD URI stored in output metadata for IGV
 ##   gnomad_af_field         - INFO field to use as allele frequency (default "AF")
 ##   targets                 - (optional) BED or Picard interval list
+##   targets_uri             - (optional) canonical target-interval URI stored in output metadata for IGV
 ##   gene_annotations        - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
 ##   region                  - (optional) restrict all samples to a genomic region
 ##   repeat_window           - bases each side of locus for homopolymer/STR scan (default 10)
@@ -61,6 +65,8 @@ workflow GeacCohort {
         # Per-sample parallel arrays
         Array[File]    input_bams
         Array[File]    input_bam_indices
+        Array[String]? bam_uris           # optional; canonical BAM/CRAM URIs for embedded IGV paths
+        Array[String]? bai_uris           # optional; canonical index URIs for embedded IGV paths
         Array[String]? sample_ids          # optional; if provided must be same length as input_bams
         Array[String]? subject_ids         # optional; if provided must be same length as input_bams
         Array[String]? sample_types        # optional; if provided must be same length as input_bams
@@ -81,9 +87,11 @@ workflow GeacCohort {
 
         File?   gnomad
         File?   gnomad_index
+        String? gnomad_uri
         String  gnomad_af_field = "AF"
 
         File?   targets
+        String? targets_uri
         File?   gene_annotations
         String? region
         Int     repeat_window = 10
@@ -151,10 +159,12 @@ workflow GeacCohort {
         if (defined(timepoints)) {
             String this_timepoint = select_first([timepoints])[i]
         }
+        String this_bam_uri = if defined(bam_uris) then select_first([bam_uris])[i] else input_bams[i]
+        String this_bai_uri = if defined(bai_uris) then select_first([bai_uris])[i] else input_bam_indices[i]
 
         Array[String] manifest_row = [
-            input_bams[i],
-            input_bam_indices[i],
+            this_bam_uri,
+            this_bai_uri,
             select_first([this_sample_id, ""]),
             select_first([this_subject_id, ""]),
             select_first([this_sample_type, ""]),
@@ -165,6 +175,8 @@ workflow GeacCohort {
             select_first([this_label2, ""]),
             select_first([this_label3, ""]),
             select_first([this_timepoint, ""]),
+            select_first([gnomad_uri, if defined(gnomad) then gnomad else ""]),
+            select_first([targets_uri, if defined(targets) then targets else ""]),
         ]
 
         call Collect {
@@ -188,8 +200,10 @@ workflow GeacCohort {
                 vcf_index             = this_vcf_index,
                 gnomad                = gnomad,
                 gnomad_index          = gnomad_index,
+                gnomad_uri            = if defined(gnomad_uri) then select_first([gnomad_uri]) else gnomad,
                 gnomad_af_field       = gnomad_af_field,
                 targets               = targets,
+                targets_uri           = if defined(targets_uri) then select_first([targets_uri]) else targets,
                 gene_annotations      = gene_annotations,
                 region                = region,
                 repeat_window         = repeat_window,
@@ -202,13 +216,8 @@ workflow GeacCohort {
                 reads_output          = reads_output,
                 input_checksum_sha256 = input_checksum_sha256,
                 threads               = threads,
-                # Derive cloud URIs from the File inputs via File→String coercion.
-                # On Terra the workflow-level File value is the original gs:// URI;
-                # the task receives the localized path via the File parameter and the
-                # original URI here, so geac stores the cloud path rather than the
-                # ephemeral local path.
-                bam_uri               = input_bams[i],
-                bai_uri               = input_bam_indices[i],
+                bam_uri               = this_bam_uri,
+                bai_uri               = this_bai_uri,
                 docker_image          = docker_image,
                 memory_gb             = collect_memory_gb,
                 disk_gb               = collect_disk_gb,
@@ -309,6 +318,8 @@ task Collect {
 
         String? bam_uri
         String? bai_uri
+        String? gnomad_uri
+        String? targets_uri
 
         String docker_image
         Int    memory_gb
@@ -343,8 +354,10 @@ task Collect {
             ~{"--vcf "              + vcf} \
             ~{"--variants-tsv "     + variants_tsv} \
             ~{"--gnomad "           + gnomad} \
+            ~{"--gnomad-uri "       + gnomad_uri} \
             ~{if defined(gnomad) then "--gnomad-af-field " + gnomad_af_field else ""} \
             ~{"--targets "          + targets} \
+            ~{"--targets-uri "      + targets_uri} \
             ~{"--gene-annotations " + gene_annotations} \
             ~{"--region "           + region} \
             --repeat-window ~{repeat_window} \
@@ -396,7 +409,7 @@ task Merge {
     command <<<
         set -euo pipefail
 
-        printf 'bam_path\tbai_path\tsample_id\tsubject_id\tsample_type\tbatch\tread_type\tpipeline\tlabel1\tlabel2\tlabel3\ttimepoint\n' > ~{output_manifest}
+        printf 'bam_path\tbai_path\tsample_id\tsubject_id\tsample_type\tbatch\tread_type\tpipeline\tlabel1\tlabel2\tlabel3\ttimepoint\tgnomad_path\ttargets_path\n' > ~{output_manifest}
         cat ~{manifest_data} >> ~{output_manifest}
 
         touch ~{output_on_target}

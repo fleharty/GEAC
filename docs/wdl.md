@@ -58,8 +58,15 @@ Required inputs:
 Common optional inputs include `sample_id`, `subject_id`, `sample_type`, `batch`,
 `label1`, `label2`, `label3`, `timepoint`, `vcf`, `vcf_index`, `variants_tsv`,
 `targets`, `gene_annotations`, `region`, `region_bed`, `gnomad`, `gnomad_index`,
-`gnomad_af_field`, `reads_output`, `input_checksum_sha256`, pileup quality
-thresholds, and inclusion flags for duplicates/secondary/supplementary reads.
+`gnomad_af_field`, `bam_uri`, `bai_uri`, `variants_uri`, `gnomad_uri`,
+`targets_uri`,
+`reads_output`, `input_checksum_sha256`, pileup quality thresholds, and inclusion
+flags for duplicates/secondary/supplementary reads.
+
+On Terra, bind `bam_uri`, `bai_uri`, `gnomad_uri`, and `targets_uri` to stable
+string columns containing the original `gs://` URIs. The corresponding `File`
+inputs are still localized for compute, but the string URI inputs are what GEAC
+stores in Parquet metadata for IGV session generation.
 
 Outputs:
 
@@ -76,12 +83,20 @@ VCFs/TSVs, and optional metadata arrays. Shared inputs include reference, target
 gene annotations, region, pileup thresholds, gnomAD, runtime resources, and optional
 fragment collection.
 
+For Terra IGV support, provide optional `Array[String] bam_uris` and
+`Array[String] bai_uris` in parallel with `input_bams` and `input_bam_indices`,
+plus shared `String? gnomad_uri` and `String? targets_uri` when those resources
+are used. These should come from stable data-table string columns containing the
+original `gs://` paths. GEAC uses those string URIs for embedded resource metadata
+and for the emitted `cohort_manifest`; the `File` inputs remain the localized
+inputs used by Cromwell for compute.
+
 Outputs:
 
 | Output | Description |
 |---|---|
 | `cohort_db` | Merged DuckDB |
-| `cohort_manifest` | BAM/BAI URI manifest plus sample metadata |
+| `cohort_manifest` | Resource URI manifest plus sample metadata |
 | `cohort_on_target_tsv` | On-target alt-base TSV when targets are provided |
 
 ## Other Workflows

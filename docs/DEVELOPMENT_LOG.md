@@ -1050,3 +1050,54 @@ DuckDB connection, imports no Streamlit, unit-tested in
 uncached tab-body queries) and caps the marker panel size; the heatmap is omitted
 above 60 marker-sharing samples for legibility. No Rust/schema change — all columns
 used already exist.
+
+---
+
+## Explorer audit fixes (2026-06-09)
+
+- Strand bias tab: empty filtered result sets now show a clean "No records match"
+  message before plot-domain / CI-band calculations run.
+- Strand bias tab: selected-point drill-down SQL now routes selected string values
+  through the shared SQL literal escaping helper, so quoted sample IDs, chromosomes,
+  refs, and alts do not break the query.
+- Coverage Explorer Depth Profile: rendering is now guarded by the number of
+  distinct plotted bin starts rather than genomic span alone. Large sparse spans
+  can still render when the plotted bin count is manageable, with a caption showing
+  both genomic span and plotted bins.
+- Coverage Explorer Depth Profile: the caption now says mixed 1 bp and wider bins
+  are plotted at bin-start positions with width-weighted aggregation, avoiding the
+  earlier implication that bins were expanded to every genomic base.
+
+---
+
+## WDL explicit resource URI inputs for IGV metadata (2026-06-09)
+
+`geac_cohort.wdl` and `geac_collect.wdl` now accept explicit string URI inputs for
+BAM/CRAM and index paths (`bam_uris` / `bai_uris` arrays in the cohort workflow;
+`bam_uri` / `bai_uri` in the single-sample workflow), plus shared gnomAD and target
+interval URI inputs (`gnomad_uri`, `targets_uri`). These are stored in Parquet
+metadata as `bam_path` / `bai_path` / `gnomad_path` / `targets_path` and written to
+`cohort_manifest`, while the existing `File` inputs remain the localized compute
+inputs.
+
+This replaces the previous assumption that Cromwell `File→String` coercion at
+workflow scope would preserve the original `gs://` path. In practice, a Terra run
+can render localized worker paths into `--bam-uri`, producing a DuckDB whose
+embedded IGV paths are unusable off the worker. For Terra, bind the new string URI
+inputs to stable data-table columns containing the original `gs://` BAM/CRAM,
+index, gnomAD, and target-interval paths.
+
+---
+
+## `geac inspect` command (2026-06-09)
+
+Added `geac inspect --input cohort.duckdb`, a read-only health check for merged
+cohort databases. The first version reports provenance-table presence, optional
+feature tables and row counts, required `alt_bases` schema columns, sample counts,
+empty/null core fields, conflicting sample metadata in the `samples` table, missing
+resource columns, missing embedded BAM paths, and local/non-URI resource paths that
+may not work in cloud or IGV contexts.
+
+By default, structural errors exit non-zero while warnings are reported but do not
+fail the command. `--strict` promotes warnings to a non-zero exit for CI/preflight
+use.

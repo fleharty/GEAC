@@ -58,7 +58,8 @@
         "bam_path",
         "bai_path",
         "variants_path",
-        "gnomad_path"
+        "gnomad_path",
+        "targets_path"
       ]
     },
     "alt_reads": {

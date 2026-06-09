@@ -84,6 +84,10 @@ def render(ctx: TabContext) -> None:
             st.warning("Loading all loci — this may take a moment and slow down your browser.", icon="🐢")
         sample_df = ctx.con.execute(_sb_sql_base).df()
 
+    if sample_df.empty:
+        st.info("No records match the current filters.")
+        return
+
     _log1p_ticks_linear = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
 
     if _use_log1p:
@@ -220,9 +224,11 @@ def render(ctx: TabContext) -> None:
     sb_pts = (sb_event.selection or {}).get("sb_select", [])
     if sb_pts:
         _sb_or_clauses = " OR ".join(
-            f"(sample_id = '{p['sample_id']}' AND chrom = '{p['chrom']}' "
-            f"AND pos = {int(p['pos'])} AND ref_allele = '{p['ref_allele']}' "
-            f"AND alt_allele = '{p['alt_allele']}')"
+            f"(sample_id = '{ctx.sql_str(str(p['sample_id']))}' "
+            f"AND chrom = '{ctx.sql_str(str(p['chrom']))}' "
+            f"AND pos = {int(p['pos'])} "
+            f"AND ref_allele = '{ctx.sql_str(str(p['ref_allele']))}' "
+            f"AND alt_allele = '{ctx.sql_str(str(p['alt_allele']))}')"
             for p in sb_pts
             if all(k in p for k in ["sample_id", "chrom", "pos", "ref_allele", "alt_allele"])
         )

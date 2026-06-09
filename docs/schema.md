@@ -57,6 +57,7 @@ Metadata and provenance:
 | `bam_path`, `bai_path` | string? | Input alignment paths or canonical URIs |
 | `variants_path` | string? | VCF/TSV annotation path or URI |
 | `gnomad_path` | string? | gnomAD path or URI |
+| `targets_path` | string? | Target BED / interval-list path or URI |
 
 Annotations:
 
