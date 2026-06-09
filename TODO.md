@@ -108,8 +108,90 @@ Requires `alt_reads` table. Plots already shipped are listed in
 
 ---
 
+## Strand bias tab (Explorer)
+
+Audit findings captured 2026-06-08. The tab should remain, but it should behave
+more like a QC workflow first and a locus drill-down second.
+
+- [ ] **Handle empty filtered result sets** — `app/explorer/tabs/strand_bias.py`
+  currently continues into plot-domain and CI-band calculations when sidebar
+  filters produce zero loci. Add an explicit empty-state return before calling
+  `max()` / `int()` on dataframe columns.
+- [ ] **Harden selected-point drill-down SQL** — the click drill-down interpolates
+  selected `sample_id`, `chrom`, `ref_allele`, and `alt_allele` values directly
+  into SQL. Route selected values through shared SQL literal escaping,
+  parameterized DuckDB queries, or a dataframe join so quoted sample IDs and
+  allele strings cannot break the query.
+- [ ] **Add QC eligibility controls/defaults** — the scatter currently includes
+  all alt loci, including single-read and very low-depth observations. Add
+  minimum alt-count/depth controls or a default "QC-eligible loci" mode so the
+  primary plot emphasizes actionable strand-balance signals.
+- [ ] **Reshape the tab around sample-level QC summaries** — start with per-sample
+  metrics such as median strand balance, fraction of loci outside the expected
+  band, total evaluable loci, and optional batch/read-type grouping. Keep the
+  existing locus scatter as a drill-down from suspicious samples.
+- [ ] **Make large-cohort sampling stratified or explain its limits** — the fixed
+  5,000-locus reservoir sample can underrepresent small problematic samples or
+  batches. Prefer stratified sampling by sample/variant type/batch when columns
+  are available, or surface a warning that the sampled scatter is exploratory.
+
+---
+
+## Pipeline comparison tab (Explorer)
+
+The current tab is useful for comparing the same sample processed through two
+`pipeline` values. Follow-up work should preserve the post-join threshold handling
+that separates truly absent calls from sub-threshold evidence, but generalize the
+workflow beyond pipeline-only comparisons.
+
+- [ ] **Generalize Pipeline comparison into an A/B strata comparison tab** — allow
+  users to choose the comparison field (`pipeline`, `read_type`, `batch`,
+  `sample_type`, `label1`–`label3`, or another categorical column) and then select
+  two values to compare. Keep `pipeline` as the default preset because it is the
+  common current workflow.
+- [ ] **Add A/B comparison preflight checks** — before running the expensive join,
+  show record counts by selected stratum, overlapping `sample_id` values, samples
+  present only on one side, and warnings when `sample_id` is not unique across
+  subject/timepoint/batch dimensions that are not part of the join.
+- [ ] **Make join keys explicit and safer** — default to
+  `(sample_id, chrom, pos, alt_allele)`, but warn when selected data has repeated
+  sample IDs across `subject_id`, `sample_type`, `timepoint`, `batch`, or
+  `read_type`. Consider allowing advanced users to include extra metadata columns
+  in the join key.
+- [ ] **Refactor comparison SQL construction into helpers** — centralize WHERE
+  and literal escaping for the A/B join, selected-point drilldowns, and IGV
+  conditions. Preserve the current post-join threshold reclassification semantics.
+- [ ] **Prioritize the tab flow around "what changed?" before "why?"** — first
+  surface concordance, true-unique, and sub-threshold counts; then expose VAF/depth
+  correlations, unique-loci characterization, SBS96 spectra, and IGV review as
+  follow-up sections.
+
+---
+
 ## Coverage Explorer (Customer-facing)
 
+- [ ] **Make interval/exon review the default coverage workflow** — the current
+  Depth Profile tab is useful for drill-down, but customer coverage review should
+  start from `coverage_intervals`: low-coverage interval table, exon/interval
+  heatmap, and interval-level QC summaries. Keep base/bin depth profiles as the
+  detail view opened from a selected gene/exon/interval.
+- [ ] **Revisit Depth Profile span guarding** — `profile_position_count()` uses
+  `MAX(end) - MIN(pos)` to decide whether a profile is too large, which can block
+  sparse/discontinuous targeted regions and does not directly measure rendered
+  rows. Gate on actual bin count / chart row count, or distinguish genomic span
+  from number of plotted bins in the warning.
+- [ ] **Clarify and harden coverage profile bin semantics** —
+  `load_expanded_depth_profile()` groups by `pos` after width-weighting bins. That
+  is reasonable when bins align across samples, but can be misleading if bin
+  boundaries differ. Either document/enforce aligned-bin input or move toward
+  interval-overlap aggregation for mixed-bin datasets.
+- [ ] **Fix Depth Profile wording around bin expansion** — the UI says mixed 1 bp
+  and wider bins are "expanded back to genomic base positions", but the helper
+  plots one aggregate row per bin start. Reword to describe bin-start/profile
+  resolution accurately.
+- [ ] **Broaden coverage profile tests** — add cases for empty filters, sparse
+  discontinuous targets, mixed bin widths, invalid/zero-width bins, and non-aligned
+  bins across samples.
 - [ ] Surface `feature_type` and `exon_number` in the intervals heatmap — available
   from v0.4.0; use `exon_number` as the x-axis instead of `interval_name` when
   present, so exons line up consistently across genes regardless of naming
@@ -151,6 +233,25 @@ Remaining:
 Long-term: end-motif table comparing alt-supporting vs reference-supporting reads
 as a bait-bias signal. Design context in `docs/DEVELOPMENT_LOG.md`.
 
+- [ ] **Rework the Fragmentomics Explorer tab around QC-first workflows** — the
+  current tab combines insert-size motif trends, FFT periodicity, motif-by-GC,
+  fragment GC distribution, sample selection, grouping, smoothing, and layout
+  controls in one dense view. Split or reorganize it into clearer subviews:
+  `Fragment QC` (fragment count, median/IQR insert size, mono/di-nucleosome
+  fractions, GC median/IQR), `End motifs` (motif frequency by insert size/GC),
+  and `Periodicity` (FFT/nucleosome signal).
+- [ ] **Add guardrails to the FFT / nucleosome-periodicity view** — keep it as an
+  exploratory analysis, but add minimum-count checks, a visible "exploratory"
+  label, and summary metrics for peak strength/background instead of only drawing
+  a 10.5 bp reference line. Avoid making the plot look like a validated clinical
+  signal without validation.
+- [ ] **Harden Fragmentomics SQL construction** — `app/explorer/tabs/fragmentomics.py`
+  interpolates selected sample IDs and motif lists into SQL strings. Route these
+  through shared SQL literal escaping or parameterized DuckDB queries so unusual
+  sample IDs/motifs cannot break queries.
+- [ ] **Reduce control density in the Fragmentomics tab** — replace the seven-widget
+  row with compact controls grouped by task, and hide expert controls (smoothing,
+  FFT insert-size range, facet columns) in an expander or per-view settings area.
 - [ ] Design the new table schema (per-read, not per-alt-read).
 - [ ] Implement collection in `geac collect` (opt-in flag, like `--reads-output`).
 - [ ] Add Explorer plot comparing end-motif frequency for alt vs ref reads.

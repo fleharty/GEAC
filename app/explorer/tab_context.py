@@ -120,7 +120,7 @@ class TabContext:
     total_count: int
     table_cols: list[str]
     alt_reads_cols: set[str]      # column names of the alt_reads table (empty set if absent)
-    cfg: dict                     # parsed config.toml (e.g. anthropic_api_key for AI Plot Builder)
+    cfg: dict                     # parsed geac.toml/config values
 
     # Per-read filter state
     reads: PerReadFilters

@@ -1,4 +1,3 @@
-from . import ai_plot_builder
 from . import cohort
 from . import duplex_simplex
 from . import error_spectrum
@@ -31,7 +30,6 @@ TAB_PIPELINE_COMPARISON = pipeline_comparison
 TAB_READ_TYPE_COMPARISON = read_type_comparison
 TAB_OVERLAP_AGREEMENT = overlap_agreement
 TAB_MNV_CANDIDATES = mnv_candidates
-TAB_AI_PLOT_BUILDER = ai_plot_builder
 TAB_FRAGMENTOMICS = fragmentomics
 
 TAB_MODULES = (
@@ -49,6 +47,5 @@ TAB_MODULES = (
     TAB_READ_TYPE_COMPARISON,
     TAB_OVERLAP_AGREEMENT,
     TAB_MNV_CANDIDATES,
-    TAB_AI_PLOT_BUILDER,
     TAB_FRAGMENTOMICS,
 )

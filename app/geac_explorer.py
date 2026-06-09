@@ -9,11 +9,6 @@ import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 
-try:
-    import anthropic as _anthropic
-    _HAS_ANTHROPIC = True
-except ImportError:
-    _HAS_ANTHROPIC = False
 import numpy as np
 import streamlit as st
 import duckdb
@@ -87,7 +82,6 @@ from explorer.tabs import (
     TAB_READ_TYPE_COMPARISON,
     TAB_OVERLAP_AGREEMENT,
     TAB_MNV_CANDIDATES,
-    TAB_AI_PLOT_BUILDER,
     TAB_FRAGMENTOMICS,
 )
 
@@ -1989,10 +1983,6 @@ if _active_main_tab == TAB_OVERLAP_AGREEMENT.LABEL:
 # ── MNV candidates ─────────────────────────────────────────────────────────────
 if _active_main_tab == TAB_MNV_CANDIDATES.LABEL:
     TAB_MNV_CANDIDATES.render(ctx)
-
-# ── AI Plot Builder ────────────────────────────────────────────────────────────
-if _active_main_tab == TAB_AI_PLOT_BUILDER.LABEL:
-    TAB_AI_PLOT_BUILDER.render(ctx)
 
 # ── Fragmentomics ───────────────────────────────────────────────────────────────────────
 if _active_main_tab == TAB_FRAGMENTOMICS.LABEL:

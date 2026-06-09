@@ -41,7 +41,6 @@ Main tabs:
 | Read-type comparison | Side-by-side comparison of read types in the same cohort |
 | Overlap agreement | Mate-overlap concordance and discordance |
 | MNV candidates | Cross-locus `fragment_id` joins for adjacent co-occurring SNVs |
-| AI Plot Builder | Optional natural-language plot generation with explicit privacy acknowledgement |
 | Fragmentomics | Insert-size, GC, end-motif, and nucleosome-style fragment views |
 
 The Sample Identity tab uses the same core ideas as `geac sample-identity`: a common
