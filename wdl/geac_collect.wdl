@@ -47,7 +47,7 @@ version 1.0
 ##   input_checksum_sha256 - compute SHA-256 for the input BAM/CRAM and store it in output Parquet provenance columns (default false)
 ##   threads              - VM CPU count (default 1); controls Terra VM sizing only — geac does not accept a --threads flag and uses its own internal parallelism
 ##   docker_image         - geac Docker image, e.g. ghcr.io/fleharty/geac:0.3.7
-##   memory_gb            - memory in GB (default 8)
+##   memory_gb            - memory in GB (default 32)
 ##   disk_gb              - disk space in GB (default 100)
 ##   preemptible          - number of preemptible retries (default 2)
 ##

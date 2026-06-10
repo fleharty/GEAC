@@ -5,7 +5,9 @@
     "pon_evidence",
     "coverage",
     "sample_metrics",
-    "fragments"
+    "fragments",
+    "coverage_intervals",
+    "fusions"
   ],
   "tables": {
     "alt_bases": {
@@ -268,6 +270,66 @@
         "label2",
         "label3",
         "timepoint"
+      ]
+    },
+    "coverage_intervals": {
+      "required_columns": [
+        "sample_id",
+        "chrom",
+        "start",
+        "end",
+        "n_bases",
+        "mean_depth",
+        "median_depth",
+        "min_depth",
+        "max_depth",
+        "frac_at_1x",
+        "frac_at_10x",
+        "frac_at_20x",
+        "frac_at_30x",
+        "frac_at_50x",
+        "frac_at_100x",
+        "mean_gc_content",
+        "mean_mapq",
+        "mean_frac_mapq0",
+        "mean_frac_dup",
+        "mean_frac_overlap",
+        "mean_base_qual",
+        "mean_insert_size",
+        "read_type"
+      ],
+      "optional_columns": [
+        "interval_name",
+        "gene",
+        "feature_type",
+        "exon_number",
+        "pipeline",
+        "subject_id",
+        "sample_type",
+        "batch",
+        "label1",
+        "label2",
+        "label3",
+        "timepoint"
+      ]
+    },
+    "fusions": {
+      "required_columns": [
+        "sample_id",
+        "gene_a",
+        "gene_b",
+        "chrom_a",
+        "chrom_b",
+        "supporting_reads",
+        "min_mapq",
+        "n_spanning_reads",
+        "n_coherent_fragments",
+        "n_pon_samples",
+        "pon_total_samples",
+        "filter"
+      ],
+      "optional_columns": [
+        "max_pon_supporting_reads"
       ]
     }
   }

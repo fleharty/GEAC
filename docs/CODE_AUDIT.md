@@ -14,6 +14,257 @@ Conventions:
 
 ---
 
+## 2026-06-10 — whole-codebase pass: explorer layer, cross-layer contracts, structural debt
+
+Scope:
+- Whole-repo evaluation requested ("evaluate the code as a whole, not just recent
+  features"), with emphasis on the areas the 2026-06-09 cross-cutting entry under-covered:
+  the ~15 K-line Python explorer layer (`app/`), the cross-layer contracts
+  (`schema/geac_schema.json` ↔ Rust writers ↔ `app/explorer/schema.py`), the test strategy,
+  and documentation. Deliberately deduped against the 2026-06-09 entry and the `TODO.md`
+  "Code health / tech debt" section — items already logged there are referenced, not
+  repeated.
+
+Verification:
+- Test inventory: 101 unit + 45 integration (Rust) + 99 `pytest app/tests` = 245 total.
+- Structural checks via grep/read over `src/`, `app/`, `wdl/`, `schema/`, `docs/`.
+- No code changes; findings only. Magnitude note: a full count of
+  `unwrap/expect/panic/unreachable` in `src/` is 60 total, the majority inside
+  `#[cfg(test)]` modules — the project is not panic-heavy.
+
+Findings — cross-layer contract:
+
+- [ ] **Schema-contract test is one-directional.** `tests/integration.rs:30`
+  (`assert_schema_columns_present`) verifies schema-declared columns are present in emitted
+  tables, but only for explicitly named tables, and never the reverse: nothing asserts that
+  every table `src/merge.rs` creates appears in `schema/geac_schema.json`. That gap is the
+  root cause of the drift the 2026-06-09 entry flagged — `coverage_intervals` and `fusions`
+  are created by `src/merge.rs`/`src/main.rs` but absent from both the `tables` map and the
+  `feature_tables` array in the JSON. Because `app/explorer/schema.py` reads
+  `raw["feature_tables"]` at runtime, `DataSource.has_optional_table("fusions")` /
+  `("coverage_intervals")` can never return True. Fix: add both tables to the JSON and add a
+  test enumerating merge `TableSpec`s that asserts each is in the schema.
+- [ ] **`DUCKDB_SCHEMA_VERSION` is stamped but never validated.** Defined at
+  `src/merge.rs:12` (`"duckdb-v4"`) and written into the metadata table (`:842`), but merge
+  never checks the schema version of incoming data (no compare/bail anywhere). Combined with
+  the open forward item to stamp version into per-Parquet metadata, merging inputs produced
+  by an incompatible GEAC version can silently truncate columns rather than failing.
+
+Findings — refactor / duplication:
+
+- [ ] **Parquet-writer boilerplate across 8 modules.** Every `src/writer/*.rs`
+  (`parquet.rs`, `parquet_coverage.rs`, `parquet_coverage_intervals.rs`, `parquet_reads.rs`,
+  `parquet_fragments.rs`, `parquet_normal.rs`, `parquet_pon.rs`, `parquet_sample_metrics.rs`)
+  repeats the same `File::create` → `WriterProperties::builder().set_compression(SNAPPY)` →
+  `ArrowWriter::try_new` → `write` → `close` shell, varying only the schema and
+  record-to-batch functions. Extract one `write_parquet_generic<T>(records, path, schema_fn,
+  batch_fn)` to remove ~150-200 LOC and centralize error/compression policy.
+- [ ] **`reads.py` is one 1345-line `render()` with nested closures.**
+  `app/explorer/tabs/reads.py:14` is the only top-level `def`; all helpers
+  (`_nctx_cache_key`, `_nasym_cache_key`, `_cache_get`, …) are closures that capture
+  `where`/`_r_reads_filter`, and cache keys are built from those captures. Works today, but
+  fragile under refactor and not unit-testable in isolation. The existing "decompose
+  `geac_explorer.py`" TODO targets a different file and a >1500-LOC bar this file slips
+  under, so call it out separately.
+- [ ] **Two SQL-escaping idioms across the two explorers.** `geac_explorer.py` uses the
+  `_sql_str()` helper; `geac_coverage_explorer.py` (~line 194) uses inline
+  `replace(chr(39), chr(39)*2)`; many tabs interpolate column names/values directly. The
+  2026-06-09 entry and `TODO.md` already flag the f-string SQL pattern — the point here is
+  that the right fix is one shared escaping/parameterization helper used by both apps, not
+  per-tab patches.
+- [ ] **Cross-explorer sidebar duplication.** Region input, sample selection, optional-label
+  multiselects, and manifest wiring are duplicated between `geac_explorer.py` and
+  `geac_coverage_explorer.py`. Extract `app/explorer/sidebar.py` shared by both entrypoints
+  (distinct from the tab-decomposition item already in `TODO.md`).
+
+Findings — missing safeguards:
+
+- [ ] **No end-to-end Rust → DuckDB → Python test.** Rust integration tests verify output
+  against the schema, and Python tests read a DuckDB, but nothing chains
+  `collect → merge → open the DuckDB from Python → assert a known locus's counts`. The
+  cross-layer contract is verified only piecewise.
+- [ ] **No bounds validation on `build-fusion-index` numeric flags.** `min_k`/`max_k` are
+  not cross-checked (e.g. `min_k=30, max_k=20`), `min_gene_kmers` has no upper bound, and
+  `max_genome_copies` is only meaningful with `--check-genome-uniqueness` but is not gated on
+  it. Same class as the open `--min-sample-fraction` range item.
+- [ ] **A few non-test `unwrap()`s on possibly-empty vectors / post-check Options.**
+  `src/fusions.rs:1097-1100` (`max()/min().unwrap()` on `a_positions`/`b_positions` in
+  spanning-read logic), `:1122`/`:1127` (`as_mut().unwrap()`, `get_mut(...).unwrap()` after a
+  guard), and `src/coverage/mod.rs:810-811,1144-1145,1156-1157` (`min()/max().unwrap()` in
+  stats helpers). Replace with `ok_or_else`/empty-guards so edge-case data yields a clean
+  error rather than a panic.
+
+Findings — polish:
+
+- [ ] **WDL resource doc/default drift.** `wdl/geac_collect.wdl:50-52` documents memory
+  default 8 / disk 100 / preemptible 2, but the actual input defaults are 32 / 100 / 2
+  (`:107-109`). Resources are correctly exposed as overridable inputs; only the header
+  comment is wrong. Reconcile across sibling WDLs.
+- [ ] **Doc duplication.** `README.md:148` "Data Model" suffix→table table duplicates
+  `docs/schema.md:6` "Table Routing"; keep one canonical copy and link the other.
+  `docs/EXPERIMENTAL.md` (514 L) and `docs/FUSION_DEVELOPMENT.md` (152 L) overlap on fusion
+  scope — add a one-line scope header to each pointing at the other.
+- [ ] **Memory-file growth.** `CHALLENGES.md` (~72 KB) and `docs/DEVELOPMENT_LOG.md`
+  (~61 KB) remain valuable and well-organized; no action now, but if either passes ~100 KB
+  consider archiving older sections under `docs/archive/`.
+
+Good (recorded so it is preserved, not changed):
+- Streaming writers, the `experimental` namespace isolation (extraction-ready), trait-based
+  annotation (`VariantAnnotator`/`TargetIntervals`), `anyhow`+`.context()` error
+  propagation, the explorer's `DataSource`/`FilterState`/`TabContext` abstractions (and
+  `error_spectrum.py`'s 13-helper decomposition as the model for other tabs), the partial
+  schema-contract test that already exists, and the `CHALLENGES.md`/`DEVELOPMENT_LOG.md`
+  memory discipline.
+
+Promoted to `TODO.md` (this pass): test-running CI job; schema-JSON drift fix + reverse
+contract test; shared Parquet-writer helper; end-to-end Rust→DuckDB→Python test; WDL
+resource doc/default reconciliation.
+
+---
+
+## 2026-06-09 — cross-cutting audit: CI, scope, collect performance, schema contract
+
+Scope:
+- Whole-repo pass rather than a single code area: pileup core (`src/bam/pileup.rs`,
+  `src/bam/mod.rs`), `src/merge.rs`, `src/record.rs`, `src/inspect.rs`, the full CLI
+  surface, the explorer data layer (`app/explorer/data_source.py`),
+  `schema/geac_schema.json`, `.github/workflows/`, and the Homebrew formula.
+- Focus on architecture, build/release enforcement, schema-contract integrity,
+  and feature-level scope.
+
+Verification:
+- `cargo test` against the existing target: 101 unit + 45 integration passing.
+- `pytest app/tests`: 99 passing.
+- No code changes made; findings only.
+
+Findings — build & release enforcement:
+
+- [ ] **No CI runs the test suite.** `.github/workflows/release.yml` is the only
+  workflow and only builds/pushes the Docker image on `v*` tags. Nothing runs
+  `cargo test`, `pytest app/tests`, `cargo clippy`, or `cargo fmt --check` on
+  push/PR. The project has 200+ tests but no automated proof the tree is green. A
+  minimal `ci.yml` running `cargo test` + `pytest app/tests` on push is the
+  highest-leverage, lowest-effort fix in the repo and a prerequisite before the
+  lint gate already noted in `TODO.md`.
+
+Findings — scope / strategic:
+
+- [ ] **Experimental fusion subsystem is >20% of the Rust code and gates the
+  release cadence.** `fusions.rs` (1,326), `build_fusion_index.rs` (1,011),
+  `extract_gene.rs` (458), plus `locate_kmer`/`lookup_kmer`/`scan_read`/
+  `compute_uniqueness_map`/`build_fusion_kmer_blacklist` total ~3,400 LOC, all
+  under the `geac experimental` "not for production" banner. `ROADMAP.md` shows
+  v0.4.29–v0.4.37 were almost entirely fusion work while customer-facing
+  coverage/analysis (v0.5/v0.6 beta) waited. Decide deliberately: (a) freeze and
+  extract into a separate `geac-fusion` crate/repo so the core stays lean and
+  fusion work matures on its own cadence (the clean `experimental` namespace makes
+  this low-friction), or (b) commit to it as a product bet and build the
+  benchmarking harness — already a TODO — first, since it competes with validated
+  tools (Arriba, STAR-Fusion, FusionCatcher). Either way, stop letting
+  pre-production work set release timing.
+- [ ] **Demote fusion dev/debug subcommands from the user surface.** `locate-kmer`,
+  `lookup-kmer`, and `scan-read` are developer diagnostics for the fusion index,
+  not end-user features. If the fusion code stays, fold them behind
+  `geac experimental debug <...>` (or a debug build) to shrink the advertised CLI.
+
+Findings — `collect` performance & memory:
+
+- [ ] **`collect` buffers all output in RAM.** `collect_alt_bases` returns fully
+  materialized `Vec<AltBase>`/`Vec<AltRead>` and `src/main.rs:144` writes them only
+  after the whole BAM is processed, whereas `coverage` and `fragments` stream via
+  `CoverageWriter`/`FragmentsWriter`. On a deep WGS sample with `--reads-output`
+  the per-read vector alone can be many GB of peak RSS. Refactor `collect` to a
+  streaming writer; this also unblocks the parallelism item below.
+- [ ] **No single-sample parallelism.** `rayon` is a dependency but used only in
+  `src/sample_identity.rs`. The `collect` pileup loop is strictly sequential, one
+  contig/region at a time. Cohort scale is handled by WDL scatter across *samples*,
+  but a single deep BAM cannot use more than one core. Scatter the pileup across
+  contigs/regions and merge per-region record vectors — the largest untapped
+  single-sample throughput lever.
+
+Findings — correctness & safety guards:
+
+- [ ] **No reference/BAM concordance check.** `collect` opens the reference FASTA
+  and the BAM independently (`src/bam/mod.rs:51`). If they disagree (wrong build,
+  contig-naming mismatch, shifted coordinates) every base silently reads as alt and
+  the output is quietly, catastrophically wrong. Compare `@SQ` contig names/lengths
+  (and `M5` where present) against the reference `.fai` at startup and fail fast.
+  Cheap, and prevents an entire class of silently-wrong runs.
+- [ ] **Per-locus output is not deterministic.** Alt-base tallies are built in a
+  `HashMap<char, BaseTally>` (`src/bam/pileup.rs:327`) and iterated in hash order at
+  `src/bam/mod.rs:196`, so two runs can emit a locus's alt alleles in different row
+  order. Given the project's investment in checksums/provenance, sort alt alleles
+  before emit to guarantee byte-identical output across runs.
+
+Findings — schema contract:
+
+- [ ] **`schema/geac_schema.json` has drifted from the actual tables.** `CLAUDE.md`
+  calls it the source of truth, but it omits the `coverage_intervals` and `fusions`
+  tables entirely, even though `src/merge.rs` and `src/inspect.rs` create/expect
+  them. Concrete downstream bug: the Python `feature_tables` list (mirrored from
+  the JSON) omits both, so `DataSource.has_optional_table("fusions")` and
+  `("coverage_intervals")` can never return True regardless of whether the table
+  exists. Add both tables to the schema, or document why they are intentionally
+  outside the contract. This is the exact failure the `TODO.md` "schema contract is
+  one-way" item predicted.
+
+Findings — explorer:
+
+- [ ] **Systemic raw f-string SQL.** Nearly every tab builds SQL with f-strings.
+  The Rust layer escapes literals; the Python layer escapes *paths* (`_sql_str`)
+  but interpolates column names and selected values directly. Inputs are mostly
+  trusted (sample IDs from the data itself), so this is defense-in-depth, but
+  `TODO.md` already flags three tabs (fragmentomics, sample_identity,
+  pipeline_comparison) with the pattern — better solved with one shared
+  escaping/parameterization helper than three point fixes.
+
+Findings — forward features (not yet in `TODO.md`/`ROADMAP.md`):
+
+- [ ] **Add a cohort background-error / recurrence-statistics model — the actual
+  "Atlas."** `src/cohort.rs` only counts recurrence (`COUNT(DISTINCT sample_id)`).
+  The differentiating feature latent in the collected data is a position-specific
+  (and per-trinucleotide-context) background error model: fit a per-site noise rate
+  across the cohort (beta-binomial or empirical), then score each observation as
+  consistent-with-background vs. outlier. This separates recurrent artifacts from
+  recurrent biology and turns raw alt-base evidence into a confidence signal that
+  per-sample callers don't provide. Highest-value forward feature.
+- [ ] **Stamp `geac_version`/`schema_version` into per-Parquet file metadata.** The
+  merged DuckDB carries `geac_metadata`, but individual `.parquet` files don't embed
+  version/schema info in Parquet key-value file metadata. Merging an old Parquet
+  later leaves no in-file record of which binary/schema produced it. Stamp at write
+  time to complete the provenance story.
+- [ ] **Add a computed strand-bias statistic column.** `fwd_alt_count`/
+  `rev_alt_count` are collected and there is a strand-bias tab, but no per-locus
+  statistic (Fisher exact p or SOR) exists in the schema. Compute it once in Rust so
+  the explorer can filter/sort on a number instead of re-deriving balance visually.
+- [ ] **Parser fuzz/property tests.** Prior audit entries list many BED/Picard/GTF/
+  VCF/TSV robustness issues (silent row-skips, `i64→u32` casts, `end<=start`). A
+  small `cargo-fuzz`/`proptest` harness over the parsers would surface this class in
+  bulk and guard against regressions instead of fixing them one at a time.
+- [ ] **`geac doctor` input preflight.** `inspect` validates *outputs*; there is no
+  input-side analogue. A preflight that checks BAM index present, reference
+  concordance (above), target-file parse, and required consensus tags present for
+  the chosen `--pipeline` would save cloud time on long runs.
+
+Findings — smaller items:
+
+- [ ] **Duplicate inner attribute.** `#![deny(unsafe_code)]` appears twice
+  (`src/main.rs:1` and `:2`). Harmless, but exactly what a `clippy`/`fmt` gate would
+  catch.
+- [ ] **Phantom `geac compare` command.** `src/cli.rs:123` and `src/record.rs:100`
+  document `subject_id` as "Used by `geac compare`," but no `Compare` variant exists
+  in the `Command` enum and the README lists no such command. Build it or strike the
+  references.
+- [ ] **Stray root file.** `cic_dux4_genes.txt` (3-line CIC::DUX4 gene list) is
+  tracked at repo root; example/panel files belong in `examples/` or `config/`.
+- [ ] **Homebrew formula ships placeholder hashes.** `homebrew/Formula/geac.rb`
+  contains literal `sha256 "SHA256_MACOS_ARM64"` / `"SHA256_SOURCE"`. If
+  `brew install fleharty/geac/geac` is meant to work today, verify the published tap
+  has real SHAs. The formula is arm64-mac only (Intel mac/Linux fall back to
+  Docker/source).
+
+---
+
 ## 2026-06-08 — variant annotation from VCF and TSV
 
 Scope:

@@ -286,6 +286,10 @@ milestones. Each "what to do" item below maps to a "why" weakness for context.
   `schema/geac_schema.json` and emits a `const SCHEMA_COLUMNS: &[&str]` per
   table; add a Python test that fails if any schema column is unreferenced in
   the explorer code.
+- [ ] **Add a reverse schema contract test** — enumerate the `TableSpec`s in `src/merge.rs`
+  and assert each table name is present in `schema/geac_schema.json`; the existing
+  `assert_schema_columns_present` only checks the schema→output direction. See
+  `docs/CODE_AUDIT.md` 2026-06-10.
 - [ ] **Add module-level `//!` docs to all public Rust modules** — at minimum:
   `src/coverage/mod.rs`, `src/bam/pileup.rs`, `src/merge.rs`, `src/track.rs`,
   `src/writer/*`. Each should describe module purpose, key invariants, and
@@ -301,6 +305,15 @@ milestones. Each "what to do" item below maps to a "why" weakness for context.
   each tab module and instantiates its render function against a tiny synthetic
   Parquet fixture. Catches import-time and obvious-render regressions without
   requiring a full browser.
+- [ ] **Add an end-to-end Rust→DuckDB→Python test** — run `collect` then `merge`, open the
+  resulting DuckDB from Python, and assert a known locus's counts. The cross-layer contract
+  is currently verified only piecewise (Rust output vs schema, and Python reads, but never
+  the full chain). See `docs/CODE_AUDIT.md` 2026-06-10.
+- [ ] **Extract a shared Parquet-writer helper** — the 8 modules under `src/writer/` repeat
+  the same `File::create` → `WriterProperties(SNAPPY)` → `ArrowWriter::try_new` → `write` →
+  `close` shell, varying only the schema and record-to-batch functions. Collapse into one
+  `write_parquet_generic<T>(records, path, schema_fn, batch_fn)` (~150-200 LOC, single
+  error/compression policy).
 - [ ] **Migrate this backlog into GitHub Issues** — once the team grows beyond a
   single contributor. Keep `ROADMAP.md` for milestones; let issues hold
   individual work items with priority/milestone labels.
