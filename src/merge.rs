@@ -1123,7 +1123,14 @@ mod tests {
     }
 
     /// Write a single-row Parquet with the given `SELECT` body to `path`.
+    ///
+    /// Serialized via a static mutex because DuckDB's parquet extension is
+    /// installed to a shared filesystem path (~/.duckdb/extensions/…) on first
+    /// use. Without serialization, parallel tests race to install the extension
+    /// and DuckDB v1.2.2 fails when two threads hit the install step concurrently.
     fn write_parquet(conn: &Connection, path: &Path, select_body: &str) {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap();
         let escaped = escape_path(path);
         conn.execute_batch(&format!(
             "COPY (SELECT {select_body}) TO '{escaped}' (FORMAT PARQUET);"
