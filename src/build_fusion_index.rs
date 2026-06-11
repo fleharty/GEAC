@@ -857,7 +857,7 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
         );
     }
 
-    info!("parsing gene bodies from GTF...");
+    info!(path = %args.gene_annotation.display(), "parsing gene annotation...");
     let mut genes = parse_gene_bodies(&args.gene_annotation)?;
     anyhow::ensure!(
         !genes.is_empty(),
@@ -869,10 +869,10 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
     );
     info!(n_genes = genes.len(), "gene bodies loaded");
 
-    // Build the gene-annotation index from the FULL GTF (before the panel filter)
+    // Build the gene-annotation index from the full annotation (before the panel filter)
     // so per-copy BEDs can name paralogs that fall outside the --genes panel.
     let gene_annot: Option<GeneIntervals> = if args.bed_output_by_copies.is_some() {
-        info!("building full-GTF gene annotation index for per-copy BED labels...");
+        info!("building gene annotation index for per-copy BED labels...");
         Some(GeneIntervals::build(&genes))
     } else {
         None
@@ -890,7 +890,7 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
         );
         if genes.is_empty() {
             anyhow::bail!(
-                "no genes from --genes matched any gene_name in the GTF; \
+                "no genes from --genes matched any gene_name in the annotation; \
                  check that names match exactly (e.g. 'BCR' not 'BCR-ABL1')"
             );
         }
