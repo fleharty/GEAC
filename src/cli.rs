@@ -686,9 +686,13 @@ pub struct FragmentsArgs {
 
 #[derive(Parser, Debug)]
 pub struct BuildFusionIndexArgs {
-    /// Gene annotation file in GTF format (.gtf or .gtf.gz)
+    /// Gene annotation file. Accepted formats:
+    ///   GTF (.gtf, .gtf.gz)        — GENCODE, NCBI RefSeq, or UCSC GTF with 'gene' rows.
+    ///   GenePred (.txt, .txt.gz)   — UCSC table-browser genePredExt+bin (e.g. ncbiRefSeq.txt.gz)
+    ///                                or genePredExt without bin, or refFlat. Format is
+    ///                                auto-detected from file extension and column layout.
     #[arg(long)]
-    pub gtf: PathBuf,
+    pub gene_annotation: PathBuf,
 
     /// Reference FASTA (must be indexed with samtools faidx — .fai required)
     #[arg(long)]

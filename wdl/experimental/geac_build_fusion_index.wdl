@@ -2,7 +2,7 @@ version 1.0
 
 ## geac_build_fusion_index.wdl  [EXPERIMENTAL]
 ##
-## Build a gene-unique k-mer index from a reference FASTA and GTF annotation.
+## Build a gene-unique k-mer index from a reference genome and gene annotation.
 ## The resulting DuckDB index is used by geac_fusions.wdl to detect gene fusions.
 ## Run once per reference genome or gene panel; the index is shared across samples.
 ##
@@ -10,7 +10,11 @@ version 1.0
 ## may change without notice. Do not rely on it in production pipelines.
 ##
 ## Inputs:
-##   gtf                     - Gene annotation file in GTF format (.gtf or .gtf.gz)
+##   gene_annotation         - Gene annotation file. Accepted formats:
+##                               GTF (.gtf, .gtf.gz)      — GENCODE, NCBI RefSeq, or UCSC GTF
+##                               GenePred (.txt, .txt.gz) — UCSC genePredExt+bin (e.g. ncbiRefSeq.txt.gz),
+##                                                          genePredExt without bin, or refFlat.
+##                             Format is auto-detected from file extension and column layout.
 ##   fasta                   - Reference FASTA (must have a .fai index alongside it)
 ##   fasta_index             - Corresponding .fai index (localized alongside fasta by Cromwell)
 ##   index_name              - Base name for the output DuckDB index (default: fusion_index)
@@ -51,7 +55,7 @@ version 1.0
 workflow GeacBuildFusionIndex {
 
     input {
-        File   gtf
+        File   gene_annotation
         File   fasta
         File   fasta_index
         String index_name = "fusion_index"
@@ -77,7 +81,7 @@ workflow GeacBuildFusionIndex {
 
     call BuildFusionIndex {
         input:
-            gtf                     = gtf,
+            gene_annotation         = gene_annotation,
             fasta                   = fasta,
             fasta_index             = fasta_index,
             index_name              = index_name,
@@ -90,7 +94,7 @@ workflow GeacBuildFusionIndex {
             write_bed               = write_bed,
             write_bed_by_copies     = write_bed_by_copies,
             write_gene_stats        = write_gene_stats,
-            edit_distance_filter     = edit_distance_filter,
+            edit_distance_filter    = edit_distance_filter,
             docker_image            = docker_image,
             memory_gb               = memory_gb,
             disk_gb                 = disk_gb,
@@ -110,7 +114,7 @@ workflow GeacBuildFusionIndex {
 task BuildFusionIndex {
 
     input {
-        File   gtf
+        File   gene_annotation
         File   fasta
         File   fasta_index
         String index_name
@@ -148,11 +152,11 @@ task BuildFusionIndex {
         geac --version | awk '{print $2}' > geac_version.txt
 
         geac experimental build-fusion-index \
-            --gtf            ~{gtf} \
-            --fasta          ~{fasta} \
-            --output         ~{output_db} \
-            --kmer-size      ~{kmer_size} \
-            --min-gene-kmers ~{min_gene_kmers} \
+            --gene-annotation ~{gene_annotation} \
+            --fasta           ~{fasta} \
+            --output          ~{output_db} \
+            --kmer-size       ~{kmer_size} \
+            --min-gene-kmers  ~{min_gene_kmers} \
             ~{"--genes " + genes} \
             ~{if check_genome_uniqueness then "--check-genome-uniqueness" else ""} \
             ~{if check_genome_uniqueness then "--max-genome-copies " + max_genome_copies else ""} \

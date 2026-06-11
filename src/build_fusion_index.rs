@@ -78,7 +78,37 @@ struct GeneBody {
     end: usize,   // 0-based exclusive (half-open)
 }
 
-fn parse_gene_bodies(gtf_path: &Path) -> Result<Vec<GeneBody>> {
+/// Dispatch to the correct parser based on file extension.
+///
+/// Supported formats:
+/// - GTF (`.gtf`, `.gtf.gz`): standard GENCODE / NCBI / UCSC GTF with `gene` rows.
+/// - GenePred / refFlat (everything else, e.g. `.txt`, `.txt.gz`): UCSC table-browser
+///   format. Three common variants are detected per-line from column layout:
+///   * genePredExt + bin (ncbiRefSeq.txt.gz): 16+ cols, col[0] is an integer bin,
+///     gene name at col[12], coords at col[4]/col[5].
+///   * genePredExt, no bin: 15+ cols, col[0] is a transcript accession (NM_/NR_/…),
+///     gene name at col[11], coords at col[3]/col[4].
+///   * refFlat: 11 cols, col[0] is the gene name, coords at col[4]/col[5].
+///
+/// GenePred input has one row per transcript; transcripts are merged into a single
+/// gene body (min txStart … max txEnd) per (gene_name, chrom) pair so that k-mers
+/// shared between transcripts of the same gene are not discarded as cross-gene.
+fn parse_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
+    let stem = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    // Strip one level of .gz if present to inspect the underlying extension.
+    let inner = if stem.ends_with(".gz") { &stem[..stem.len() - 3] } else { &stem };
+    if inner.ends_with(".gtf") {
+        parse_gtf_gene_bodies(path)
+    } else {
+        parse_genepred_gene_bodies(path)
+    }
+}
+
+fn parse_gtf_gene_bodies(gtf_path: &Path) -> Result<Vec<GeneBody>> {
     let file = std::fs::File::open(gtf_path)
         .with_context(|| format!("cannot open GTF: {}", gtf_path.display()))?;
     let reader: Box<dyn BufRead> =
@@ -123,6 +153,81 @@ fn parse_gene_bodies(gtf_path: &Path) -> Result<Vec<GeneBody>> {
             end,
         });
     }
+    Ok(genes)
+}
+
+/// Parse UCSC GenePred / refFlat annotation into gene bodies.
+///
+/// Transcripts are merged per (gene_name, chrom) into a single body so that
+/// cross-transcript k-mers within the same gene are not discarded.
+fn parse_genepred_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("cannot open annotation file: {}", path.display()))?;
+    let reader: Box<dyn BufRead> =
+        if path.extension().and_then(|e| e.to_str()) == Some("gz") {
+            Box::new(BufReader::new(GzDecoder::new(file)))
+        } else {
+            Box::new(BufReader::new(file))
+        };
+
+    // Accumulate per (gene_name, chrom) → (min_start, max_end).
+    let mut gene_map: HashMap<(String, String), (usize, usize)> = HashMap::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+
+        // Detect variant by column layout:
+        //   col[0] parses as integer → genePredExt+bin (e.g. ncbiRefSeq.txt)
+        //   col[0] looks like a transcript accession → genePredExt without bin
+        //   otherwise → refFlat (gene name first)
+        let (gene_name, chrom, start_str, end_str) =
+            if fields[0].parse::<u32>().is_ok() {
+                // genePredExt + bin: bin name chrom strand txStart txEnd … name2
+                if fields.len() < 13 { continue; }
+                (fields[12], fields[1], fields[4], fields[5])
+            } else if fields.len() >= 15
+                && (fields[0].starts_with("NM_")
+                    || fields[0].starts_with("NR_")
+                    || fields[0].starts_with("XM_")
+                    || fields[0].starts_with("XR_")
+                    || fields[0].starts_with("ENST"))
+            {
+                // genePredExt without bin: name chrom strand txStart txEnd … name2
+                (fields[11], fields[1], fields[3], fields[4])
+            } else {
+                // refFlat: geneName name chrom strand txStart txEnd …
+                if fields.len() < 6 { continue; }
+                (fields[0], fields[2], fields[4], fields[5])
+            };
+
+        // txStart / txEnd are already 0-based half-open in GenePred.
+        let start: usize = match start_str.parse() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let end: usize = match end_str.parse() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if end <= start || gene_name.is_empty() {
+            continue;
+        }
+
+        let entry = gene_map
+            .entry((gene_name.to_string(), chrom.to_string()))
+            .or_insert((start, end));
+        entry.0 = entry.0.min(start);
+        entry.1 = entry.1.max(end);
+    }
+
+    let genes = gene_map
+        .into_iter()
+        .map(|((gene_name, chrom), (start, end))| GeneBody { gene_name, chrom, start, end })
+        .collect();
     Ok(genes)
 }
 
@@ -753,7 +858,15 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
     }
 
     info!("parsing gene bodies from GTF...");
-    let mut genes = parse_gene_bodies(&args.gtf)?;
+    let mut genes = parse_gene_bodies(&args.gene_annotation)?;
+    anyhow::ensure!(
+        !genes.is_empty(),
+        "no gene records found in {}. Supported formats: GTF (.gtf/.gtf.gz) with \
+         'gene' feature rows, or GenePred/refFlat (.txt/.txt.gz). Check that the \
+         file is not empty and that gene names are present (name2 column for \
+         genePredExt, geneName column for refFlat).",
+        args.gene_annotation.display()
+    );
     info!(n_genes = genes.len(), "gene bodies loaded");
 
     // Build the gene-annotation index from the FULL GTF (before the panel filter)

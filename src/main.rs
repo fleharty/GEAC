@@ -44,6 +44,7 @@ fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive(tracing::Level::INFO.into()),
         )
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
 
     let cli = Cli::parse();
@@ -324,7 +325,7 @@ fn main() -> Result<()> {
             match args.command {
                 ExperimentalCommand::BuildFusionIndex(args) => {
                     info!(
-                        gtf = %args.gtf.display(),
+                        gene_annotation = %args.gene_annotation.display(),
                         fasta = %args.fasta.display(),
                         output = %args.output.display(),
                         kmer_size = args.kmer_size,
