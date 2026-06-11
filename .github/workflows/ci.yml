@@ -25,7 +25,8 @@ jobs:
             libcurl4-openssl-dev \
             zlib1g-dev \
             libssl-dev \
-            libdeflate-dev
+            libdeflate-dev \
+            samtools
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
