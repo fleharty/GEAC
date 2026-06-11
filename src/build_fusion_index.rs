@@ -1059,41 +1059,53 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
             n_threads,
             check_genome_uniqueness = args.check_genome_uniqueness,
             edit_distance_filter = args.edit_distance_filter,
-            "loading genome sequences for parallel scan..."
+            "starting parallel genome scan..."
         );
 
-        // Load all sequences on the main thread; faidx::Reader is not Send.
-        let sequences: Vec<(String, Vec<u8>)> = seq_list
-            .iter()
-            .filter_map(|(seq_name, seq_len)| {
-                match fai.fetch_seq(seq_name, 0, seq_len.saturating_sub(1)) {
-                    Ok(s) => Some((seq_name.clone(), s.to_vec())),
-                    Err(e) => {
-                        tracing::warn!(seq = %seq_name, "failed to fetch sequence: {e}");
-                        None
-                    }
-                }
-            })
-            .collect();
-        info!(n_loaded = sequences.len(), "sequences loaded, starting parallel scan");
+        // Sort longest sequences first so the largest chromosomes are distributed
+        // across threads at startup (longest-job-first scheduling).  Without this,
+        // rayon assigns items in FASTA order: one thread gets chr1 (249 MB) while
+        // others burn through hundreds of small alt contigs and then sit idle.
+        let mut seq_list_sorted = seq_list.clone();
+        seq_list_sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1));
 
+        let fasta_path = args.fasta.clone();
         let ed = args.edit_distance_filter;
         let need_counts = args.check_genome_uniqueness;
 
-        // Each parallel task returns:
+        // Each parallel task opens its own faidx::Reader (not Send, so created
+        // inside the closure) and fetches exactly one sequence — peak RAM for
+        // sequence data is n_threads × largest_contig rather than the full genome.
+        //
+        // Each task returns:
         //   .0  local_counts: candidate k-mer → copy count on this sequence
         //   .1  local_rejects: candidates with a genome neighbor within ed
         //   .2  local_annot: per-k-mer gene labels for per-copy BED (only when needed)
         type ScanOut = (HashMap<u64, u8>, HashSet<u64>, HashMap<u64, GeneAnnot>);
 
-        let scan_results: Vec<ScanOut> = sequences
+        let scan_results: Vec<ScanOut> = seq_list_sorted
             .par_iter()
-            .map(|(seq_name, seq)| {
+            .filter_map(|(seq_name, seq_len)| {
+                let fai_local = match faidx::Reader::from_path(&fasta_path) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::warn!(seq = %seq_name, "failed to open FASTA in worker: {e}");
+                        return None;
+                    }
+                };
+                let seq = match fai_local.fetch_seq(seq_name, 0, seq_len.saturating_sub(1)) {
+                    Ok(s) => s.to_vec(),
+                    Err(e) => {
+                        tracing::warn!(seq = %seq_name, "failed to fetch sequence: {e}");
+                        return None;
+                    }
+                };
+
                 let mut local_counts: HashMap<u64, u8> = HashMap::new();
                 let mut local_rejects: HashSet<u64> = HashSet::new();
                 let mut local_annot: HashMap<u64, GeneAnnot> = HashMap::new();
 
-                for (kmer, pos) in kmer_iter(seq, k) {
+                for (kmer, pos) in kmer_iter(&seq, k) {
                     // Genome-uniqueness copy counting and per-copy BED annotation.
                     if need_counts && kmer_to_gene.contains_key(&kmer) {
                         let cnt = local_counts.entry(kmer).or_insert(0);
@@ -1142,7 +1154,7 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
                 }
 
                 info!(seq = %seq_name, "sequence scanned");
-                (local_counts, local_rejects, local_annot)
+                Some((local_counts, local_rejects, local_annot))
             })
             .collect();
 
