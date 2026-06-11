@@ -1101,3 +1101,36 @@ may not work in cloud or IGV contexts.
 By default, structural errors exit non-zero while warnings are reported but do not
 fail the command. `--strict` promotes warnings to a non-zero exit for CI/preflight
 use.
+
+---
+
+## Edit-distance k-mer filter in `build-fusion-index` (2026-06-11)
+
+Added `--edit-distance-filter N` to `geac experimental build-fusion-index`. With N=1,
+any candidate k-mer that has a Hamming-distance-1 neighbor anywhere in the reference
+genome is discarded. The motivation: a genome-unique k-mer (no exact duplicate) can
+still cause fusion false positives if a single sequencing error in a non-fusion read
+produces the candidate k-mer verbatim.
+
+**Implementation:** Before the genome scan, for each candidate canonical k-mer the
+code enumerates all single-base substitutions on both the canonical form and its
+reverse complement, taking the canonical form of each resulting k-mer. These
+~138 neighbors (for k=23) are stored in a `HashMap<neighbor_hash, Vec<candidate>>`.
+During the genome scan (which the flag triggers independently of
+`--check-genome-uniqueness`), every genome k-mer is looked up in this map; any
+candidate with a hit in the genome is added to a rejection set. The filter runs
+before gene-stats output so reported per-gene counts reflect the final usable k-mers.
+
+The approach is "inverted BFS": rather than collecting all genome k-mers and checking
+candidates against that large set (which would require tens of GB for hg38), we
+enumerate candidate neighbors once (~138 × n_candidates entries) and probe only those
+during the genome scan. Both flags can be combined:
+`--check-genome-uniqueness --edit-distance-filter 1` enforces exact uniqueness AND
+edit-distance robustness simultaneously.
+
+**General N:** `hamming_neighbors_canonical` uses BFS in canonical k-mer space to
+enumerate all neighbors at Hamming distance 1..=N, so `--edit-distance-filter 2`
+(checking distance-1 and distance-2 neighbors) is also supported, at higher cost.
+
+The WDL (`wdl/experimental/geac_build_fusion_index.wdl`) was updated with an
+`edit_distance_filter` input (default 0).

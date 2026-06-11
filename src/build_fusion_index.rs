@@ -11,6 +11,64 @@ use tracing::info;
 use crate::cli::BuildFusionIndexArgs;
 use crate::kmer::kmer_iter;
 
+// ─── Edit-distance helpers ────────────────────────────────────────────────────
+
+/// Compute the reverse complement of a 2-bit encoded k-mer.
+///
+/// Encoding matches `kmer_iter`: A=0 C=1 G=2 T=3, most-significant 2 bits are
+/// the leftmost base. Complement flips bits 1 and 0 independently: A↔T (0↔3),
+/// C↔G (1↔2), which is `3 ^ base`. Reversing is done by popping bases from the
+/// LSB and pushing them onto the MSB of `rc`.
+fn reverse_complement(kmer: u64, klen: usize) -> u64 {
+    let mut rc = 0u64;
+    let mut tmp = kmer;
+    for _ in 0..klen {
+        rc = (rc << 2) | (3 ^ (tmp & 3));
+        tmp >>= 2;
+    }
+    rc & ((1u64 << (2 * klen)) - 1)
+}
+
+/// Return all canonical k-mers reachable from `kmer` by exactly 1..=`max_dist`
+/// single-base substitutions (in DNA space), excluding `kmer` itself.
+///
+/// Enumerates changes on both the canonical k-mer and its reverse complement so
+/// that all DNA-space neighbors are captured. Uses BFS to avoid re-visiting
+/// k-mers already found at a shorter distance.
+fn hamming_neighbors_canonical(kmer: u64, klen: usize, max_dist: u32) -> Vec<u64> {
+    if max_dist == 0 {
+        return Vec::new();
+    }
+    let mut seen: HashSet<u64> = HashSet::new();
+    seen.insert(kmer);
+    let mut frontier = vec![kmer];
+
+    for _ in 0..max_dist {
+        let mut next: Vec<u64> = Vec::new();
+        for base in frontier {
+            let rc = reverse_complement(base, klen);
+            for &strand in &[base, rc] {
+                for pos in 0..klen {
+                    let shift = 2 * (klen - 1 - pos);
+                    let orig = (strand >> shift) & 3;
+                    for delta in [1u64, 2, 3] {
+                        let nbr_fwd = (strand & !(3u64 << shift)) | ((orig ^ delta) << shift);
+                        let nbr_rc = reverse_complement(nbr_fwd, klen);
+                        let canonical = nbr_fwd.min(nbr_rc);
+                        if seen.insert(canonical) {
+                            next.push(canonical);
+                        }
+                    }
+                }
+            }
+        }
+        frontier = next;
+    }
+
+    seen.remove(&kmer);
+    seen.into_iter().collect()
+}
+
 // ─── Gene body ────────────────────────────────────────────────────────────────
 
 struct GeneBody {
@@ -837,27 +895,56 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
         "k-mers after cross-gene dedup"
     );
 
-    // Step 2 — optional genome-wide uniqueness pass.
-    // Scans the full FASTA and removes k-mers that appear more than once in the
-    // genome (e.g. in repetitive intergenic regions). At k ≥ 19 the vast majority
-    // of candidate k-mers that survived cross-gene dedup are already genome-unique,
-    // so this pass is skipped by default. Enable with --check-genome-uniqueness when
-    // you need the stricter guarantee and have sufficient RAM (the candidate set must
-    // fit in a HashMap — can be tens of GB for whole-genome annotations).
-    // Genome-wide copy counts, populated only when the genome pass runs. Kept
-    // alive past the pass so the stats/histogram writers and the index can use it.
+    // Step 2 — optional genome-wide passes: uniqueness check and/or edit-distance
+    // neighbor filtering. Both require scanning the full FASTA.
+    //
+    // --check-genome-uniqueness: removes k-mers that appear more than once genome-
+    // wide. Requires tens of GB of RAM for whole-genome annotations.
+    //
+    // --edit-distance-filter N: removes k-mers that have any genome neighbor within
+    // Hamming distance N (e.g. N=1 rejects any candidate with a 1-substitution
+    // genome match, meaning a single read error could produce the candidate k-mer).
+
+    // Build Hamming-neighbor map for the edit-distance filter.
+    // Maps each neighbor canonical hash → list of candidate k-mers that have it
+    // as a neighbor.  Populated before the genome scan; queried for every genome
+    // k-mer during the scan to accumulate edit_reject.
+    let mut edit_reject: HashSet<u64> = HashSet::new();
+    let neighbor_to_candidates: HashMap<u64, Vec<u64>> = if args.edit_distance_filter > 0 {
+        let max_hamming = args.edit_distance_filter;
+        info!(
+            n_candidates = kmer_to_gene.len(),
+            max_hamming_dist = max_hamming,
+            "building Hamming-neighbor map for edit-distance filter..."
+        );
+        let mut map: HashMap<u64, Vec<u64>> = HashMap::new();
+        for &candidate in kmer_to_gene.keys() {
+            for neighbor in hamming_neighbors_canonical(candidate, k, max_hamming) {
+                map.entry(neighbor).or_default().push(candidate);
+            }
+        }
+        info!(n_neighbor_entries = map.len(), "neighbor map built");
+        map
+    } else {
+        HashMap::new()
+    };
+
+    // Genome-wide copy counts, populated only when --check-genome-uniqueness runs.
+    // Kept alive past the pass so the stats/histogram writers and the index can use it.
     let mut genome_copies: Option<HashMap<u64, u8>> = None;
     // Per-k-mer gene annotation (which full-GTF genes each occurrence falls in),
     // accumulated during the genome scan only when per-copy BEDs are requested.
     let mut kmer_annot: HashMap<u64, GeneAnnot> = HashMap::new();
-    if args.check_genome_uniqueness {
+    if args.check_genome_uniqueness || args.edit_distance_filter > 0 {
         let seq_list = read_fai_sequences(&args.fasta)?;
         let total_bases: u64 = seq_list.iter().map(|(_, l)| *l as u64).sum();
         info!(
             n_sequences = seq_list.len(),
             total_bases,
             n_candidates = kmer_to_gene.len(),
-            "genome-wide uniqueness pass enabled — this requires ~20 bytes × n_candidates RAM"
+            check_genome_uniqueness = args.check_genome_uniqueness,
+            edit_distance_filter = args.edit_distance_filter,
+            "genome-wide scan starting — this requires ~20 bytes × n_candidates RAM"
         );
 
         let mut genome_counts: HashMap<u64, u8> =
@@ -892,6 +979,12 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
                         }
                     }
                 }
+                // Edit-distance neighbor check: runs for every genome k-mer (not
+                // just candidates) so we catch reference k-mers that are close to
+                // — but distinct from — our candidates.
+                if let Some(candidates) = neighbor_to_candidates.get(&kmer) {
+                    edit_reject.extend(candidates.iter().copied());
+                }
                 let pos_in_seq = pos_in_seq as u64;
                 if pos_in_seq >= next_report {
                     let total_done = bases_done + pos_in_seq;
@@ -900,7 +993,7 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
                         chrom = %seq_name,
                         position = pos_in_seq,
                         pct_complete = pct,
-                        "genome-wide uniqueness pass"
+                        "genome-wide scan"
                     );
                     next_report += PROGRESS_INTERVAL;
                 }
@@ -912,7 +1005,23 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
 
         // Defer the retain until after stats are written, so the stats see the
         // full panel-unique survivor set together with every genome-wide count.
-        genome_copies = Some(genome_counts);
+        if args.check_genome_uniqueness {
+            genome_copies = Some(genome_counts);
+        }
+    }
+
+    // Apply the edit-distance filter now, before stats are written, so that stats
+    // reflect the k-mers that will actually end up in the index.
+    if args.edit_distance_filter > 0 {
+        let before = kmer_to_gene.len();
+        kmer_to_gene.retain(|kmer, _| !edit_reject.contains(kmer));
+        kmer_to_pos.retain(|kmer, _| kmer_to_gene.contains_key(kmer));
+        info!(
+            n_rejected = before - kmer_to_gene.len(),
+            n_remaining = kmer_to_gene.len(),
+            edit_distance_filter = args.edit_distance_filter,
+            "k-mers rejected by edit-distance filter"
+        );
     }
 
     // Per-gene uniqueness stats and the global copy histogram are written here —

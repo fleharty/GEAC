@@ -760,6 +760,14 @@ pub struct BuildFusionIndexArgs {
     /// before the --min-gene-kmers drop so even excluded genes report real values.
     #[arg(long)]
     pub gene_stats_output: Option<PathBuf>,
+
+    /// Discard candidate k-mers that have any reference genome k-mer within
+    /// Hamming distance N. Use --edit-distance-filter 1 to retain only k-mers
+    /// where no single-base sequencing error in a reference read can produce the
+    /// candidate k-mer. Triggers a full genome scan (similar overhead to
+    /// --check-genome-uniqueness). Default 0 disables the filter.
+    #[arg(long, default_value_t = 0)]
+    pub edit_distance_filter: u32,
 }
 
 #[derive(Parser, Debug)]

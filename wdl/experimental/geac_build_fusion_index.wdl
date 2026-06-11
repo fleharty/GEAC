@@ -31,6 +31,10 @@ version 1.0
 ##   write_bed_by_copies     - Write per-copy-tier BED files, one per copy count
 ##                             (default: false). Requires check_genome_uniqueness=true.
 ##   write_gene_stats        - Write a per-gene uniqueness TSV (default: false)
+##   edit_distance_filter    - Discard candidates with any reference k-mer within Hamming
+##                             distance N (default: 0 = disabled). Use 1 to keep only k-mers
+##                             where no single-base sequencing error can produce a different
+##                             reference k-mer. Triggers a full genome scan.
 ##   docker_image            - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##   memory_gb               - Memory in GB (default: 64; genome-uniqueness pass needs more)
 ##   disk_gb                 - Disk space in GB (default: 100)
@@ -63,6 +67,7 @@ workflow GeacBuildFusionIndex {
         Boolean write_bed            = false
         Boolean write_bed_by_copies  = false
         Boolean write_gene_stats     = false
+        Int     edit_distance_filter  = 0
 
         String docker_image
         Int    memory_gb   = 64
@@ -85,6 +90,7 @@ workflow GeacBuildFusionIndex {
             write_bed               = write_bed,
             write_bed_by_copies     = write_bed_by_copies,
             write_gene_stats        = write_gene_stats,
+            edit_distance_filter     = edit_distance_filter,
             docker_image            = docker_image,
             memory_gb               = memory_gb,
             disk_gb                 = disk_gb,
@@ -120,6 +126,7 @@ task BuildFusionIndex {
         Boolean write_bed
         Boolean write_bed_by_copies
         Boolean write_gene_stats
+        Int     edit_distance_filter
 
         String docker_image
         Int    memory_gb
@@ -152,7 +159,8 @@ task BuildFusionIndex {
             ~{if write_copy_histogram then "--copy-histogram-output " + copy_histogram_tsv else ""} \
             ~{if write_bed            then "--bed-output "             + bed_file           else ""} \
             ~{if write_bed_by_copies  then "--bed-output-by-copies "   + bed_by_copies_prefix else ""} \
-            ~{if write_gene_stats     then "--gene-stats-output "      + gene_stats_tsv     else ""}
+            ~{if write_gene_stats     then "--gene-stats-output "      + gene_stats_tsv     else ""} \
+            ~{if edit_distance_filter > 0 then "--edit-distance-filter " + edit_distance_filter else ""}
     >>>
 
     output {
