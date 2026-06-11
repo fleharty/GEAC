@@ -60,7 +60,7 @@ Build the DuckDB index of per-gene unique k-mers.
 
 ```bash
 geac experimental build-fusion-index \
-    --gtf gencode.v47.annotation.gtf.gz \
+    --gene-annotation gencode.v47.annotation.gtf.gz \
     --fasta Homo_sapiens_assembly38.fasta \
     --genes my_genes.txt \
     --output panel_fusion_index.duckdb \
@@ -76,7 +76,7 @@ geac experimental build-fusion-index \
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--gtf <PATH>` | — | Gene annotation (`.gtf` / `.gtf.gz`). Only `gene` feature lines are read. |
+| `--gene-annotation <PATH>` | — | Gene annotation file. Accepted formats: GTF (`.gtf`, `.gtf.gz`) — GENCODE, NCBI RefSeq, or UCSC GTF; GenePred/refFlat (`.txt`, `.txt.gz`) — UCSC genePredExt+bin (e.g. `ncbiRefSeq.txt.gz`), genePredExt without bin, or refFlat. Format is auto-detected from file extension and column layout. |
 | `--fasta <PATH>` | — | Reference FASTA; requires a `.fai` (`samtools faidx`). |
 | `--kmer-size <N>` | `23` | K-mer length (1–31). Must match the value used by `fusions`/`extract-gene`. |
 | `--min-gene-kmers <N>` | `1` | Drop genes with fewer than `N` retained unique k-mers. Applied **after** the genome-copy filter. Default `1` keeps any gene with at least one usable k-mer; raise it to suppress repetitive genes. |
@@ -428,7 +428,7 @@ is a global property that requires scanning the whole genome regardless.
 ```bash
 # 1. Build a targeted panel index with near-unique k-mers retained, plus diagnostics.
 geac experimental build-fusion-index \
-    --gtf gencode.v47.annotation.gtf.gz --fasta ref.fasta \
+    --gene-annotation gencode.v47.annotation.gtf.gz --fasta ref.fasta \
     --genes panel.txt --output panel.duckdb \
     --min-gene-kmers 1 --check-genome-uniqueness --max-genome-copies 2 \
     --bed-output-by-copies panel_kmers \

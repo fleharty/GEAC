@@ -1134,3 +1134,35 @@ enumerate all neighbors at Hamming distance 1..=N, so `--edit-distance-filter 2`
 
 The WDL (`wdl/experimental/geac_build_fusion_index.wdl`) was updated with an
 `edit_distance_filter` input (default 0).
+
+---
+
+## GenePred/refFlat support and `--gene-annotation` rename in `build-fusion-index` (2026-06-11)
+
+The `--gtf` flag was renamed to `--gene-annotation` and extended to accept UCSC
+GenePred/refFlat annotation files in addition to GTF. The immediate trigger was
+`ncbiRefSeq.txt.gz` producing an instant empty index — the GTF parser found no
+`"gene"` feature rows, silently yielding 0 candidates, and the command completed
+in seconds with an empty output DuckDB.
+
+**Two fixes applied:**
+
+1. **Empty-annotation guard** — `anyhow::ensure!(!genes.is_empty(), ...)` added
+   after parsing. The command now exits with a clear error rather than writing
+   an empty index.
+
+2. **GenePred parser** — `parse_genepred_gene_bodies` auto-detects the variant
+   per line: integer first column → genePredExt+bin (e.g. `ncbiRefSeq.txt.gz`,
+   gene name at col[12]); `NM_`/`NR_` prefix → genePredExt without bin (col[11]);
+   otherwise → refFlat (col[0]). Transcripts are merged by `(gene_name, chrom)`
+   into `(min_txStart, max_txEnd)` gene bodies so k-mers shared across isoforms
+   of the same gene are not flagged as cross-gene duplicates.
+
+Format is dispatched by file extension: `.gtf` / `.gtf.gz` → GTF parser;
+`.txt` / `.txt.gz` → GenePred parser.
+
+**ANSI escape codes** in log output were also suppressed when stderr is not a
+terminal (e.g. Terra/cloud job logs). `tracing_subscriber::fmt()` now calls
+`.with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))`.
+
+All three changes (EXPERIMENTAL.md, WDL, Rust source) shipped together in v0.4.42.
