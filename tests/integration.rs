@@ -2570,7 +2570,7 @@ fn fusions_label_ordering_consistent_across_outputs() {
     assert_geac_success(&[
         "experimental",
         "build-fusion-index",
-        "--gtf",
+        "--gene-annotation",
         gtf.to_str().unwrap(),
         "--fasta",
         fa.to_str().unwrap(),
@@ -2680,7 +2680,7 @@ fn fusions_junction_coherence_filter() {
     assert_geac_success(&[
         "experimental",
         "build-fusion-index",
-        "--gtf", gtf.to_str().unwrap(),
+        "--gene-annotation", gtf.to_str().unwrap(),
         "--fasta", fa.to_str().unwrap(),
         "--min-gene-kmers", "1",
         "--output", index.to_str().unwrap(),
@@ -2829,7 +2829,7 @@ fn fusions_pon_tags_calls_instead_of_dropping() {
     let index = dir.path().join("idx.duckdb");
     assert_geac_success(&[
         "experimental", "build-fusion-index",
-        "--gtf", gtf.to_str().unwrap(),
+        "--gene-annotation", gtf.to_str().unwrap(),
         "--fasta", fa.to_str().unwrap(),
         "--min-gene-kmers", "1",
         "--output", index.to_str().unwrap(),
