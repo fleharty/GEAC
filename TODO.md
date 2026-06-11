@@ -239,8 +239,18 @@ Full design, rationale, and the niche this caller aims to own are in
   `discordant_mates` as distinct columns.
 - [ ] **VAF-like quantification** — supporting reads as a fraction of local depth;
   gates the longitudinal low-AF monitoring niche.
-- [ ] **Benchmarking harness** — fusion-positive reference set (SEQC2, EWSR1-FLI1
-  lines) with dilution series; report sensitivity/specificity per release.
+- [ ] **Reduce FP fusion calls** — currently producing too many false positives on
+  real targeted panel data to be clinically useful. Needs systematic investigation:
+  run the caller on cell line BAMs (raw, simplex, duplex), catalog the FP calls,
+  identify common patterns (gene pair recurrence, low supporting read count, poor
+  k-mer uniqueness, same-chromosome proximity, probe-capture artifacts), and tighten
+  filters accordingly. This must be resolved before benchmarking is meaningful.
+- [ ] **Benchmarking harness** — once FP rate is acceptable: ground truth manifest
+  of known fusions per cell line sample (gene pairs, confidence tier, known
+  complications); WDL runner on Terra against cell line BAMs in GCS; scoring script
+  reporting TP/FP/FN per sample/read-type/confidence tier; GitHub Action to trigger
+  Terra workspace and post results as a workflow summary. Build in phases: local
+  scoring first, then Terra WDL, then GitHub integration.
 
 ---
 
