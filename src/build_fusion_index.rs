@@ -188,7 +188,7 @@ fn parse_genepred_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
             if fields[0].parse::<u32>().is_ok() {
                 // genePredExt + bin: bin name chrom strand txStart txEnd … name2
                 if fields.len() < 13 { continue; }
-                (fields[12], fields[1], fields[4], fields[5])
+                (fields[12], fields[2], fields[4], fields[5])
             } else if fields.len() >= 15
                 && (fields[0].starts_with("NM_")
                     || fields[0].starts_with("NR_")

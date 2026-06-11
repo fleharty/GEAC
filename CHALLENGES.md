@@ -1192,3 +1192,31 @@ compatibility.
 browser-facing resource URIs. Keep compute inputs (`File`) and canonical metadata
 URIs (`String`) as separate workflow inputs when the original URI matters after
 the task finishes.
+
+---
+
+## GenePred+bin wrong chromosome column → silent empty index (2026-06-11)
+
+**Symptom:** `build-fusion-index` with `ncbiRefSeq.txt.gz` and
+`--check-genome-uniqueness` finished in seconds instead of the expected 20–40
+minutes for a full hg38 scan. The output DuckDB was essentially empty.
+
+**Root cause:** In `parse_genepred_gene_bodies`, the genePredExt+bin branch
+(triggered when `fields[0]` parses as a `u32` bin number) assigned `chrom` to
+`fields[1]` (the transcript accession, e.g. `NM_001234.5`) instead of `fields[2]`
+(the chromosome, e.g. `chr1`). Every gene was recorded with a chrom of
+`NM_…`, which was never found in the FASTA sequence dictionary, so 0 k-mers were
+extracted. With an empty candidate set the genome scan still ran but had nothing to
+look up, completing almost instantly.
+
+**Why it was hard to catch:** The empty-annotation guard (`anyhow::ensure!(!genes.is_empty())`)
+only checks that at least one gene *record* was parsed. With the wrong chromosome,
+thousands of genes were parsed correctly — they just produced no k-mers when the
+FASTA was scanned. The output index was written without error; the only signal was
+anomalous speed and an empty gene_stats TSV.
+
+**Fix:** Change `fields[1]` to `fields[2]` in the genePredExt+bin arm.
+
+**Lesson:** When adding a parser for a new tabular format, write a small unit test
+that asserts specific gene names, chromosomes, start, and end positions against a
+known two- or three-row fixture before running end-to-end.
