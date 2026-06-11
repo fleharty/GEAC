@@ -245,6 +245,16 @@ Full design, rationale, and the niche this caller aims to own are in
   identify common patterns (gene pair recurrence, low supporting read count, poor
   k-mer uniqueness, same-chromosome proximity, probe-capture artifacts), and tighten
   filters accordingly. This must be resolved before benchmarking is meaningful.
+- [ ] **Edit-distance k-mer filtering in `build-fusion-index`** — one hypothesis for
+  excess FPs: a k-mer that is genome-unique in the exact sense can still match a read
+  carrying a sequencing error (edit distance 1 from a reference k-mer). Add a
+  `--min-edit-distance <N>` flag to `build-fusion-index` that discards any candidate
+  k-mer with a reference neighbor within Hamming distance N. Implementation: build a
+  hash set of all genome k-mers (reuses the `--check-genome-uniqueness` pass), then
+  for each candidate enumerate its ~2,400 neighbors at distance ≤ 2 and reject if any
+  hit the set. Computationally similar cost to the existing genome-uniqueness pass;
+  add to `geac_build_fusion_index.wdl` once implemented. Evaluate whether this
+  meaningfully reduces FPs before committing to it as a default.
 - [ ] **Benchmarking harness** — once FP rate is acceptable: ground truth manifest
   of known fusions per cell line sample (gene pairs, confidence tier, known
   complications); WDL runner on Terra against cell line BAMs in GCS; scoring script
