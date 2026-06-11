@@ -772,6 +772,12 @@ pub struct BuildFusionIndexArgs {
     /// --check-genome-uniqueness). Default 0 disables the filter.
     #[arg(long, default_value_t = 0)]
     pub edit_distance_filter: u32,
+
+    /// Number of threads for the parallel genome scan used by
+    /// --check-genome-uniqueness and --edit-distance-filter. 0 uses all logical
+    /// CPUs on the machine. Has no effect when neither genome-scan flag is set.
+    #[arg(long, default_value_t = 0)]
+    pub threads: u32,
 }
 
 #[derive(Parser, Debug)]

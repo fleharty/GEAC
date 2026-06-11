@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use duckdb::Connection;
 use flate2::read::GzDecoder;
+use rayon::prelude::*;
 use rust_htslib::faidx;
 use tracing::info;
 
@@ -836,6 +837,21 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
     let k = args.kmer_size as usize;
     anyhow::ensure!(k > 0 && k <= 31, "--kmer-size must be between 1 and 31");
 
+    if args.threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads as usize)
+            .build_global()
+            .unwrap_or_else(|e| tracing::warn!("could not set rayon thread count: {e}"));
+    }
+    info!(
+        threads = if args.threads == 0 {
+            rayon::current_num_threads()
+        } else {
+            args.threads as usize
+        },
+        "thread pool ready"
+    );
+
     // --max-genome-copies and --copy-histogram-output both depend on the
     // genome-wide copy counts, which only exist when the genome pass runs.
     anyhow::ensure!(
@@ -1011,113 +1027,140 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
     // Step 2 — optional genome-wide passes: uniqueness check and/or edit-distance
     // neighbor filtering. Both require scanning the full FASTA.
     //
-    // --check-genome-uniqueness: removes k-mers that appear more than once genome-
-    // wide. Requires tens of GB of RAM for whole-genome annotations.
+    // --check-genome-uniqueness: removes k-mers that appear more than once
+    // genome-wide.
     //
-    // --edit-distance-filter N: removes k-mers that have any genome neighbor within
-    // Hamming distance N (e.g. N=1 rejects any candidate with a 1-substitution
-    // genome match, meaning a single read error could produce the candidate k-mer).
+    // --edit-distance-filter N: for every genome k-mer G, enumerates all canonical
+    // k-mers within Hamming distance N of G and rejects any that are candidates.
+    // This "flipped" direction avoids pre-building a large neighbor map; memory is
+    // O(n_candidates) rather than O(138 × n_candidates).
+    //
+    // Both passes are fused into a single parallel scan over genome sequences.
+    // Sequences are loaded sequentially (faidx::Reader is not Send), then processed
+    // in parallel with rayon, one task per chromosome.
 
-    // Build Hamming-neighbor map for the edit-distance filter.
-    // Maps each neighbor canonical hash → list of candidate k-mers that have it
-    // as a neighbor.  Populated before the genome scan; queried for every genome
-    // k-mer during the scan to accumulate edit_reject.
     let mut edit_reject: HashSet<u64> = HashSet::new();
-    let neighbor_to_candidates: HashMap<u64, Vec<u64>> = if args.edit_distance_filter > 0 {
-        let max_hamming = args.edit_distance_filter;
-        info!(
-            n_candidates = kmer_to_gene.len(),
-            max_hamming_dist = max_hamming,
-            "building Hamming-neighbor map for edit-distance filter..."
-        );
-        let mut map: HashMap<u64, Vec<u64>> = HashMap::new();
-        for &candidate in kmer_to_gene.keys() {
-            for neighbor in hamming_neighbors_canonical(candidate, k, max_hamming) {
-                map.entry(neighbor).or_default().push(candidate);
-            }
-        }
-        info!(n_neighbor_entries = map.len(), "neighbor map built");
-        map
-    } else {
-        HashMap::new()
-    };
-
-    // Genome-wide copy counts, populated only when --check-genome-uniqueness runs.
-    // Kept alive past the pass so the stats/histogram writers and the index can use it.
     let mut genome_copies: Option<HashMap<u64, u8>> = None;
-    // Per-k-mer gene annotation (which full-GTF genes each occurrence falls in),
-    // accumulated during the genome scan only when per-copy BEDs are requested.
     let mut kmer_annot: HashMap<u64, GeneAnnot> = HashMap::new();
+
     if args.check_genome_uniqueness || args.edit_distance_filter > 0 {
         let seq_list = read_fai_sequences(&args.fasta)?;
         let total_bases: u64 = seq_list.iter().map(|(_, l)| *l as u64).sum();
+
+        let n_threads = if args.threads == 0 {
+            rayon::current_num_threads()
+        } else {
+            args.threads as usize
+        };
         info!(
             n_sequences = seq_list.len(),
             total_bases,
             n_candidates = kmer_to_gene.len(),
+            n_threads,
             check_genome_uniqueness = args.check_genome_uniqueness,
             edit_distance_filter = args.edit_distance_filter,
-            "genome-wide scan starting — this requires ~20 bytes × n_candidates RAM"
+            "loading genome sequences for parallel scan..."
         );
 
-        let mut genome_counts: HashMap<u64, u8> =
-            kmer_to_gene.keys().map(|&kh| (kh, 0u8)).collect();
-
-        const PROGRESS_INTERVAL: u64 = 100_000_000;
-        let mut bases_done: u64 = 0;
-
-        for (seq_name, seq_len) in &seq_list {
-            info!(seq = %seq_name, len = seq_len, "scanning sequence...");
-            let seq = match fai.fetch_seq(seq_name, 0, seq_len.saturating_sub(1)) {
-                Ok(s) => s.to_vec(),
-                Err(e) => {
-                    tracing::warn!(seq = %seq_name, "failed to fetch sequence: {e}");
-                    continue;
+        // Load all sequences on the main thread; faidx::Reader is not Send.
+        let sequences: Vec<(String, Vec<u8>)> = seq_list
+            .iter()
+            .filter_map(|(seq_name, seq_len)| {
+                match fai.fetch_seq(seq_name, 0, seq_len.saturating_sub(1)) {
+                    Ok(s) => Some((seq_name.clone(), s.to_vec())),
+                    Err(e) => {
+                        tracing::warn!(seq = %seq_name, "failed to fetch sequence: {e}");
+                        None
+                    }
                 }
-            };
+            })
+            .collect();
+        info!(n_loaded = sequences.len(), "sequences loaded, starting parallel scan");
 
-            let mut next_report = PROGRESS_INTERVAL;
-            for (kmer, pos_in_seq) in kmer_iter(&seq, k) {
-                if let Some(cnt) = genome_counts.get_mut(&kmer) {
-                    *cnt = cnt.saturating_add(1);
-                    // Record which full-GTF gene(s) this occurrence falls in (or
-                    // intergenic) so multi-copy BED intervals can name the paralogs.
-                    if let Some(ref annot) = gene_annot {
-                        let entry = kmer_annot.entry(kmer).or_default();
-                        let hits = annot.genes_at(seq_name, pos_in_seq as usize);
-                        if hits.is_empty() {
-                            entry.intergenic = true;
-                        } else {
-                            entry.genes.extend(hits);
+        let ed = args.edit_distance_filter;
+        let need_counts = args.check_genome_uniqueness;
+
+        // Each parallel task returns:
+        //   .0  local_counts: candidate k-mer → copy count on this sequence
+        //   .1  local_rejects: candidates with a genome neighbor within ed
+        //   .2  local_annot: per-k-mer gene labels for per-copy BED (only when needed)
+        type ScanOut = (HashMap<u64, u8>, HashSet<u64>, HashMap<u64, GeneAnnot>);
+
+        let scan_results: Vec<ScanOut> = sequences
+            .par_iter()
+            .map(|(seq_name, seq)| {
+                let mut local_counts: HashMap<u64, u8> = HashMap::new();
+                let mut local_rejects: HashSet<u64> = HashSet::new();
+                let mut local_annot: HashMap<u64, GeneAnnot> = HashMap::new();
+
+                for (kmer, pos) in kmer_iter(seq, k) {
+                    // Genome-uniqueness copy counting and per-copy BED annotation.
+                    if need_counts && kmer_to_gene.contains_key(&kmer) {
+                        let cnt = local_counts.entry(kmer).or_insert(0);
+                        *cnt = cnt.saturating_add(1);
+
+                        if let Some(ref annot) = gene_annot {
+                            let entry = local_annot.entry(kmer).or_default();
+                            let hits = annot.genes_at(seq_name, pos);
+                            if hits.is_empty() {
+                                entry.intergenic = true;
+                            } else {
+                                entry.genes.extend(hits);
+                            }
+                        }
+                    }
+
+                    // Edit-distance filter: enumerate neighbors of this genome k-mer
+                    // and reject any that are candidates. The d=1 path is inlined to
+                    // avoid allocating a Vec for every genome k-mer (3B × 138 calls).
+                    if ed == 1 {
+                        let rc = reverse_complement(kmer, k);
+                        for &strand in &[kmer, rc] {
+                            for pos_k in 0..k {
+                                let shift = 2 * (k - 1 - pos_k);
+                                let orig = (strand >> shift) & 3;
+                                for delta in [1u64, 2, 3] {
+                                    let nbr_fwd = (strand & !(3u64 << shift))
+                                        | ((orig ^ delta) << shift);
+                                    let canonical =
+                                        nbr_fwd.min(reverse_complement(nbr_fwd, k));
+                                    if kmer_to_gene.contains_key(&canonical) {
+                                        local_rejects.insert(canonical);
+                                    }
+                                }
+                            }
+                        }
+                    } else if ed > 1 {
+                        // General d>1: accepts a Vec allocation per genome k-mer,
+                        // which is tolerable since d>1 is rarely used in practice.
+                        for neighbor in hamming_neighbors_canonical(kmer, k, ed) {
+                            if kmer_to_gene.contains_key(&neighbor) {
+                                local_rejects.insert(neighbor);
+                            }
                         }
                     }
                 }
-                // Edit-distance neighbor check: runs for every genome k-mer (not
-                // just candidates) so we catch reference k-mers that are close to
-                // — but distinct from — our candidates.
-                if let Some(candidates) = neighbor_to_candidates.get(&kmer) {
-                    edit_reject.extend(candidates.iter().copied());
-                }
-                let pos_in_seq = pos_in_seq as u64;
-                if pos_in_seq >= next_report {
-                    let total_done = bases_done + pos_in_seq;
-                    let pct = (total_done * 100) / total_bases.max(1);
-                    info!(
-                        chrom = %seq_name,
-                        position = pos_in_seq,
-                        pct_complete = pct,
-                        "genome-wide scan"
-                    );
-                    next_report += PROGRESS_INTERVAL;
-                }
-            }
 
-            bases_done += *seq_len as u64;
-            info!(seq = %seq_name, bases_done, "sequence done");
+                info!(seq = %seq_name, "sequence scanned");
+                (local_counts, local_rejects, local_annot)
+            })
+            .collect();
+
+        // Merge per-sequence results into the global accumulators.
+        let mut genome_counts: HashMap<u64, u8> = HashMap::new();
+        for (counts, rejects, annot) in scan_results {
+            for (kmer, cnt) in counts {
+                let c = genome_counts.entry(kmer).or_insert(0);
+                *c = c.saturating_add(cnt);
+            }
+            edit_reject.extend(rejects);
+            for (kmer, ga) in annot {
+                let entry = kmer_annot.entry(kmer).or_default();
+                entry.genes.extend(ga.genes);
+                entry.intergenic |= ga.intergenic;
+            }
         }
 
-        // Defer the retain until after stats are written, so the stats see the
-        // full panel-unique survivor set together with every genome-wide count.
         if args.check_genome_uniqueness {
             genome_copies = Some(genome_counts);
         }

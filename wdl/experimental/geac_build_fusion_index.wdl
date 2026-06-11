@@ -39,8 +39,11 @@ version 1.0
 ##                             distance N (default: 0 = disabled). Use 1 to keep only k-mers
 ##                             where no single-base sequencing error can produce a different
 ##                             reference k-mer. Triggers a full genome scan.
+##   threads                 - CPU threads for the parallel genome scan (default: 8). Set to 0
+##                             to use all logical CPUs on the machine. Has no effect when
+##                             neither --check-genome-uniqueness nor --edit-distance-filter is set.
 ##   docker_image            - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
-##   memory_gb               - Memory in GB (default: 64; genome-uniqueness pass needs more)
+##   memory_gb               - Memory in GB (default: 64)
 ##   disk_gb                 - Disk space in GB (default: 100)
 ##   preemptible             - Preemptible retries (default: 0; long job — avoid mid-run eviction)
 ##
@@ -72,6 +75,7 @@ workflow GeacBuildFusionIndex {
         Boolean write_bed_by_copies  = false
         Boolean write_gene_stats     = false
         Int     edit_distance_filter  = 0
+        Int     threads               = 8
 
         String docker_image
         Int    memory_gb   = 64
@@ -95,6 +99,7 @@ workflow GeacBuildFusionIndex {
             write_bed_by_copies     = write_bed_by_copies,
             write_gene_stats        = write_gene_stats,
             edit_distance_filter    = edit_distance_filter,
+            threads                 = threads,
             docker_image            = docker_image,
             memory_gb               = memory_gb,
             disk_gb                 = disk_gb,
@@ -131,6 +136,7 @@ task BuildFusionIndex {
         Boolean write_bed_by_copies
         Boolean write_gene_stats
         Int     edit_distance_filter
+        Int     threads
 
         String docker_image
         Int    memory_gb
@@ -164,7 +170,8 @@ task BuildFusionIndex {
             ~{if write_bed            then "--bed-output "             + bed_file           else ""} \
             ~{if write_bed_by_copies  then "--bed-output-by-copies "   + bed_by_copies_prefix else ""} \
             ~{if write_gene_stats     then "--gene-stats-output "      + gene_stats_tsv     else ""} \
-            ~{if edit_distance_filter > 0 then "--edit-distance-filter " + edit_distance_filter else ""}
+            ~{if edit_distance_filter > 0 then "--edit-distance-filter " + edit_distance_filter else ""} \
+            ~{if threads > 0 then "--threads " + threads else ""}
     >>>
 
     output {
@@ -179,7 +186,7 @@ task BuildFusionIndex {
     runtime {
         docker:      docker_image
         memory:      memory_gb + " GB"
-        cpu:         1
+        cpu:         threads
         disks:       "local-disk " + disk_gb + " HDD"
         preemptible: preemptible
     }

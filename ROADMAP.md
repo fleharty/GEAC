@@ -6,6 +6,7 @@ Historical context, completed-work archives, and design notes live in
 
 ## Current state
 
+- **Released:** v0.4.44 — Parallel genome scan for `--edit-distance-filter` and `--check-genome-uniqueness`: rayon parallelism over chromosomes; `--threads N` flag (0 = all CPUs, default); eliminates the O(138×N) `neighbor_to_candidates` pre-build that OOM'd on 64 GB for 400-gene panels. WDL `cpu` now wired to `threads`.
 - **Released:** v0.4.43 — Fix genePredExt+bin chromosome column: `fields[1]` (transcript accession) was used instead of `fields[2]` (chromosome), causing `ncbiRefSeq.txt.gz` to produce a silent empty index.
 - **Released:** v0.4.42 — `build-fusion-index --gene-annotation`: renamed from `--gtf`; now accepts GTF (`.gtf`, `.gtf.gz`) and GenePred/refFlat (`.txt`, `.txt.gz`, e.g. `ncbiRefSeq.txt.gz`) formats with auto-detection. Empty-annotation guard added. ANSI escape codes suppressed when stderr is not a terminal.
 - **Released:** v0.4.41 — `build-fusion-index --edit-distance-filter N`: discards candidate k-mers with any reference genome k-mer within Hamming distance N; use N=1 to ensure no single-base sequencing error in a reference read can produce the candidate k-mer. Triggers a full genome scan independently of `--check-genome-uniqueness`. WDL updated.
@@ -45,6 +46,7 @@ Historical context, completed-work archives, and design notes live in
 | v0.4.37    | Uniqueness map + merge export | `compute-uniqueness-map` bedgraph command; `geac merge --on-target-tsv`; `geac_cohort.wdl` manifest + on-target TSV outputs; `--min-gene-kmers` default 100→1; `geac_fusions.wdl` `--skip-version-check` |
 | v0.4.38    | BAI path embedding            | `--bai-uri` flag on `geac collect`; `bai_path` column in Parquet output and DuckDB `samples` table; `geac_cohort.wdl` now passes `bam_uri`/`bai_uri` (was missing); Explorer `sample_resources()` reads `bai_path` from DuckDB for automatic IGV index wiring |
 | v0.4.39    | Docs + audit                  | Initial code audit log added to `docs/CODE_AUDIT.md`; no Rust or pipeline changes |
+| v0.4.44    | Parallel genome scan + --threads | Rayon parallelism over chromosomes for genome scan; `--threads N` (0 = all CPUs); eliminates O(138×N) neighbor pre-build; WDL `cpu` wired to `threads` (default 8) |
 | v0.4.43    | GenePred chrom column fix      | Fix off-by-one column index in genePredExt+bin parser: `fields[1]` (transcript accession) → `fields[2]` (chromosome); `ncbiRefSeq.txt.gz` now produces a correct non-empty index |
 | v0.4.42    | GenePred support + flag rename | `build-fusion-index --gene-annotation` (renamed from `--gtf`): accepts GTF and GenePred/refFlat formats with auto-detection; empty-annotation guard; ANSI escape codes suppressed when stderr is not a terminal; `docs/EXPERIMENTAL.md` updated |
 | v0.4.41    | Fusion edit-distance filter   | `build-fusion-index --edit-distance-filter N`: discard candidates with any reference k-mer within Hamming distance N; N=1 guards against single-base sequencing errors producing the candidate k-mer; triggers genome scan independently of `--check-genome-uniqueness`; WDL updated |
