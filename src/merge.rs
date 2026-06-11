@@ -1173,4 +1173,30 @@ mod tests {
             "message should explain why: {err}"
         );
     }
+
+    #[test]
+    fn all_table_specs_present_in_schema_json() {
+        let raw = std::fs::read_to_string("schema/geac_schema.json")
+            .expect("read schema/geac_schema.json");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&raw).expect("parse schema/geac_schema.json");
+        let schema_tables: std::collections::HashSet<&str> = manifest["tables"]
+            .as_object()
+            .expect("schema tables must be an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+
+        let missing: Vec<&str> = TABLE_SPECS
+            .iter()
+            .map(|s| s.table)
+            .filter(|t| !schema_tables.contains(t))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "TABLE_SPECS tables missing from schema/geac_schema.json: {missing:?}\n\
+             Add them to the \"tables\" map in schema/geac_schema.json."
+        );
+    }
 }

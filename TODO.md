@@ -286,10 +286,6 @@ milestones. Each "what to do" item below maps to a "why" weakness for context.
   `schema/geac_schema.json` and emits a `const SCHEMA_COLUMNS: &[&str]` per
   table; add a Python test that fails if any schema column is unreferenced in
   the explorer code.
-- [ ] **Add a reverse schema contract test** — enumerate the `TableSpec`s in `src/merge.rs`
-  and assert each table name is present in `schema/geac_schema.json`; the existing
-  `assert_schema_columns_present` only checks the schema→output direction. See
-  `docs/CODE_AUDIT.md` 2026-06-10.
 - [ ] **Add module-level `//!` docs to all public Rust modules** — at minimum:
   `src/coverage/mod.rs`, `src/bam/pileup.rs`, `src/merge.rs`, `src/track.rs`,
   `src/writer/*`. Each should describe module purpose, key invariants, and
