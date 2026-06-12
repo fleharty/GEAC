@@ -97,7 +97,7 @@ def render(ctx: TabContext) -> None:
 
     cache_key = (
         ctx.path, p.min_depth, p.het_lo, p.min_recurrence, p.use_gnomad,
-        p.max_markers,
+        p.max_markers, p.t_low,
     )
     if st.session_state.get("_si_cache_key") != cache_key:
         with ctx.timed("sample identity pairwise [cache miss]"):
