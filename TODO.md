@@ -233,6 +233,33 @@ as a bait-bias signal. Design context in `docs/DEVELOPMENT_LOG.md`.
 Full design, rationale, and the niche this caller aims to own are in
 `docs/FUSION_DEVELOPMENT.md`. The highest-value next items (Tier 1, specificity):
 
+### ▶ Resume here — FP diagnostics (updated 2026-06-12)
+
+**Where we are.** v0.4.45 shipped tooling to attribute false `GENEA::GENEB` calls to
+their cause: `shared-kmers` (index/reference level — fuzzy `--edit-distance` matching,
+`--check-reference` copy counts, `--index` to flag real index k-mers) and
+`diagnose-fusion` (read level — from a `fusions --reads-output` evidence BAM, gives a
+homology-vs-junction coherence verdict, original alignment map, suspicious-k-mer table
+flagging 1-substitution error paths, and a per-read A/B layout track). Design notes in
+`docs/DEVELOPMENT_LOG.md` (2026-06-12); usage/interpretation in `docs/EXPERIMENTAL.md`
+("Diagnosing false-positive fusion calls").
+
+**What I'm doing now.** Running `diagnose-fusion` on a labeled set of fusions I believe
+are *real* vs *false*, to learn which signals separate them and calibrate thresholds for
+this panel. Discriminators: coherent fraction (real high / artifact ~0), minority-side
+median anchor (real ≥3 / artifact 1–2), alignment map (real = two loci / artifact = one),
+and the suspicious-k-mer table (`1edit_from_other=yes` → error path; high `ref_copies` →
+repeat).
+
+**Next actions when I restart:**
+- [ ] **Add `diagnose-fusion --summary-tsv`** — emit one machine-readable row per run
+  (`gene_a, gene_b, n_fragments, n_spanning, coherent_frac, median_anchor_a/b,
+  pct_minority_kmers_1edit, median_ref_copies, verdict`) so the labeled real/false set
+  can be swept and the separation plotted instead of eyeballing each report. (I offered
+  this; not yet built.)
+- [ ] Use the swept table to pick per-panel thresholds, then feed them back into the
+  **"Reduce FP fusion calls"** item below (and ultimately into `fusions` filter defaults).
+
 - [ ] **Overlap / adjacency filter** — reject pairs whose annotated gene bodies overlap
   or sit within X bp, or whose breakpoints are same-chromosome within X bp.
 - [ ] **Split-read vs discordant-pair separation** — report `split_reads` and
