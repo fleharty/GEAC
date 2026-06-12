@@ -255,6 +255,15 @@ pub struct CollectArgs {
     #[arg(long)]
     pub include_supplementary: bool,
 
+    /// Exclude reads whose auxiliary tag equals a value, as `TAG:VALUE`
+    /// (e.g. `--exclude-tag RX:bad`). The two-character TAG is matched against the
+    /// read's aux value rendered as a string, so it works for string, char, and
+    /// integer tags alike; the comparison is exact (`XY:3` drops `XY=3`, not
+    /// `XY=30`). Reads lacking the tag are kept. Repeatable; a read is dropped if
+    /// it matches any of the given filters.
+    #[arg(long = "exclude-tag", value_name = "TAG:VALUE")]
+    pub exclude_tag: Vec<String>,
+
     /// Restrict processing to a region. Accepts either a region string (e.g. "chr1:1000-2000")
     /// or a path to a BED file / Picard interval list. When a file path is given, the pileup
     /// is restricted to each interval in the file in turn.

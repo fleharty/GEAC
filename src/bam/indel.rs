@@ -55,6 +55,7 @@ pub(super) fn tally_indels(
     include_duplicates: bool,
     include_secondary: bool,
     include_supplementary: bool,
+    exclude_tags: &[([u8; 2], String)],
     collect_reads: bool,
 ) -> (
     HashMap<String, IndelCount>,
@@ -77,6 +78,10 @@ pub(super) fn tally_indels(
         }
 
         if record.mapq() < min_map_qual {
+            continue;
+        }
+
+        if super::pileup::read_excluded_by_tag(&record, exclude_tags) {
             continue;
         }
 

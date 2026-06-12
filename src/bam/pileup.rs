@@ -217,6 +217,7 @@ pub(super) fn tally_pileup(
     include_duplicates: bool,
     include_secondary: bool,
     include_supplementary: bool,
+    exclude_tags: &[([u8; 2], String)],
     ref_base: char,
     collect_reads: bool,
     collect_all_reads: bool,
@@ -241,6 +242,10 @@ pub(super) fn tally_pileup(
         }
 
         if record.mapq() < min_map_qual {
+            continue;
+        }
+
+        if read_excluded_by_tag(&record, exclude_tags) {
             continue;
         }
 
@@ -517,6 +522,55 @@ pub(super) fn tally_pileup(
     }
 }
 
+/// Parse `--exclude-tag TAG:VALUE` strings into `([tag byte 0, tag byte 1], value)`
+/// pairs. The tag must be exactly two ASCII characters; the value is everything
+/// after the first colon (so values may themselves contain colons).
+pub(super) fn parse_exclude_tags(specs: &[String]) -> anyhow::Result<Vec<([u8; 2], String)>> {
+    let mut out = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let (tag, value) = spec.split_once(':').ok_or_else(|| {
+            anyhow::anyhow!("--exclude-tag '{spec}' must be in TAG:VALUE form, e.g. RX:bad")
+        })?;
+        let bytes = tag.as_bytes();
+        anyhow::ensure!(
+            bytes.len() == 2,
+            "--exclude-tag tag '{tag}' must be exactly two characters (e.g. RX)"
+        );
+        out.push(([bytes[0], bytes[1]], value.to_string()));
+    }
+    Ok(out)
+}
+
+/// Render a record's auxiliary tag value as a string for equality comparison, or
+/// None when the tag is absent. Covers string, char, integer, and float tags;
+/// array tags are not comparable this way and return None.
+fn aux_value_string(record: &bam::Record, tag: &[u8; 2]) -> Option<String> {
+    use bam::record::Aux;
+    match record.aux(tag) {
+        Ok(Aux::String(s)) => Some(s.to_string()),
+        Ok(Aux::Char(c)) => Some((c as char).to_string()),
+        Ok(Aux::I8(v)) => Some(v.to_string()),
+        Ok(Aux::U8(v)) => Some(v.to_string()),
+        Ok(Aux::I16(v)) => Some(v.to_string()),
+        Ok(Aux::U16(v)) => Some(v.to_string()),
+        Ok(Aux::I32(v)) => Some(v.to_string()),
+        Ok(Aux::U32(v)) => Some(v.to_string()),
+        Ok(Aux::Float(v)) => Some(v.to_string()),
+        Ok(Aux::Double(v)) => Some(v.to_string()),
+        _ => None,
+    }
+}
+
+/// True if the record carries any of the excluded tag values (exact string match).
+pub(super) fn read_excluded_by_tag(
+    record: &bam::Record,
+    exclude_tags: &[([u8; 2], String)],
+) -> bool {
+    exclude_tags
+        .iter()
+        .any(|(tag, value)| aux_value_string(record, tag).as_deref() == Some(value.as_str()))
+}
+
 /// Read an integer auxiliary tag from a BAM record, returning None if absent or non-integer.
 ///
 /// Float tags are intentionally excluded. For fgbio simplex consensus reads, `cE` is the
@@ -681,7 +735,10 @@ mod tests {
 
     use crate::record::Pipeline;
 
-    use super::{family_size_tags, locus_n_context_summary, read_context_metrics, ReadDetail};
+    use super::{
+        family_size_tags, locus_n_context_summary, parse_exclude_tags, read_context_metrics,
+        read_excluded_by_tag, ReadDetail,
+    };
 
     fn detail(n_before: i32, n_n_before: i32, n_after: i32, n_n_after: i32) -> ReadDetail {
         ReadDetail {
@@ -795,6 +852,38 @@ mod tests {
         rec.push_aux(b"XW", bam::record::Aux::I32(0)).unwrap();
         let (_, _, fs) = family_size_tags(&rec, Some(Pipeline::Dragen));
         assert_eq!(fs, Some(5));
+    }
+
+    #[test]
+    fn parse_exclude_tags_validates_form_and_length() {
+        let ok = parse_exclude_tags(&["RX:bad".to_string(), "XY:3".to_string()]).unwrap();
+        assert_eq!(ok, vec![(*b"RX", "bad".to_string()), (*b"XY", "3".to_string())]);
+        // value may contain a colon
+        let colon = parse_exclude_tags(&["ZZ:a:b".to_string()]).unwrap();
+        assert_eq!(colon, vec![(*b"ZZ", "a:b".to_string())]);
+        // missing colon and wrong tag length are errors
+        assert!(parse_exclude_tags(&["RXbad".to_string()]).is_err());
+        assert!(parse_exclude_tags(&["RXY:bad".to_string()]).is_err());
+    }
+
+    #[test]
+    fn read_excluded_by_tag_matches_string_and_int_exactly() {
+        let mut rec = Record::new();
+        rec.push_aux(b"RX", bam::record::Aux::String("bad")).unwrap();
+        rec.push_aux(b"XY", bam::record::Aux::I32(3)).unwrap();
+
+        // exact string match drops; non-match keeps
+        assert!(read_excluded_by_tag(&rec, &[(*b"RX", "bad".to_string())]));
+        assert!(!read_excluded_by_tag(&rec, &[(*b"RX", "good".to_string())]));
+        // integer tag rendered as string; exact (3 != 30)
+        assert!(read_excluded_by_tag(&rec, &[(*b"XY", "3".to_string())]));
+        assert!(!read_excluded_by_tag(&rec, &[(*b"XY", "30".to_string())]));
+        // absent tag never matches; any-of semantics across multiple filters
+        assert!(!read_excluded_by_tag(&rec, &[(*b"ZZ", "x".to_string())]));
+        assert!(read_excluded_by_tag(
+            &rec,
+            &[(*b"ZZ", "x".to_string()), (*b"RX", "bad".to_string())]
+        ));
     }
 
     #[test]

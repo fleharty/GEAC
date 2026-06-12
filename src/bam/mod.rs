@@ -71,6 +71,8 @@ pub fn collect_alt_bases(
             .collect()
     };
 
+    let exclude_tags = crate::bam::pileup::parse_exclude_tags(&args.exclude_tag)?;
+
     let region_input = parse_region_input(args.region.as_deref())?;
     let region_filter = match &region_input {
         Some(RegionInput::Single(s)) => parse_region_spec(s),
@@ -129,6 +131,7 @@ pub fn collect_alt_bases(
                 args.include_duplicates,
                 args.include_secondary,
                 args.include_supplementary,
+                &exclude_tags,
                 ref_base,
                 collect_reads,
                 false,
@@ -249,6 +252,7 @@ pub fn collect_alt_bases(
                 args.include_duplicates,
                 args.include_secondary,
                 args.include_supplementary,
+                &exclude_tags,
                 collect_reads,
             );
 
