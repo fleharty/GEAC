@@ -83,6 +83,12 @@ pub enum ExperimentalCommand {
 
     /// [EXPERIMENTAL] For every genomic locus, compute the smallest k such that the k-mer at that position is unique genome-wide
     ComputeUniquenessMap(ComputeUniquenessMapArgs),
+
+    /// [EXPERIMENTAL] List the k-mers shared between two genes' bodies (cross-gene k-mers that index building would discard)
+    SharedKmers(SharedKmersArgs),
+
+    /// [EXPERIMENTAL] Diagnose a suspected false-positive fusion call from a `fusions --reads-output` evidence BAM
+    DiagnoseFusion(DiagnoseFusionArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -1056,6 +1062,106 @@ pub struct ComputeUniquenessMapArgs {
     /// layout. Equivalent in content to the default run-length-encoded output.
     #[arg(long, default_value_t = false)]
     pub no_merge: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct SharedKmersArgs {
+    /// Gene annotation file (GTF or GenePred), same formats as build-fusion-index.
+    /// Gene bodies are taken exactly as build-fusion-index would see them, so the
+    /// shared set here is what cross-gene dedup removes from the index.
+    #[arg(long)]
+    pub gene_annotation: PathBuf,
+
+    /// Reference FASTA (must be indexed with samtools faidx — .fai required)
+    #[arg(long)]
+    pub fasta: PathBuf,
+
+    /// First gene name (must match a gene_name in the annotation)
+    #[arg(long)]
+    pub gene_a: String,
+
+    /// Second gene name (must match a gene_name in the annotation)
+    #[arg(long)]
+    pub gene_b: String,
+
+    /// K-mer length. Use the same value as the index you are debugging.
+    #[arg(long, default_value_t = 23)]
+    pub kmer_size: u8,
+
+    /// Output TSV path. Writes to stdout when omitted.
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Maximum substitution (Hamming) distance allowed between a gene-A k-mer and
+    /// a gene-B k-mer for them to be reported as a match. 0 (default) reports only
+    /// exact shared k-mers; N > 0 additionally pairs *near*-identical k-mers that
+    /// differ by up to N bases — useful for diverged paralogs that share little
+    /// exact sequence. Each output row carries both sequences and their ab_dist.
+    #[arg(long, default_value_t = 0)]
+    pub edit_distance: u32,
+
+    /// Scan the full reference FASTA and report, for each matched k-mer, how many
+    /// times its canonical form occurs genome-wide (`ref_copies_a` / `ref_copies_b`
+    /// columns). A value of 1 means the k-mer is unique to its gene body; higher
+    /// counts mean it also occurs elsewhere (other genes, paralogs, repeats).
+    /// Triggers a full-genome scan.
+    #[arg(long, default_value_t = false)]
+    pub check_reference: bool,
+
+    /// Threads for the --check-reference genome scan. 0 uses all logical CPUs.
+    /// No effect unless --check-reference is set.
+    #[arg(long, default_value_t = 0)]
+    pub threads: u32,
+
+    /// Optional built fusion index (DuckDB). When given, each matched k-mer is
+    /// annotated with whether it is an actual *index* k-mer for its gene
+    /// (`in_index_a` / `in_index_b` columns) — i.e. one the fusion caller can vote
+    /// on. The false-positive-driving pairs are those where `ab_dist > 0` and the
+    /// voted gene's side is in the index. Must have the same k-mer size.
+    #[arg(long)]
+    pub index: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct DiagnoseFusionArgs {
+    /// Evidence BAM produced by `geac experimental fusions --reads-output`
+    /// (reads tagged `FX:Z:GENEA::GENEB`). May also be a CRAM with --reference.
+    #[arg(long)]
+    pub reads: PathBuf,
+
+    /// Fusion k-mer index (DuckDB) used to make the call. Must share the k-mer size.
+    #[arg(long)]
+    pub index: PathBuf,
+
+    /// Reference FASTA (required only if --reads is a CRAM).
+    #[arg(short = 'r', long)]
+    pub reference: Option<PathBuf>,
+
+    /// First gene of the suspected fusion pair.
+    #[arg(long)]
+    pub gene_a: String,
+
+    /// Second gene of the suspected fusion pair.
+    #[arg(long)]
+    pub gene_b: String,
+
+    /// K-mer length — must match the index and the original `fusions` run.
+    #[arg(long, default_value_t = 23)]
+    pub kmer_size: u8,
+
+    /// Minimum k-mers from each gene for a spanning read to count as anchored on
+    /// both sides (matches the `fusions --min-anchor-kmers` default).
+    #[arg(long, default_value_t = 3)]
+    pub min_anchor: u32,
+
+    /// Human-readable diagnostic report. Writes to stdout when omitted.
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Optional per-read TSV with the gene-A/gene-B k-mer layout track for every
+    /// evidence read. When omitted, a short preview is included in the report.
+    #[arg(long)]
+    pub per_read_output: Option<PathBuf>,
 }
 
 // Allow clap to parse ReadType and Pipeline from strings

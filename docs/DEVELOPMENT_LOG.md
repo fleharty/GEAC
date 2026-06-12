@@ -1166,3 +1166,66 @@ terminal (e.g. Terra/cloud job logs). `tracing_subscriber::fmt()` now calls
 `.with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))`.
 
 All three changes (EXPERIMENTAL.md, WDL, Rust source) shipped together in v0.4.42.
+
+---
+
+## Fusion false-positive diagnostics: `shared-kmers` + `diagnose-fusion` (2026-06-12)
+
+Two new experimental subcommands plus a `fusions` scan-progress improvement, all aimed
+at answering *"why is GENEA::GENEB being called when it isn't real?"* at two levels.
+
+**Why.** k-mer-based fusion calling produces false `GENEA::GENEB` calls by two
+mechanisms: (1) **homology/paralog near-collisions** — related genes share *near*-
+identical sequence; exact shared k-mers are removed by cross-gene dedup at build time,
+but k-mers one substitution apart survive in *both* genes' index entries, so a read over
+a conserved region matches both with *interleaved* (not block-partitioned) k-mers; and
+(2) **sequencing-error paths** — a real gene-A read with one base error produces a
+gene-B *index* k-mer, casting a spurious vote. Nothing existed to attribute a given call
+to either mechanism.
+
+**`shared-kmers`** (index/reference level, no BAM needed). Pairs the k-mers of two gene
+bodies. At `--edit-distance 0` it lists the exact shared k-mers (what dedup discards); at
+`N>0` it does **fuzzy** matching — pairing a gene-A k-mer with any gene-B k-mer within N
+substitutions, so each row carries both sequences and `ab_dist`. This catches diverged
+paralogs that share few exact 23-mers but many near-identical ones. Options compose:
+`--check-reference` runs a parallel genome scan reporting genome-wide copy number of each
+matched k-mer (`ref_copies_a/b`); `--index <duckdb>` annotates whether each side is an
+actual index k-mer the caller can vote on (`in_index_a/b`). The false-positive drivers
+are the rows with `ab_dist>0` and the voted gene's `in_index=true`. Design notes:
+- Matching enumerates each gene-A k-mer's canonical Hamming-N neighbours
+  (`hamming_neighbors_canonical`) and looks them up in gene B — cheap because the gene
+  sets are small. `canonical_distance` minimises Hamming over both strand orientations.
+- The genome scan uses a **watch set** (only the matched k-mers), so memory is
+  proportional to the match set, not the genome — far cheaper than the full neighbour
+  enumeration `build-fusion-index --edit-distance-filter` does over all ~3 B genome
+  k-mers, which is the right trade-off given the tiny candidate set here.
+- Gene-body extraction (`parse_gene_bodies`, `GeneBody`) and the canonical helpers
+  (`reverse_complement`, `hamming_neighbors_canonical`) were promoted to `pub(crate)`
+  in `build_fusion_index.rs` so both tools share one code path rather than duplicating.
+
+**`diagnose-fusion`** (read level, needs the evidence BAM). Consumes the
+`fusions --reads-output` BAM (reads tagged `FX:Z:GENEA::GENEB`), filters to the suspect
+pair (order-independent set match on the tag), and re-derives each read's gene-A/gene-B
+index-k-mer hits. Reports four things: (1) a homology-vs-junction **coherence summary**
+reusing the same disjoint-block logic as `fusions::read_coherence`, with a one-line
+verdict; (2) the **original alignment** of the evidence reads bucketed by voted gene
+(every read bucketed incl. ties/no-hits — an early strict `>` classifier dropped the
+exact-tie reads typical of real junction reads, which was caught in testing and fixed);
+(3) a **suspicious-k-mer table** for the minority gene flagging each k-mer that is one
+substitution from an index k-mer of the other gene (the error path) plus its copy
+number; and (4) a per-read `A`/`B`/`.` **layout track** making interleave-vs-block
+visible. The report's decision guide maps each outcome to a fix (raise `--kmer-size`,
+rebuild with `--check-genome-uniqueness`/`--edit-distance-filter`, k-mer blacklist, or
+accept as real and reconstruct).
+
+**`fusions` scan progress.** The BAM/CRAM scan log now includes `percent` and `eta`. For
+BAM, `percent` comes from the BGZF virtual offset (compressed byte position / file size).
+For CRAM that offset is meaningless (the file pointer is a `cram_fd`, not a BGZF stream),
+so it is estimated from the current read's mapped coordinate against total reference
+length — assumes coordinate-sorted input and pins at ~100% during the trailing unmapped
+block. Required switching the scan loop from `reader.records()` to a manual
+`reader.read(&mut record)` loop so `reader.tell()` is callable between reads.
+
+Both tools are `geac experimental` (unstable). Documented in EXPERIMENTAL.md, including a
+"Diagnosing false-positive fusion calls" workflow section tying them together. No
+release cut — experimental-only, no schema or pipeline change.

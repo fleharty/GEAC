@@ -7,12 +7,14 @@ mod build_fusion_kmer_blacklist;
 mod cli;
 mod cohort;
 mod coverage;
+mod diagnose_fusion;
 mod extract_gene;
 mod fragments;
 mod fusions;
 mod locate_kmer;
 mod lookup_kmer;
 mod scan_read;
+mod shared_kmers;
 mod gene_annotations;
 mod gnomad;
 mod inspect;
@@ -396,6 +398,26 @@ fn main() -> Result<()> {
                         "computing per-locus minimum unique k"
                     );
                     compute_uniqueness_map::compute_uniqueness_map(&args)?;
+                }
+
+                ExperimentalCommand::SharedKmers(args) => {
+                    info!(
+                        gene_a = %args.gene_a,
+                        gene_b = %args.gene_b,
+                        k = args.kmer_size,
+                        "listing shared k-mers between two genes"
+                    );
+                    shared_kmers::shared_kmers(&args)?;
+                }
+
+                ExperimentalCommand::DiagnoseFusion(args) => {
+                    info!(
+                        reads = %args.reads.display(),
+                        gene_a = %args.gene_a,
+                        gene_b = %args.gene_b,
+                        "diagnosing suspected false-positive fusion"
+                    );
+                    diagnose_fusion::diagnose_fusion(&args)?;
                 }
             }
         }

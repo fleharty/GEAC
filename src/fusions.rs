@@ -679,6 +679,69 @@ fn annotate_fusion_pon(
     Ok(())
 }
 
+// ─── Progress reporting ───────────────────────────────────────────────────────
+
+/// Format a number of seconds as a compact human-readable duration (e.g. "1h05m",
+/// "7m12s", "43s"). Returns "?" for non-finite or negative inputs.
+fn format_duration(secs: f64) -> String {
+    if !secs.is_finite() || secs < 0.0 {
+        return "?".to_string();
+    }
+    let total = secs as u64;
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    if h > 0 {
+        format!("{h}h{m:02}m")
+    } else if m > 0 {
+        format!("{m}m{s:02}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
+/// Emit a BAM scan progress line. `frac` is the estimated fraction of the file
+/// scanned (0.0–1.0): for BAM it comes from the compressed byte offset, for CRAM
+/// from the mapped genomic coordinate. When `frac` is `None` we report only
+/// throughput.
+fn log_scan_progress(
+    reads_processed: u64,
+    reads_assigned: u64,
+    frac: Option<f64>,
+    elapsed: std::time::Duration,
+) {
+    let secs = elapsed.as_secs_f64();
+    let reads_per_sec = if secs > 0.0 {
+        (reads_processed as f64 / secs) as u64
+    } else {
+        0
+    };
+
+    if let Some(frac) = frac {
+        let frac = frac.clamp(0.0, 1.0);
+        let eta_secs = if frac > 0.0 {
+            secs * (1.0 - frac) / frac
+        } else {
+            f64::INFINITY
+        };
+        info!(
+            reads_processed,
+            reads_assigned,
+            percent = format!("{:.1}", frac * 100.0),
+            eta = %format_duration(eta_secs),
+            reads_per_sec,
+            "BAM scan progress"
+        );
+    } else {
+        info!(
+            reads_processed,
+            reads_assigned,
+            reads_per_sec,
+            "BAM scan progress"
+        );
+    }
+}
+
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
 pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
@@ -761,8 +824,36 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     let mut reads_processed: u64 = 0;
     let mut reads_assigned: u64 = 0;
 
-    for result in reader.records() {
-        let record = result.context("error reading BAM record")?;
+    // Total compressed size, used to estimate how far through the file we are.
+    let bytes_total = std::fs::metadata(&args.bam).map(|m| m.len()).unwrap_or(0);
+    // reader.tell() returns a BGZF virtual offset whose high 48 bits are the
+    // compressed byte position — meaningful for BAM but not for CRAM (whose file
+    // pointer is a cram_fd, not a BGZF stream). For CRAM we instead estimate
+    // progress from the mapped genomic coordinate against the total reference
+    // length, which assumes coordinate-sorted input (the production norm).
+    let is_cram = args
+        .bam
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("cram"));
+    // Prefix sums of reference lengths: ref_offsets[tid] is the genomic position
+    // of the start of target `tid` in a single concatenated coordinate space.
+    let (ref_offsets, total_ref_len) = {
+        let header = reader.header();
+        let n = header.target_count();
+        let mut offsets = Vec::with_capacity(n as usize);
+        let mut acc: u64 = 0;
+        for tid in 0..n {
+            offsets.push(acc);
+            acc += header.target_len(tid).unwrap_or(0);
+        }
+        (offsets, acc)
+    };
+    let scan_start = std::time::Instant::now();
+
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result.context("error reading BAM record")?;
         reads_processed += 1;
 
         let flags = record.flags();
@@ -792,7 +883,27 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         }
 
         if reads_processed % 5_000_000 == 0 {
-            info!(reads_processed, reads_assigned, "BAM scan progress");
+            let frac = if is_cram {
+                // Coordinate-based: unmapped reads (tid < 0) cluster at the end of
+                // a coordinate-sorted file, so treat them as ~100% complete.
+                if total_ref_len > 0 {
+                    let tid = record.tid();
+                    let pos = if tid >= 0 && (tid as usize) < ref_offsets.len() {
+                        ref_offsets[tid as usize] + record.pos().max(0) as u64
+                    } else {
+                        total_ref_len
+                    };
+                    Some(pos as f64 / total_ref_len as f64)
+                } else {
+                    None
+                }
+            } else if bytes_total > 0 {
+                // Byte-based: high 48 bits of the BGZF virtual offset.
+                Some((reader.tell() >> 16) as f64 / bytes_total as f64)
+            } else {
+                None
+            };
+            log_scan_progress(reads_processed, reads_assigned, frac, scan_start.elapsed());
         }
     }
 

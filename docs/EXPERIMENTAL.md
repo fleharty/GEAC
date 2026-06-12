@@ -28,8 +28,11 @@ genes — a signature of a fusion or chimeric read.
 | [`lookup-kmer`](#lookup-kmer) | Look up which gene a single k-mer is assigned to in an index |
 | [`scan-read`](#scan-read) | Show per-k-mer matches for one read sequence against an index |
 | [`compute-uniqueness-map`](#compute-uniqueness-map) | For every genomic locus, compute the smallest k for which the k-mer at that position is genome-unique |
+| [`shared-kmers`](#shared-kmers) | List the k-mers two genes' bodies share — the cross-gene k-mers that index building discards |
+| [`diagnose-fusion`](#diagnose-fusion) | Diagnose a suspected false-positive fusion call from a `fusions` evidence BAM |
 
-`lookup-kmer` and `scan-read` are debugging aids for inspecting the index.
+`lookup-kmer`, `scan-read`, `shared-kmers`, and `diagnose-fusion` are debugging aids for
+inspecting the index and the calls it produces.
 
 ---
 
@@ -199,6 +202,23 @@ bp_a_std, gene_b, chrom_b, breakpoint_b, bp_b_n, bp_b_std, n_spanning_reads`. Th
 `bp_*_n` columns count spanning reads contributing to each side and `bp_*_std` is
 the spread in bp (low = tight consensus). Coordinates are 1-based; partners with no
 spanning-read support report `NA`.
+
+### Scan progress
+
+The BAM/CRAM scan logs a progress line every 5 M reads with an estimate of how far
+through the file it is and an ETA, so long runs are legible:
+
+```
+INFO geac::fusions: BAM scan progress reads_processed=5000000 reads_assigned=3434824 percent=23.4 eta=7m12s reads_per_sec=412000
+```
+
+- For **BAM**, `percent` comes from the compressed byte offset (BGZF virtual offset),
+  so it tracks the file directly.
+- For **CRAM**, the byte offset is not meaningful, so `percent` is estimated from the
+  current read's mapped genomic coordinate against the total reference length. This
+  assumes coordinate-sorted input (the production norm); during the trailing unmapped
+  block it pins at ~100%. If the header carries no reference lengths, only
+  `reads_per_sec` is reported.
 
 ---
 
@@ -488,6 +508,238 @@ geac experimental fusions --bam tumor.bam --index panel.duckdb \
     --fusion-pon fusion_pon.duckdb \
     --fusion-kmer-blacklist fusion_kmer_blacklist.parquet
 ```
+
+---
+
+## `shared-kmers`
+
+Pair up the k-mers that two genes' bodies have in common. At the default edit
+distance of 0 these are the **exact** shared k-mers — precisely the cross-gene k-mers
+that [`build-fusion-index`](#build-fusion-index) discards during panel-wide dedup (see
+[Uniqueness model](#uniqueness-model-read-this-first)), so they never appear in a built
+index. The usual trigger is a suspicious `GENEA::GENEB` call where you want to know
+*which* sequence the two genes share and *where* it sits in each.
+
+With `--edit-distance N` the match becomes **fuzzy**: a gene-A k-mer is paired with any
+gene-B k-mer within `N` substitutions, even when the two sequences are not identical.
+This catches **diverged paralogs** — gene-family members ~95% identical share few exact
+23-mers but many near-identical ones, and those near-matches are exactly what can drive
+cross-assignment even though the index's exact-dedup never removed them.
+
+### Explaining false-positive fusion calls
+
+Fuzzy matching plus `--index <built index>` is the tool for asking *"is this
+`GENEA::GENEB` call a k-mer artifact?"*. A k-mer-driven false call happens when a read
+that is truly from gene A picks up a sequencing error that turns one of its k-mers into
+a k-mer the **index** has assigned to gene B — producing a spurious gene-B vote. So the
+culprits are pairs where a gene-A k-mer and a gene-B k-mer are a single substitution
+apart **and the voted gene's k-mer is actually in the index** (only index k-mers can be
+voted; exact cross-gene k-mers were already deduped out).
+
+Run with `--edit-distance 1 --index …` and look at the rows where `ab_dist > 0` and the
+voted gene's `in_index` column is `true`: each is a concrete error path that can
+manufacture the false call. (`--check-reference` composes here — a fragile index k-mer
+that is also high-copy is doubly suspect.)
+
+Gene bodies are parsed from the same annotation `build-fusion-index` consumes, k-mers
+are canonicalized identically, and a gene name that maps to several bodies (e.g. the
+same symbol on multiple contigs) has all of them unioned.
+
+```bash
+# Exact shared k-mers only
+geac experimental shared-kmers \
+    --gene-annotation gencode.v44.annotation.gtf \
+    --fasta Homo_sapiens_assembly38.fasta \
+    --gene-a BCR \
+    --gene-b ABL1 \
+    --kmer-size 23 \
+    --output bcr_abl1_shared.tsv
+
+# Fuzzy + index: pair k-mers within 1 substitution and flag which are real index
+# k-mers — the rows that can drive a false BCR::ABL1 call
+geac experimental shared-kmers \
+    --gene-annotation gencode.v44.annotation.gtf \
+    --fasta Homo_sapiens_assembly38.fasta \
+    --gene-a BCR --gene-b ABL1 --kmer-size 23 \
+    --edit-distance 1 --index hg38_fusion_index.duckdb \
+    --check-reference --threads 8 \
+    --output bcr_abl1_near.tsv
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--gene-annotation <PATH>` | — | GTF or GenePred annotation (same formats as `build-fusion-index`). |
+| `--fasta <PATH>` | — | Reference FASTA; requires a `.fai` (`samtools faidx`). |
+| `--gene-a <NAME>` | — | First gene name (must match a `gene_name` in the annotation). |
+| `--gene-b <NAME>` | — | Second gene name. |
+| `--kmer-size <N>` | `23` | K-mer length; use the same value as the index you are debugging. |
+| `--edit-distance <N>` | `0` | Max substitution (Hamming) distance between a gene-A and gene-B k-mer for a match. `0` = exact shared only; `N > 0` also pairs near-identical k-mers. |
+| `--output <PATH>` | stdout | Output TSV. |
+| `--check-reference` | off | Scan the whole FASTA and add `ref_copies_a` / `ref_copies_b` columns: genome-wide occurrences of each matched k-mer. |
+| `--index <PATH>` | — | Built fusion index (DuckDB). Adds `in_index_a` / `in_index_b` columns flagging whether each matched k-mer is a real index k-mer the caller can vote on. Must share the k-mer size. |
+| `--threads <N>` | `0` (all cores) | Threads for the `--check-reference` genome scan. No effect unless that flag is set. |
+
+### Output format
+
+A TSV with one row per matched k-mer pair, sorted by k-mer. `pos_a` / `pos_b` are the
+**0-based first-occurrence** chromosome coordinates in each gene's body; `ab_dist` is
+the substitution distance between the two sequences (always `0` when
+`--edit-distance 0`). A summary line (per-gene k-mer counts, match count, exact-match
+count) is logged to stderr.
+
+```
+kmer_seq_a               chrom_a  pos_a    kmer_seq_b               chrom_b  pos_b    ab_dist
+AAAACCCCGGGAACCCCGGGGTTT chr22    23290412 AAAACCCCGGGAACCCCGGGGTTT chr9     133710001 0
+GGTTGAAAACCGCCCGGGGTTTAC chr22    23291004 GGTTCAAAACCGCCCGGGGTTTAC chr9     133710512 1
+```
+
+- `kmer_seq_a` / `kmer_seq_b` are the **canonical** (strand-collapsed) orientation. For
+  exact matches (`ab_dist 0`) they are identical; for fuzzy matches they differ at up
+  to `ab_dist` positions.
+- `ref_copies_a` / `ref_copies_b` (only with `--check-reference`) count every
+  genome-wide occurrence of each canonical k-mer. A value of `1` means the k-mer is
+  unique to its gene body; higher values mean it also appears in other genes, paralogs,
+  or repeats — i.e. it was repetitive sequence to begin with.
+- `in_index_a` / `in_index_b` (only with `--index`) are `true` when that side's k-mer is
+  an actual index k-mer the fusion caller can vote on. Exact shared k-mers (`ab_dist 0`)
+  are typically `false` on both sides — they were removed by cross-gene dedup — whereas a
+  near-pair with the voted gene's side `true` is a live false-positive path.
+
+> A given gene-A k-mer can match several gene-B k-mers (and vice versa) under a non-zero
+> edit distance, so each qualifying pair is emitted as its own row. The `--check-reference`
+> scan reads the entire FASTA but only tracks the matched k-mers, so memory stays
+> proportional to the match set, not the genome.
+
+---
+
+## `diagnose-fusion`
+
+Take the **evidence BAM** written by [`fusions --reads-output`](#fusions) (reads tagged
+`FX:Z:GENEA::GENEB`) plus the index, and explain *why* a suspected `GENEA::GENEB` call
+fired. It re-derives each evidence read's gene-A / gene-B k-mer hits and reports four
+things, each targeting a distinct failure mode.
+
+```bash
+geac experimental diagnose-fusion \
+    --reads sample.fusion_reads.bam \
+    --index hg38_fusion_index.duckdb \
+    --gene-a BCR --gene-b ABL1 --kmer-size 23 \
+    --per-read-output bcr_abl1_reads.tsv
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--reads <PATH>` | — | Evidence BAM/CRAM from `fusions --reads-output`. |
+| `--index <PATH>` | — | The fusion index used for the call. Must share the k-mer size. |
+| `--reference <PATH>` | — | Reference FASTA, required only if `--reads` is a CRAM. |
+| `--gene-a` / `--gene-b` | — | The suspected pair (order-independent; matched against the `FX` tag). |
+| `--kmer-size <N>` | `23` | K-mer length; must match the index and the original run. |
+| `--min-anchor <N>` | `3` | K-mers per gene for a spanning read to count as anchored on both sides (matches `fusions --min-anchor-kmers`). |
+| `--output <PATH>` | stdout | Human-readable report. |
+| `--per-read-output <PATH>` | — | Per-read k-mer layout track as TSV (otherwise a short preview is in the report). |
+
+### What it reports
+
+1. **Homology vs junction summary** — per-fragment coherence (reusing the caller's own
+   `read_coherence` logic): how many spanning reads have **disjoint A→B blocks**
+   (junction-like) vs **interleaved** k-mers (homology/paralog artifact — the same read
+   bases match both genes), plus median anchor k-mers per side and a one-line verdict.
+2. **Original alignment map** — where the evidence reads actually align (their original
+   BAM coordinates), bucketed by which gene they vote for. If reads voting gene B really
+   sit at gene A's locus, they are mis-voting, not chimeric.
+3. **Suspicious-k-mer table** — for the minority (likely-spurious) gene, each k-mer it
+   contributed, how many reads carry it, whether it is **within one substitution of an
+   index k-mer of the other gene** (the sequencing-error path that manufactures the
+   call), and its genome-wide copy number.
+4. **Per-read layout track** — an `A`/`B`/`.` string per read showing where each gene's
+   k-mers land, so interleaving vs blocking is visible at a glance:
+
+```
+qname   chrom  pos  mapq  a_count  b_count  spanning  coherent  layout_5to3
+read0   chr22  …    60    15       15       true      true      AAAAAAAAAAAAAAA..........BBBBBBBBBBBBBBB
+read1   chr22  …    60    9        8        true      false     ABABABAABABBABAB...
+```
+
+A call where ~all spanning reads are **interleaved**, the minority side is **weakly
+anchored**, and its k-mers are **1 substitution from the other gene** is a textbook
+k-mer artifact rather than a real fusion.
+
+---
+
+## Diagnosing false-positive fusion calls
+
+`shared-kmers` and `diagnose-fusion` are complementary: they attack the same problem —
+*why is GENEA::GENEB being called when it isn't real?* — from two different levels.
+
+| Question | Tool | Inputs |
+|----------|------|--------|
+| Does the **index/reference** predispose this pair to confusion, for *any* sample? | [`shared-kmers`](#shared-kmers) | annotation + FASTA (+ index) — **no BAM** |
+| Why did *this* call fire in *this* sample's **reads**? | [`diagnose-fusion`](#diagnose-fusion) | the sample's evidence BAM + index |
+
+### The two mechanisms
+
+A k-mer-based fusion caller produces a false `GENEA::GENEB` when reads pick up gene-A and
+gene-B index k-mers without a real chimeric junction. Two distinct mechanisms cause this,
+and the tools above measure each directly:
+
+1. **Homology / paralog near-collisions.** Related genes share *near*-identical sequence.
+   Exact shared k-mers are removed by cross-gene dedup at index-build time, but k-mers a
+   single substitution apart survive in *both* genes' index entries. A read covering a
+   conserved region then matches both — with the gene-A and gene-B k-mers **interleaved**
+   along the read (the same bases support both), not partitioned into an A-block and a
+   B-block.
+2. **Sequencing-error paths.** A read truly from gene A picks up a base error that turns
+   one of its k-mers into a gene-B *index* k-mer, casting a spurious gene-B vote.
+
+`read_coherence` (used by both `fusions` and `diagnose-fusion`) is the discriminator:
+real junctions give **disjoint, coherent** A→B blocks; both false mechanisms give
+**interleaved or weakly-anchored** evidence.
+
+### Recommended sequence
+
+```bash
+# A. Index level — is the pair intrinsically collision-prone? (no BAM needed)
+#    Rows with ab_dist=1 and the voted gene's in_index=true are the index near-collisions.
+geac experimental shared-kmers \
+    --gene-annotation gencode.v44.gtf --fasta hg38.fa \
+    --gene-a BCR --gene-b ABL1 --kmer-size 23 \
+    --edit-distance 1 --index hg38_fusion_index.duckdb --check-reference \
+    --output bcr_abl1_index.tsv
+
+# B. Read level — re-run the original fusions call WITH the evidence BAM if you don't
+#    already have one, then diagnose this sample's call.
+geac experimental fusions --bam sample.bam --index hg38_fusion_index.duckdb \
+    --kmer-size 23 --output sample.fusions.parquet \
+    --reads-output sample.fusion_reads.bam
+
+geac experimental diagnose-fusion \
+    --reads sample.fusion_reads.bam --index hg38_fusion_index.duckdb \
+    --gene-a BCR --gene-b ABL1 --kmer-size 23
+```
+
+### Reading the result, and what to do about it
+
+- **`diagnose-fusion` verdict says "homology artifact"** (almost all spanning reads
+  interleaved): a paralog collision. Confirm at the index level with `shared-kmers`
+  (many `ab_dist=1`, `in_index=true` pairs). **Fix:** raise `--kmer-size`, or rebuild the
+  index with `--check-genome-uniqueness` / a higher `--min-gene-kmers` so the colliding
+  near-unique k-mers are dropped.
+- **Suspicious-k-mer table shows `1edit_from_other = yes`** for the minority gene: an
+  error-path artifact concentrated in a few fragile index k-mers. **Fix:** drop those
+  k-mers via the [k-mer blacklist](#using-the-blacklist-at-call-time) (if they recur
+  across normals) or rebuild with `--edit-distance-filter 1` so no index k-mer sits one
+  substitution from a reference k-mer.
+- **Alignment map shows the partner-voting reads sitting at the other gene's locus:**
+  they are mis-voting, not chimeric — same conclusion, same fixes.
+- **Verdict says "real junction"** (coherent blocks, both sides well-anchored, reads at
+  two loci): treat the call as genuine; use `--breakpoints-output` and
+  [`reconstruct_fusions.sh`](#reconstruct_fusionssh) to localize and assemble the
+  junction.
+
+Recurrent false pairs across many samples are better handled at the cohort level with a
+[fusion Panel-of-Normals and k-mer blacklist](#building-a-fusion-panel-of-normals); the
+two tools here are for understanding *why* a specific pair misbehaves so you can choose
+the right cohort-level fix.
 
 ---
 

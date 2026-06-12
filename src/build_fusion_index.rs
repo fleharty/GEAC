@@ -20,7 +20,7 @@ use crate::kmer::kmer_iter;
 /// the leftmost base. Complement flips bits 1 and 0 independently: A↔T (0↔3),
 /// C↔G (1↔2), which is `3 ^ base`. Reversing is done by popping bases from the
 /// LSB and pushing them onto the MSB of `rc`.
-fn reverse_complement(kmer: u64, klen: usize) -> u64 {
+pub(crate) fn reverse_complement(kmer: u64, klen: usize) -> u64 {
     let mut rc = 0u64;
     let mut tmp = kmer;
     for _ in 0..klen {
@@ -36,7 +36,7 @@ fn reverse_complement(kmer: u64, klen: usize) -> u64 {
 /// Enumerates changes on both the canonical k-mer and its reverse complement so
 /// that all DNA-space neighbors are captured. Uses BFS to avoid re-visiting
 /// k-mers already found at a shorter distance.
-fn hamming_neighbors_canonical(kmer: u64, klen: usize, max_dist: u32) -> Vec<u64> {
+pub(crate) fn hamming_neighbors_canonical(kmer: u64, klen: usize, max_dist: u32) -> Vec<u64> {
     if max_dist == 0 {
         return Vec::new();
     }
@@ -72,11 +72,11 @@ fn hamming_neighbors_canonical(kmer: u64, klen: usize, max_dist: u32) -> Vec<u64
 
 // ─── Gene body ────────────────────────────────────────────────────────────────
 
-struct GeneBody {
-    gene_name: String,
-    chrom: String,
-    start: usize, // 0-based inclusive
-    end: usize,   // 0-based exclusive (half-open)
+pub(crate) struct GeneBody {
+    pub(crate) gene_name: String,
+    pub(crate) chrom: String,
+    pub(crate) start: usize, // 0-based inclusive
+    pub(crate) end: usize,   // 0-based exclusive (half-open)
 }
 
 /// Dispatch to the correct parser based on file extension.
@@ -94,7 +94,7 @@ struct GeneBody {
 /// GenePred input has one row per transcript; transcripts are merged into a single
 /// gene body (min txStart … max txEnd) per (gene_name, chrom) pair so that k-mers
 /// shared between transcripts of the same gene are not discarded as cross-gene.
-fn parse_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
+pub(crate) fn parse_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
     let stem = path
         .file_name()
         .and_then(|n| n.to_str())
