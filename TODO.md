@@ -341,9 +341,12 @@ milestones. Each "what to do" item below maps to a "why" weakness for context.
 
 ### Weaknesses observed
 
-- **Python explorer is monolithic** — `app/geac_explorer.py` is ~7,853 LOC in a
-  single file. Tab modules under `app/explorer/tabs/` are mostly stubs; the real
-  logic is inline in the main file.
+- **A few Python files are still oversized** — the original ~7,853-LOC
+  `app/geac_explorer.py` has largely been decomposed into real tab modules under
+  `app/explorer/tabs/` (the entrypoint is now ~2,000 LOC). The remaining offenders
+  are `app/explorer/tabs/reads.py` (~1,345 LOC, a single `render()` of nested
+  closures — see `docs/CODE_AUDIT.md` 2026-06-10) and `geac_coverage_explorer.py`
+  / `error_spectrum.py` (~1,400–1,550 LOC each). Target: no single file >1,500 LOC.
 - **No app-level Python tests** — `app/tests/` covers ~400 LOC of helper
   functions, but neither `geac_explorer.py` nor `geac_coverage_explorer.py` has
   integration tests.
