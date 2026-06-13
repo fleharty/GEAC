@@ -55,6 +55,39 @@ QC.
   same sample with conflicting subjects, classification becomes arbitrary and can
   hide the labeling problem the tab is meant to surface. Report such conflicts
   explicitly and avoid flagging dependent pairs until they are resolved.
+- [ ] **Reconcile the CLI vs Explorer flag taxonomies — the headless CLI can't
+  report a sample swap** (found 2026-06-13 auditing how the flag is consumed). The
+  Rust CLI (`src/sample_identity.rs`) and the Explorer (`classify_flags` in
+  `app/explorer/sample_identity_helpers.py`) are two *independent* implementations:
+  the Explorer recomputes pairwise identity + flags straight from `alt_bases` and
+  never reads the CLI's `--output` TSV, so the CLI `flag` column is consumed only by
+  whoever reads that TSV directly (humans / batch / WDL — no WDL parses it today).
+  They have drifted in both vocabulary and capability:
+
+  | case | CLI (`sample_identity.rs`) | Explorer (`classify_flags`) |
+  |------|----------------------------|-----------------------------|
+  | same subject + high similarity | `EXPECTED_MATCH` | `EXPECTED_MATCH` |
+  | diff/absent subject + identical | `SAME_INDIVIDUAL` | `UNKNOWN_DUPLICATE` |
+  | **same subject + low similarity (a swap)** | **`""` or dropped** | **`POSSIBLE_SWAP`** |
+  | thresholds | one band (`min_jaccard`/`min_concordance`) | two bands (`t_high`/`conc_high`, `t_low`/`conc_low`) |
+
+  The material gap: the CLI **cannot emit a swap signal at all** — `compare_pair`
+  drops non-passing pairs unless `--all-pairs` (`if !args.all_pairs && !passes`), and
+  even then the flag match-arm only labels when `passes`, so a same-subject /
+  genetically-divergent pair gets `""`. A Terra/WDL pipeline parsing the TSV thus
+  gets a strictly weaker result than the Explorer. Also note: the
+  `SAME_INDIVIDUAL`-when-`subject_id`-is-`None` overloading I originally flagged is
+  *moot for the Explorer* (it ignores the column) but still confuses direct TSV
+  readers. Two fix levels:
+    1. *Minimum (doc):* state in `docs/cli.md` that swap detection requires the
+       Explorer and that the CLI flag set is `{EXPECTED_MATCH, SAME_INDIVIDUAL}` on
+       passing pairs only.
+    2. *Proper (align CLI to the Explorer model):* give the CLI the two-band
+       taxonomy — emit `POSSIBLE_SWAP` for same-subject pairs below
+       `t_low`/`conc_low` (requires *not* filtering same-subject pairs before
+       flagging), rename `SAME_INDIVIDUAL`→`UNKNOWN_DUPLICATE` for parity, add the
+       threshold flags + expose in the WDL. Behavior change to a released command
+       (new/renamed flag values) — needs a decision before implementing.
 
 ---
 
@@ -232,6 +265,25 @@ as a bait-bias signal. Design context in `docs/DEVELOPMENT_LOG.md`.
 
 Full design, rationale, and the niche this caller aims to own are in
 `docs/FUSION_DEVELOPMENT.md`. The highest-value next items (Tier 1, specificity):
+
+### ⚠ Uncommitted in working tree (FL layout tag + shared renderer) — 2026-06-13
+
+Done and verified but **not yet committed** (`git status`: `src/fusions.rs`,
+`src/diagnose_fusion.rs`, `src/kmer.rs`, `docs/EXPERIMENTAL.md`). Two layered pieces:
+
+- **`FL` BAM tag** (pre-existing this session's start): `fusions --reads-output` now
+  tags each evidence read with `FL:Z:<track>`, the per-k-mer-window A/B/N/. layout
+  against its `FX` pair — same string as `diagnose-fusion`'s `layout_5to3`.
+- **This session:** (1) tightened the `5'→3'` wording in `docs/EXPERIMENTAL.md` to
+  `reference 5'→3'` (BAM `SEQ` orientation) and added a reverse-strand note; (2)
+  factored the two duplicate layout implementations into shared
+  `kmer::render_layout_track` + `kmer::non_acgt_positions` so the `FL` tag and
+  `layout_5to3` can't drift — both `fusion_layout_track` and `ReadEvidence::layout`
+  now delegate. Added direct unit tests in `kmer.rs`.
+
+Verified: `cargo build --release` clean, `cargo test` = 45 integration + all unit
+tests pass (incl. 5 layout tests); no new clippy warnings. **Next:** review the diff
+and commit (it sits on top of the FL-tag work). Nothing blocks it.
 
 ### ▶ Resume here — FP diagnostics (updated 2026-06-12)
 
