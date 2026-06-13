@@ -43,6 +43,7 @@ version 1.0
 ##   include_duplicates      - include PCR/optical duplicate reads (FLAG 0x400); default false
 ##   include_secondary       - include secondary alignments (FLAG 0x100); default false
 ##   include_supplementary   - include supplementary alignments (FLAG 0x800); default false
+##   exclude_tag             - drop reads whose aux tag equals a value, as "TAG:VALUE" (e.g. "cD:1"); repeatable, applied to all samples, default []
 ##   reads_output            - also write per-read detail Parquets and merge into alt_reads table (default false)
 ##   input_checksum_sha256   - compute SHA-256 for each input BAM/CRAM during collect (default false)
 ##   run_fragments           - also run geac fragments in parallel and ingest the fragment Parquets
@@ -102,6 +103,7 @@ workflow GeacCohort {
         Boolean include_duplicates    = false
         Boolean include_secondary     = false
         Boolean include_supplementary = false
+        Array[String] exclude_tag     = []
         Boolean reads_output  = false
         Boolean input_checksum_sha256 = true
         Boolean run_fragments = false
@@ -213,6 +215,7 @@ workflow GeacCohort {
                 include_duplicates    = include_duplicates,
                 include_secondary     = include_secondary,
                 include_supplementary = include_supplementary,
+                exclude_tag           = exclude_tag,
                 reads_output          = reads_output,
                 input_checksum_sha256 = input_checksum_sha256,
                 threads               = threads,
@@ -312,6 +315,7 @@ task Collect {
         Boolean include_duplicates
         Boolean include_secondary
         Boolean include_supplementary
+        Array[String] exclude_tag
         Boolean reads_output
         Boolean input_checksum_sha256
         Int     threads
@@ -364,6 +368,7 @@ task Collect {
             ~{if include_duplicates    then "--include-duplicates"    else ""} \
             ~{if include_secondary     then "--include-secondary"     else ""} \
             ~{if include_supplementary then "--include-supplementary" else ""} \
+            ~{sep=" " prefix("--exclude-tag ", exclude_tag)} \
             ~{if input_checksum_sha256 then "--input-checksum-sha256" else ""} \
             ~{if reads_output then "--reads-output" else ""} \
             ~{"--bam-uri " + bam_uri} \
