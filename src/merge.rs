@@ -5,7 +5,7 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::{bail, Context, Result};
 use duckdb::{Connection, OptionalExt};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::cli::MergeArgs;
 
@@ -229,6 +229,26 @@ fn src_table_exists(conn: &Connection, alias: &str, table: &str) -> Result<bool>
         )
         .with_context(|| format!("failed to query table list in attached database '{alias}'"))?;
     Ok(count > 0)
+}
+
+/// Read the `schema_version` recorded in an attached source database's
+/// `geac_metadata` table. Returns `None` when the input predates schema-version
+/// stamping (no `geac_metadata` table, or a NULL/absent value) so callers can
+/// distinguish "incompatible" from "unverifiable".
+fn attached_schema_version(conn: &Connection, alias: &str) -> Result<Option<String>> {
+    if !src_table_exists(conn, alias, "geac_metadata")? {
+        return Ok(None);
+    }
+    let version: Option<String> = conn
+        .query_row(
+            &format!("SELECT schema_version FROM {alias}.geac_metadata LIMIT 1"),
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .with_context(|| format!("failed to read schema_version from attached database '{alias}'"))?
+        .flatten();
+    Ok(version)
 }
 
 /// Returns true if `table` exists in the output (current) database.
@@ -537,6 +557,31 @@ fn merge_duckdb_inputs(
 
         conn.execute_batch(&format!("ATTACH '{escaped}' AS {alias} (READ_ONLY);"))
             .with_context(|| format!("failed to attach {}", db_path.display()))?;
+
+        // Refuse to merge inputs written by an incompatible DuckDB schema version.
+        // Copying mismatched schemas via `INSERT ... BY NAME` silently drops or
+        // NULL-fills columns instead of failing, so validate up front.
+        match attached_schema_version(conn, &alias)? {
+            Some(version) if version != DUCKDB_SCHEMA_VERSION => {
+                bail!(
+                    "DuckDB input {} has schema_version '{}', but this GEAC build merges \
+                     '{}'. Merging mismatched schema versions can silently drop columns. \
+                     Regenerate the input with a matching GEAC version, or upgrade GEAC.",
+                    db_path.display(),
+                    version,
+                    DUCKDB_SCHEMA_VERSION,
+                );
+            }
+            Some(_) => {}
+            None => {
+                warn!(
+                    file = %db_path.display(),
+                    expected = DUCKDB_SCHEMA_VERSION,
+                    "attached DuckDB has no schema_version in geac_metadata; \
+                     cannot verify schema compatibility before merge"
+                );
+            }
+        }
 
         let mut total_rows = 0_i64;
         for spec in TABLE_SPECS {
@@ -1178,6 +1223,76 @@ mod tests {
         assert!(
             err.to_string().contains("missing chrom/pos"),
             "message should explain why: {err}"
+        );
+    }
+
+    /// Build a DuckDB file at `path` containing only the supplied
+    /// `geac_metadata`/table SQL, used to exercise the schema-version guard.
+    fn write_source_duckdb(path: &Path, setup_sql: &str) {
+        let src = Connection::open(path).expect("open source duckdb");
+        src.execute_batch(setup_sql).expect("populate source duckdb");
+    }
+
+    #[test]
+    fn attached_schema_version_reads_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src_path = dir.path().join("src.duckdb");
+        write_source_duckdb(
+            &src_path,
+            "CREATE TABLE geac_metadata (schema_version VARCHAR);
+             INSERT INTO geac_metadata VALUES ('duckdb-v4');",
+        );
+
+        let conn = Connection::open_in_memory().expect("in-memory duckdb");
+        let escaped = escape_path(&src_path);
+        conn.execute_batch(&format!("ATTACH '{escaped}' AS _src0 (READ_ONLY);"))
+            .expect("attach source");
+
+        assert_eq!(
+            attached_schema_version(&conn, "_src0").expect("read schema_version"),
+            Some("duckdb-v4".to_string())
+        );
+    }
+
+    #[test]
+    fn attached_schema_version_none_when_metadata_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src_path = dir.path().join("legacy.duckdb");
+        write_source_duckdb(&src_path, "CREATE TABLE alt_bases (chrom VARCHAR);");
+
+        let conn = Connection::open_in_memory().expect("in-memory duckdb");
+        let escaped = escape_path(&src_path);
+        conn.execute_batch(&format!("ATTACH '{escaped}' AS _src0 (READ_ONLY);"))
+            .expect("attach source");
+
+        assert_eq!(
+            attached_schema_version(&conn, "_src0").expect("read schema_version"),
+            None,
+            "legacy inputs without geac_metadata must read as unverifiable, not error"
+        );
+    }
+
+    #[test]
+    fn merge_duckdb_inputs_rejects_mismatched_schema_version() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src_path = dir.path().join("old.duckdb");
+        write_source_duckdb(
+            &src_path,
+            "CREATE TABLE geac_metadata (schema_version VARCHAR);
+             INSERT INTO geac_metadata VALUES ('duckdb-v1');
+             CREATE TABLE alt_bases (chrom VARCHAR);",
+        );
+
+        let conn = Connection::open_in_memory().expect("in-memory duckdb");
+        let mut provenance = Vec::new();
+        let inputs = vec![&src_path];
+        let err = merge_duckdb_inputs(&conn, &inputs, &mut provenance)
+            .expect_err("mismatched schema version must be rejected before copying");
+        let msg = err.to_string();
+        assert!(msg.contains("duckdb-v1"), "message should name the input version: {msg}");
+        assert!(
+            msg.contains(DUCKDB_SCHEMA_VERSION),
+            "message should name the expected version: {msg}"
         );
     }
 

@@ -57,6 +57,18 @@ Captured 2026-04-01. All three gating items shipped in v0.4.0.
 - Re-examine N-base handling before v0.3.0 — resolved as part of the fragment-level
   depth overhaul. See `tally_pileup` doc comment for the full classification table
   including N cases.
+- DuckDB schema-version validation on merge (2026-06-13) — `merge_duckdb_inputs`
+  previously attached incoming cohort DuckDBs and copied their tables via
+  `INSERT ... BY NAME` without ever checking the `schema_version` stamped in their
+  `geac_metadata`. Because `BY NAME` silently drops or NULL-fills columns rather than
+  erroring, merging inputs from an incompatible GEAC build could corrupt a cohort
+  without any signal. Fix: new `attached_schema_version` helper reads
+  `geac_metadata.schema_version` right after `ATTACH`; a mismatch against the current
+  `DUCKDB_SCHEMA_VERSION` (`"duckdb-v4"`) now bails before any copy. Legacy inputs that
+  predate version stamping (no `geac_metadata`) log a warning instead of failing —
+  unverifiable is treated differently from incompatible. The reverse forward item
+  (stamp the version into per-Parquet metadata so non-DuckDB inputs can be checked too)
+  remains open in `docs/CODE_AUDIT.md`. From the 2026-06-10 whole-codebase audit.
 
 ---
 

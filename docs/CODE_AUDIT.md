@@ -44,11 +44,16 @@ Findings — cross-layer contract:
   `raw["feature_tables"]` at runtime, `DataSource.has_optional_table("fusions")` /
   `("coverage_intervals")` can never return True. Fix: add both tables to the JSON and add a
   test enumerating merge `TableSpec`s that asserts each is in the schema.
-- [ ] **`DUCKDB_SCHEMA_VERSION` is stamped but never validated.** Defined at
+- [x] **`DUCKDB_SCHEMA_VERSION` is stamped but never validated.** Defined at
   `src/merge.rs:12` (`"duckdb-v4"`) and written into the metadata table (`:842`), but merge
   never checks the schema version of incoming data (no compare/bail anywhere). Combined with
   the open forward item to stamp version into per-Parquet metadata, merging inputs produced
   by an incompatible GEAC version can silently truncate columns rather than failing.
+  **Resolved 2026-06-13:** `merge_duckdb_inputs` now reads `schema_version` from each
+  attached source's `geac_metadata` (`attached_schema_version`) immediately after `ATTACH`
+  and bails on mismatch before any table copy. Legacy inputs with no `geac_metadata` log a
+  warning rather than failing (unverifiable, not incompatible). Covered by three unit tests
+  in `src/merge.rs`. The per-Parquet version-stamping forward item remains open.
 
 Findings — refactor / duplication:
 
