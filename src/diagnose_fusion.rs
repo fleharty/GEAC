@@ -9,7 +9,7 @@ use tracing::info;
 
 use crate::build_fusion_index::hamming_neighbors_canonical;
 use crate::cli::DiagnoseFusionArgs;
-use crate::kmer::kmer_iter;
+use crate::kmer::{kmer_iter, non_acgt_positions, render_layout_track};
 
 /// Decode a 2-bit canonical k-mer hash to a DNA string (A=0 C=1 G=2 T=3, MSB =
 /// leftmost base). The string is the canonical orientation.
@@ -81,6 +81,7 @@ struct ReadEvidence {
     b_positions: Vec<usize>, // k-mer start positions matching gene B
     a_hits: Vec<u64>,        // the actual gene-A k-mers hit (for error-path flagging)
     b_hits: Vec<u64>,        // the actual gene-B k-mers hit
+    n_base_positions: Vec<usize>, // read positions of non-ACGT bases (N etc.)
     n_windows: usize,        // read_len - k + 1
 }
 
@@ -107,20 +108,19 @@ impl ReadEvidence {
         let b_max = *self.b_positions.iter().max().unwrap();
         (a_max + k <= b_min) || (b_max + k <= a_min)
     }
-    /// 'A'/'B'/'.' track of length n_windows showing where each gene's k-mers land.
-    fn layout(&self) -> String {
-        let mut track = vec![b'.'; self.n_windows];
-        for &p in &self.a_positions {
-            if p < track.len() {
-                track[p] = b'A';
-            }
-        }
-        for &p in &self.b_positions {
-            if p < track.len() {
-                track[p] = b'B';
-            }
-        }
-        String::from_utf8(track).unwrap()
+    /// Per-window track of length n_windows showing where each gene's k-mers land:
+    /// `A`/`B` = a gene-A/gene-B k-mer matched; `N` = the window contains a non-ACGT
+    /// base so no k-mer could be emitted (masked); `.` = a k-mer was emitted but
+    /// matched neither gene (chimeric junction or non-indexed sequence). Shared with
+    /// the `fusions` `FL` BAM tag via [`render_layout_track`].
+    fn layout(&self, k: usize) -> String {
+        render_layout_track(
+            self.n_windows,
+            &self.a_positions,
+            &self.b_positions,
+            &self.n_base_positions,
+            k,
+        )
     }
 }
 
@@ -197,6 +197,9 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
                 b_hits.push(kmer);
             }
         }
+        // Positions of non-ACGT bases (N etc.). kmer_iter treats any such base as a
+        // window break, so these blank out k-mer windows in the layout track.
+        let n_base_positions = non_acgt_positions(&seq);
 
         let (chrom, pos) = if record.tid() >= 0 {
             let name = std::str::from_utf8(header_view.tid2name(record.tid() as u32))
@@ -214,6 +217,7 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
             mapq: record.mapq(),
             a_positions,
             b_positions,
+            n_base_positions,
             a_hits,
             b_hits,
             n_windows,
@@ -388,6 +392,7 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
         writeln!(out, "== Per-read k-mer layout written to {} ==", p.display())?;
     } else {
         writeln!(out, "== Per-read k-mer layout (first 15 reads; --per-read-output for all) ==")?;
+        writeln!(out, "layout_5to3 legend: A=gene-A k-mer  B=gene-B k-mer  N=window masked by an N base  .=k-mer matched neither gene")?;
         writeln!(out, "{per_read_header}")?;
         for e in evidence.iter().take(15) {
             write_read_row(&mut out, e, k, min_anchor)?;
@@ -417,7 +422,7 @@ fn write_read_row(w: &mut impl Write, e: &ReadEvidence, k: usize, min_anchor: us
         e.b_count(),
         e.spanning(),
         e.coherent(k, min_anchor),
-        e.layout()
+        e.layout(k)
     )?;
     Ok(())
 }
@@ -463,5 +468,50 @@ fn verdict(
              suspicious-k-mer table to decide",
             coherent_frac * 100.0
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn evidence(
+        a_positions: Vec<usize>,
+        b_positions: Vec<usize>,
+        n_base_positions: Vec<usize>,
+        n_windows: usize,
+    ) -> ReadEvidence {
+        ReadEvidence {
+            qname: "r".to_string(),
+            chrom: "chr1".to_string(),
+            pos: 0,
+            mapq: 60,
+            a_positions,
+            b_positions,
+            n_base_positions,
+            a_hits: Vec::new(),
+            b_hits: Vec::new(),
+            n_windows,
+        }
+    }
+
+    #[test]
+    fn layout_marks_n_masked_windows() {
+        // k=11, 50 bp read -> 40 windows. An N at read position 5 masks every window
+        // whose [s, s+k) range contains position 5: starts 0..=5 (6 windows).
+        let e = evidence((6..=14).collect(), (25..=39).collect(), vec![5], 40);
+        let track = e.layout(11);
+        assert_eq!(&track[0..6], "NNNNNN");
+        assert_eq!(&track[6..15], "AAAAAAAAA");
+        assert_eq!(&track[15..25], "..........");
+        assert_eq!(&track[25..40], "BBBBBBBBBBBBBBB");
+    }
+
+    #[test]
+    fn layout_clean_read_has_no_n() {
+        let e = evidence((0..=14).collect(), (25..=39).collect(), vec![], 40);
+        let track = e.layout(11);
+        assert!(!track.contains('N'));
+        assert_eq!(&track[0..15], "AAAAAAAAAAAAAAA");
     }
 }

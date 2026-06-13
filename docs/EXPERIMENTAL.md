@@ -179,7 +179,7 @@ geac experimental fusions \
 | `--min-kmer-hits <N>` | `3` | Min unique k-mer hits for a read→gene assignment. |
 | `--min-supporting-reads <N>` | `2` | Min fragments supporting a fusion to report it. |
 | `--min-mapq <N>` | `0` | Mapping-quality floor (unmapped reads bypass it). |
-| `--reads-output <PATH>` | — | BAM of all reads from fusion-supporting fragments. Each record is tagged `FX:Z:GENEA::GENEB` with the fusion it supports; a BAI is built automatically. The pair order in `FX` matches the `gene_a`/`gene_b` columns of the Parquet/TSV and the `fusion` column of `--kmer-hits-output` (all use gene-index order), so the tag joins cleanly back to the tables. |
+| `--reads-output <PATH>` | — | BAM of all reads from fusion-supporting fragments. Each record is tagged `FX:Z:GENEA::GENEB` with the fusion it supports, and `FL:Z:<track>` with that read's per-k-mer-window layout against the pair (reference 5'→3', i.e. the BAM `SEQ` orientation; `A`/`B` = a gene-A/gene-B k-mer, where A/B is the first/second gene in `FX`; `N` = window masked by a non-ACGT base; `.` = k-mer matching neither gene — the same string as `diagnose-fusion`'s `layout_5to3`). A BAI is built automatically. The pair order in `FX` matches the `gene_a`/`gene_b` columns of the Parquet/TSV and the `fusion` column of `--kmer-hits-output` (all use gene-index order), so the tag joins cleanly back to the tables. |
 | `--tsv-output <PATH>` | — | Human-readable fusion table. |
 | `--kmer-hits-output <PATH>` | — | One row per k-mer hit from fusion reads. The `kmer_pos_in_read` column gives each k-mer's 0-based offset within the read, which locates the Gene A→Gene B transition on junction-spanning reads. |
 | `--breakpoints-output <PATH>` | — | Per-fusion breakpoint TSV. Projects the k-mer transition on junction-spanning reads onto genomic coordinates; shares the same second BAM pass as `--kmer-hits-output` (only one extra scan when both are set). |
@@ -651,18 +651,38 @@ geac experimental diagnose-fusion \
    contributed, how many reads carry it, whether it is **within one substitution of an
    index k-mer of the other gene** (the sequencing-error path that manufactures the
    call), and its genome-wide copy number.
-4. **Per-read layout track** — an `A`/`B`/`.` string per read showing where each gene's
-   k-mers land, so interleaving vs blocking is visible at a glance:
+4. **Per-read layout track** — a per-k-mer-window string (reference 5'→3', the BAM
+   `SEQ` orientation) showing where each gene's k-mers land, so interleaving vs blocking
+   is visible at a glance:
+
+   | char | meaning |
+   |------|---------|
+   | `A` / `B` | a gene-A / gene-B k-mer matched at that window |
+   | `N` | the window contains a non-ACGT base (an `N`), so no k-mer could be emitted — a *masked* gap, not a sequence gap |
+   | `.` | a k-mer was emitted but matched neither gene (chimeric junction, or sequence not in the index) |
 
 ```
 qname   chrom  pos  mapq  a_count  b_count  spanning  coherent  layout_5to3
 read0   chr22  …    60    15       15       true      true      AAAAAAAAAAAAAAA..........BBBBBBBBBBBBBBB
-read1   chr22  …    60    9        8        true      false     ABABABAABABBABAB...
+read1   chr22  …    60     9       15       true      true      NNNNNNAAAAAAAAA..........BBBBBBBBBBBBBBB
+read2   chr22  …    60     9        8       true      false     ABABABAABABBABAB...
 ```
 
-A call where ~all spanning reads are **interleaved**, the minority side is **weakly
-anchored**, and its k-mers are **1 substitution from the other gene** is a textbook
-k-mer artifact rather than a real fusion.
+The `N`/`.` distinction matters when interpreting a wide gap between the A and B blocks:
+a single `N` masks roughly `k` windows (the k-mer iterator resets on any non-ACGT base
+and must refill), so a gap of `N`s is read-quality masking (common in duplex/consensus
+BAMs that write `N` at disagreement positions), whereas a gap of `.`s at the junction is
+genuine chimeric sequence — a candidate breakpoint, possibly with a small insertion.
+
+Because the track follows the BAM `SEQ` (reference-forward) orientation, a reverse-strand
+read is laid out 3'→5' relative to the original fragment, so its A/B blocks appear in the
+mirror order. The gene assignment is unaffected — k-mers are canonicalized — so counts,
+spanning, and coherence are orientation-independent; only the left-right order of blocks
+flips. (The `FL` tag written by `fusions --reads-output` uses this same orientation.)
+
+A call where ~all spanning reads are **interleaved** (`ABAB`), the minority side is
+**weakly anchored**, and its k-mers are **1 substitution from the other gene** is a
+textbook k-mer artifact rather than a real fusion.
 
 ---
 

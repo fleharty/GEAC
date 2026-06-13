@@ -15,7 +15,7 @@ use rust_htslib::bam::Read;
 use tracing::info;
 
 use crate::cli::FusionsArgs;
-use crate::kmer::kmer_iter;
+use crate::kmer::{kmer_iter, non_acgt_positions, render_layout_track};
 
 // ─── Index loading ────────────────────────────────────────────────────────────
 
@@ -393,6 +393,38 @@ fn read_coherence(rh: &ReadHit, ga: u32, gb: u32, k: usize, min_anchor: u32) -> 
     let k32 = k as u32;
     let coherent = (a_max + k32 <= b_min) || (b_max + k32 <= a_min);
     (true, coherent)
+}
+
+/// Build the per-k-mer-window layout string for a read against fusion pair (ga, gb).
+/// One character per k-mer start position (reference 5'→3', the BAM `SEQ` orientation):
+/// `A`/`B` where the window's k-mer maps to gene ga/gb in the index, `N` for a window
+/// containing a non-ACGT base (no k-mer is emitted there), and `.` for a k-mer matching
+/// neither gene. Renders via the shared [`render_layout_track`], so it is byte-for-byte
+/// the string `diagnose-fusion` prints as `layout_5to3`; written to the `FL` BAM tag so
+/// each evidence read carries its own A→B layout for IGV / samtools inspection.
+fn fusion_layout_track(
+    seq: &[u8],
+    k: usize,
+    kmer_to_gene: &HashMap<u64, u32>,
+    ga: u32,
+    gb: u32,
+) -> String {
+    if seq.len() < k {
+        return String::new();
+    }
+    let n_windows = seq.len() - k + 1;
+    let mut a_positions = Vec::new();
+    let mut b_positions = Vec::new();
+    for (kmer, pos) in kmer_iter(seq, k) {
+        if let Some(&g) = kmer_to_gene.get(&kmer) {
+            if g == ga {
+                a_positions.push(pos);
+            } else if g == gb {
+                b_positions.push(pos);
+            }
+        }
+    }
+    render_layout_track(n_windows, &a_positions, &b_positions, &non_acgt_positions(seq), k)
 }
 
 /// Per-fusion candidate statistics accumulated during fragment aggregation.
@@ -1023,13 +1055,16 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     // Build fusion_qnames once from the cached qname→pair mapping. Filtering by
     // fusion_label ensures only post-filter survivors appear. Both secondary BAM
     // passes share this map, avoiding re-running fragment_top_pair per qname.
-    let fusion_qnames: HashMap<Vec<u8>, String> = qname_to_pair
-        .into_iter()
-        .filter_map(|(qname, key)| {
-            let label = fusion_label.get(&key)?;
-            Some((qname, label.clone()))
-        })
-        .collect();
+    // qname → label, plus qname → (gene_a, gene_b) index pair (same gene-index order
+    // as the FX label) used to draw the per-read k-mer layout tag in the evidence BAM.
+    let mut fusion_qnames: HashMap<Vec<u8>, String> = HashMap::new();
+    let mut fusion_pairs: HashMap<Vec<u8>, (u32, u32)> = HashMap::new();
+    for (qname, key) in qname_to_pair {
+        if let Some(label) = fusion_label.get(&key) {
+            fusion_pairs.insert(qname.clone(), key);
+            fusion_qnames.insert(qname, label.clone());
+        }
+    }
 
     // Optional second BAM pass: write all reads from fusion-supporting fragments.
     // NOTE: this pass intentionally writes every record for a matching qname —
@@ -1066,6 +1101,17 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 record
                     .push_aux(b"FX", bam::record::Aux::String(label))
                     .context("failed to add FX tag to BAM record")?;
+                // FL: per-k-mer-window layout of this read against the fusion pair —
+                // A=gene-A k-mer, B=gene-B k-mer (A/B = first/second gene in FX),
+                // N=window masked by a non-ACGT base, .=k-mer matching neither gene.
+                // Same string as the diagnose-fusion layout_5to3 column.
+                if let Some(&(ga, gb)) = fusion_pairs.get(record.qname()) {
+                    let track = fusion_layout_track(&record.seq().as_bytes(), k, &index.kmer_to_gene, ga, gb);
+                    let _ = record.remove_aux(b"FL");
+                    record
+                        .push_aux(b"FL", bam::record::Aux::String(&track))
+                        .context("failed to add FL tag to BAM record")?;
+                }
                 writer.write(&record).context("failed to write BAM record")?;
                 reads_written += 1;
             }
@@ -1313,6 +1359,27 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fusion_layout_track_blocks_n_and_classifies() {
+        // k=4. Read: 4 bp of gene-A sequence, then an N, then 4 bp of gene-B.
+        // Build a tiny index mapping the exact k-mers present to gene 0 (A) and 1 (B).
+        let seq = b"ACGTNTTGG"; // positions: ACGT | N | TTGG
+        let k = 4;
+        let mut kmer_to_gene: HashMap<u64, u32> = HashMap::new();
+        // gene 0 (A): canonical k-mer of "ACGT"
+        for (kmer, _) in kmer_iter(b"ACGT", k) {
+            kmer_to_gene.insert(kmer, 0);
+        }
+        // gene 1 (B): canonical k-mer of "TTGG"
+        for (kmer, _) in kmer_iter(b"TTGG", k) {
+            kmer_to_gene.insert(kmer, 1);
+        }
+        let track = fusion_layout_track(seq, k, &kmer_to_gene, 0, 1);
+        // 9 bp, k=4 -> 6 windows (starts 0..5).
+        // start0 ACGT -> A; starts 1..4 contain the N at index 4 -> N; start5 TTGG -> B.
+        assert_eq!(track, "ANNNNB");
+    }
 
     /// Build a ReadHit with the given primary/second gene assignments. Positions
     /// and counts default sensibly; tests override what they exercise.
