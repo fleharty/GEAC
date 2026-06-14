@@ -57,6 +57,23 @@ Captured 2026-04-01. All three gating items shipped in v0.4.0.
 - Re-examine N-base handling before v0.3.0 — resolved as part of the fragment-level
   depth overhaul. See `tally_pileup` doc comment for the full classification table
   including N cases.
+- Flexible `--pipeline` + configurable family-size tags (2026-06-14) — `--pipeline`
+  was a closed `fgbio`/`dragen`/`raw` enum that served two jobs at once: a provenance
+  label *and* a behavioral discriminant selecting which aux tags `family_size_tags`
+  reads. A site running ~9 distinct duplex pipelines (each with its own, or no,
+  family-size convention) needed arbitrary pipeline values. Fix: split the two jobs.
+  `pipeline` became a free-text `Option<String>` label stored verbatim; the behavioral
+  part moved to a `FamilySizeScheme { ab_tag, ba_tag, total_tag, total_fallback }`
+  (`src/record.rs`) resolved once per run. `fgbio`/`dragen` are kept as built-in
+  presets with their exact prior fallback semantics (fgbio `cD`→`aD+bD` = `SumAbBa`;
+  DRAGEN `XW>0 else XV` = `PositiveOrAb`), and `--family-size-tags ab=XX,ba=YY,total=ZZ[,fallback=sum|none]`
+  lets any other pipeline declare its tags. Rejected alternatives: (a) baking the 9
+  names into a built-in registry — leaks internal infra into a public repo and needs a
+  recompile per pipeline; (b) a `geac.toml` registry on the Rust side — the CLI has no
+  config loader today, so it's net-new infrastructure. The flag keeps internal names in
+  the caller's WDL inputs and is forward-compatible with a future named registry. Known
+  trade-off (see `docs/CODE_AUDIT.md`): unknown pipeline values no longer error, so a
+  typo silently yields null family size — a guardrail warning is a follow-up.
 - DuckDB schema-version validation on merge (2026-06-13) — `merge_duckdb_inputs`
   previously attached incoming cohort DuckDBs and copied their tables via
   `INSERT ... BY NAME` without ever checking the `schema_version` stamped in their

@@ -14,6 +14,33 @@ Conventions:
 
 ---
 
+## 2026-06-14 — review of flexible `--pipeline` / `--family-size-tags` (v0.4.47)
+
+Pre-release review of the family-size decoupling change. Core logic verified
+behaviorally equivalent to the prior enum (fgbio/dragen presets traced
+preset-by-preset; 10 new unit tests). Findings, none release-blocking:
+
+- [ ] **Unknown `--pipeline` no longer errors → silent null family size.** The
+  removed `FromStr for Pipeline` rejected unknown values; now a typo (e.g.
+  `--pipeline fgboi`) resolves to `FamilySizeScheme::none()` and produces all-null
+  family sizes while still labeling the data, surfacing only downstream in the
+  Explorer. Fix: in `collect_alt_bases`, `warn!` when `read_type` is
+  duplex/simplex, the resolved scheme is `none()`, and no `--family-size-tags` was
+  given ("consensus reads requested but no family-size tags will be read").
+- [ ] **Pipeline label no longer normalized to lowercase.** The old enum's
+  `Display` always wrote lowercase; the label is now stored verbatim, so
+  `--pipeline Fgbio` vs `fgbio` fragment the `pipeline` column across a cohort.
+  Either document "stored verbatim" or lowercase recognized presets on store.
+- [ ] **WDL `--family-size-tags` value interpolated unquoted.** `~{"--family-size-tags " + family_size_tags}`
+  splits on spaces; the Rust parser tolerates spaces (`ab=aD, ba=bD`) but the shell
+  rendering would break. Documented examples use no spaces (matches house style of
+  other unquoted optionals). Note "no spaces" or shell-quote.
+- [ ] **`parse_aux_tag` validates byte length, not ASCII.** A 2-byte multibyte
+  input passes `len() == 2`; BAM tags are ASCII `[A-Za-z][A-Za-z0-9]`. Tighten to
+  ASCII-alphanumeric to match the spec (nit).
+
+---
+
 ## 2026-06-10 — whole-codebase pass: explorer layer, cross-layer contracts, structural debt
 
 Scope:
