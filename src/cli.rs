@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::record::{Pipeline, ReadType};
+use crate::record::{FamilySizeScheme, ReadType, TotalFallback};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -186,9 +186,22 @@ pub struct CollectArgs {
     #[arg(long, default_value = "duplex")]
     pub read_type: ReadType,
 
-    /// Pipeline that produced the BAM/CRAM: fgbio, dragen, or raw
+    /// Pipeline that produced the BAM/CRAM. Free-text label stored verbatim in
+    /// the output `pipeline` column. `fgbio` and `dragen` (case-insensitive) also
+    /// select built-in family-size tag schemes (`aD`/`bD`/`cD` and `XV`/`XW`);
+    /// any other value records the label and reads no family size unless
+    /// `--family-size-tags` is given.
     #[arg(long)]
-    pub pipeline: Option<Pipeline>,
+    pub pipeline: Option<String>,
+
+    /// Override which aux tags encode family size, as comma-separated KEY=VALUE
+    /// pairs. Keys: `ab`, `ba`, `total` (two-character BAM tags), and optional
+    /// `fallback` (`sum` = use ab+ba when total is absent, like fgbio's cD; or
+    /// `none`, the default). Example: `--family-size-tags ab=aD,ba=bD,total=cD,fallback=sum`.
+    /// Takes precedence over the `--pipeline` preset. A tag absent from a read
+    /// yields a null family size for that read.
+    #[arg(long = "family-size-tags", value_name = "ab=XX,ba=YY,total=ZZ")]
+    pub family_size_tags: Option<String>,
 
     /// Optional VCF/BCF file to annotate whether loci overlap called variants.
     /// Mutually exclusive with --variants-tsv.
@@ -566,7 +579,7 @@ pub struct CoverageArgs {
 
     /// Pipeline that produced the BAM/CRAM: fgbio, dragen, or raw
     #[arg(long)]
-    pub pipeline: Option<Pipeline>,
+    pub pipeline: Option<String>,
 
     /// Optional BED file or Picard interval list of target regions.
     /// When provided, only positions within targets are emitted (including zero-depth positions).
@@ -687,7 +700,7 @@ pub struct FragmentsArgs {
 
     /// Pipeline that produced the BAM/CRAM: fgbio, dragen, or raw
     #[arg(long)]
-    pub pipeline: Option<Pipeline>,
+    pub pipeline: Option<String>,
 
     /// Restrict processing to a region. Accepts either a region string (e.g. "chr1:1000-2000")
     /// or a path to a BED file / Picard interval list.
@@ -1190,14 +1203,134 @@ impl std::str::FromStr for ReadType {
     }
 }
 
-impl std::str::FromStr for Pipeline {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "fgbio" => Ok(Pipeline::Fgbio),
-            "dragen" => Ok(Pipeline::Dragen),
-            "raw" => Ok(Pipeline::Raw),
-            _ => anyhow::bail!("invalid pipeline '{}': expected fgbio, dragen, or raw", s),
+impl CollectArgs {
+    /// Resolve the family-size tag scheme for this run: an explicit
+    /// `--family-size-tags` spec takes precedence; otherwise the `--pipeline`
+    /// label selects a built-in preset (`fgbio`/`dragen`), falling back to no
+    /// family-size extraction for any other (or absent) pipeline.
+    pub fn family_size_scheme(&self) -> anyhow::Result<FamilySizeScheme> {
+        resolve_family_size_scheme(self.pipeline.as_deref(), self.family_size_tags.as_deref())
+    }
+}
+
+/// Pick a [`FamilySizeScheme`] from a pipeline label and/or an explicit tag spec.
+fn resolve_family_size_scheme(
+    pipeline: Option<&str>,
+    spec: Option<&str>,
+) -> anyhow::Result<FamilySizeScheme> {
+    if let Some(spec) = spec {
+        return parse_family_size_spec(spec);
+    }
+    Ok(match pipeline.map(str::to_lowercase).as_deref() {
+        Some("fgbio") => FamilySizeScheme::fgbio(),
+        Some("dragen") => FamilySizeScheme::dragen(),
+        _ => FamilySizeScheme::none(),
+    })
+}
+
+/// Parse `--family-size-tags ab=aD,ba=bD,total=cD,fallback=sum` into a scheme.
+fn parse_family_size_spec(spec: &str) -> anyhow::Result<FamilySizeScheme> {
+    let mut scheme = FamilySizeScheme::none();
+    for entry in spec.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
         }
+        let (key, value) = entry.split_once('=').ok_or_else(|| {
+            anyhow::anyhow!("--family-size-tags entry '{entry}' must be KEY=VALUE, e.g. total=cD")
+        })?;
+        match key.trim() {
+            "ab" => scheme.ab_tag = Some(parse_aux_tag(value.trim())?),
+            "ba" => scheme.ba_tag = Some(parse_aux_tag(value.trim())?),
+            "total" => scheme.total_tag = Some(parse_aux_tag(value.trim())?),
+            "fallback" => {
+                scheme.total_fallback = match value.trim().to_lowercase().as_str() {
+                    "sum" => TotalFallback::SumAbBa,
+                    "none" => TotalFallback::None,
+                    other => anyhow::bail!(
+                        "--family-size-tags fallback '{other}' must be 'sum' or 'none'"
+                    ),
+                }
+            }
+            other => anyhow::bail!(
+                "--family-size-tags key '{other}' must be one of ab, ba, total, fallback"
+            ),
+        }
+    }
+    if scheme.ab_tag.is_none() && scheme.ba_tag.is_none() && scheme.total_tag.is_none() {
+        anyhow::bail!("--family-size-tags must set at least one of ab, ba, total");
+    }
+    Ok(scheme)
+}
+
+/// Parse a two-character BAM auxiliary tag name into a byte pair.
+fn parse_aux_tag(s: &str) -> anyhow::Result<[u8; 2]> {
+    let bytes = s.as_bytes();
+    if bytes.len() != 2 {
+        anyhow::bail!("--family-size-tags tag '{s}' must be exactly two characters (e.g. cD)");
+    }
+    Ok([bytes[0], bytes[1]])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pipeline_presets_resolve_to_builtin_schemes() {
+        assert_eq!(
+            resolve_family_size_scheme(Some("fgbio"), None).unwrap(),
+            FamilySizeScheme::fgbio()
+        );
+        // Case-insensitive.
+        assert_eq!(
+            resolve_family_size_scheme(Some("DRAGEN"), None).unwrap(),
+            FamilySizeScheme::dragen()
+        );
+    }
+
+    #[test]
+    fn unknown_pipeline_resolves_to_no_family_size() {
+        assert_eq!(
+            resolve_family_size_scheme(Some("myprep_v3"), None).unwrap(),
+            FamilySizeScheme::none()
+        );
+        assert_eq!(
+            resolve_family_size_scheme(None, None).unwrap(),
+            FamilySizeScheme::none()
+        );
+    }
+
+    #[test]
+    fn explicit_spec_overrides_pipeline_preset() {
+        // Even with pipeline=fgbio, an explicit spec wins.
+        let scheme = resolve_family_size_scheme(Some("fgbio"), Some("total=fz")).unwrap();
+        assert_eq!(scheme.total_tag, Some(*b"fz"));
+        assert_eq!(scheme.ab_tag, None);
+        assert_eq!(scheme.total_fallback, TotalFallback::None);
+    }
+
+    #[test]
+    fn spec_parses_all_keys_including_sum_fallback() {
+        let scheme = parse_family_size_spec("ab=aD, ba=bD, total=cD, fallback=sum").unwrap();
+        assert_eq!(
+            scheme,
+            FamilySizeScheme {
+                ab_tag: Some(*b"aD"),
+                ba_tag: Some(*b"bD"),
+                total_tag: Some(*b"cD"),
+                total_fallback: TotalFallback::SumAbBa,
+            }
+        );
+    }
+
+    #[test]
+    fn spec_rejects_bad_tag_length_and_unknown_keys() {
+        assert!(parse_family_size_spec("total=ABC").is_err());
+        assert!(parse_family_size_spec("foo=aD").is_err());
+        assert!(parse_family_size_spec("total").is_err());
+        assert!(parse_family_size_spec("fallback=bogus").is_err());
+        // No tag keys set at all.
+        assert!(parse_family_size_spec("fallback=sum").is_err());
     }
 }

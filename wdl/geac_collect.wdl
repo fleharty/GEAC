@@ -14,7 +14,8 @@ version 1.0
 ##   reference_fasta      - Reference FASTA
 ##   reference_fasta_index - Corresponding .fai index
 ##   read_type            - duplex | simplex | raw
-##   pipeline             - fgbio | dragen | raw
+##   pipeline             - free-text label; fgbio/dragen also select built-in family-size tag schemes
+##   family_size_tags     - (optional) override family-size aux tags, e.g. "ab=aD,ba=bD,total=cD,fallback=sum"; overrides the pipeline preset
 ##   sample_id            - (optional) override sample ID; defaults to BAM SM tag
 ##   subject_id           - (optional) biological subject identifier (e.g. patient or animal)
 ##   sample_type          - (optional) sample substrate type (e.g. cfDNA, tumor_tissue)
@@ -69,6 +70,7 @@ workflow GeacCollect {
         String read_type
         String pipeline
 
+        String? family_size_tags
         String? sample_id
         String? subject_id
         String? sample_type
@@ -119,6 +121,7 @@ workflow GeacCollect {
             reference_fasta_index = reference_fasta_index,
             read_type             = read_type,
             pipeline              = pipeline,
+            family_size_tags      = family_size_tags,
             sample_id             = sample_id,
             subject_id            = subject_id,
             sample_type           = sample_type,
@@ -176,6 +179,7 @@ task Collect {
         String read_type
         String pipeline
 
+        String? family_size_tags
         String? sample_id
         String? subject_id
         String? sample_type
@@ -234,6 +238,7 @@ task Collect {
             --output           ~{output_arg} \
             --read-type        ~{read_type} \
             --pipeline         ~{pipeline} \
+            ~{"--family-size-tags " + family_size_tags} \
             --min-base-qual    ~{min_base_qual} \
             --min-map-qual     ~{min_map_qual} \
             --max-pileup-depth ~{max_pileup_depth} \

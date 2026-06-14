@@ -80,7 +80,7 @@ fn records_to_batch(records: &[SampleMetricsRecord], schema: Arc<Schema>) -> Res
     let pipeline: ArrayRef = Arc::new(StringArray::from(
         records
             .iter()
-            .map(|r| r.pipeline.map(|p| p.to_string()))
+            .map(|r| r.pipeline.clone())
             .collect::<Vec<_>>(),
     ));
     let input_checksum_sha256: ArrayRef = Arc::new(StringArray::from(

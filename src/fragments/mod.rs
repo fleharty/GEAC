@@ -122,7 +122,7 @@ pub fn collect_fragments(args: &FragmentsArgs, writer: &mut FragmentsWriter) -> 
                 end_motif_3p,
                 map_qual,
                 read_type: args.read_type,
-                pipeline: args.pipeline,
+                pipeline: args.pipeline.clone(),
                 subject_id: args.subject_id.clone(),
                 sample_type: args.sample_type.clone(),
                 batch: args.batch.clone(),

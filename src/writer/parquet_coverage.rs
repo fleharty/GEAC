@@ -249,7 +249,7 @@ fn records_to_batch(
     let pipeline: ArrayRef = Arc::new(StringArray::from(
         records
             .iter()
-            .map(|r| r.pipeline.map(|p| p.to_string()))
+            .map(|r| r.pipeline.clone())
             .collect::<Vec<_>>(),
     ));
     let subject_id: ArrayRef = Arc::new(StringArray::from(

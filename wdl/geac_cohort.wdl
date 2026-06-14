@@ -24,7 +24,8 @@ version 1.0
 ##   reference_fasta         - Reference FASTA
 ##   reference_fasta_index   - Corresponding .fai index
 ##   read_types              - (optional) per-sample array of duplex|simplex|raw; defaults to "duplex" for all
-##   pipelines               - (optional) per-sample array of fgbio|dragen|raw; defaults to "fgbio" for all
+##   pipelines               - (optional) per-sample free-text pipeline label; fgbio/dragen select built-in family-size schemes; defaults to "fgbio" for all
+##   family_size_tags        - (optional) per-sample override of family-size aux tags, e.g. "ab=aD,ba=bD,total=cD,fallback=sum"; overrides the pipeline preset for that sample
 ##   batches                 - (optional) per-sample batch/group label stored as a column in each Parquet
 ##   labels1                 - (optional) per-sample free-text label 1 (e.g. tissue type)
 ##   labels2                 - (optional) per-sample free-text label 2 (e.g. library prep method)
@@ -80,6 +81,7 @@ workflow GeacCohort {
         File   reference_fasta_index
         Array[String]? read_types      # optional; if provided must be same length as input_bams
         Array[String]? pipelines       # optional; if provided must be same length as input_bams
+        Array[String]? family_size_tags # optional; per-sample family-size tag override, same length as input_bams
         Array[String]? batches         # optional; per-sample batch/group label stored as a column
         Array[String]? labels1         # optional; per-sample free-text label 1
         Array[String]? labels2         # optional; per-sample free-text label 2
@@ -146,6 +148,9 @@ workflow GeacCohort {
         }
         String this_read_type = if defined(read_types) then select_first([read_types])[i] else "duplex"
         String this_pipeline  = if defined(pipelines)  then select_first([pipelines])[i]  else "fgbio"
+        if (defined(family_size_tags)) {
+            String this_family_size_tags = select_first([family_size_tags])[i]
+        }
         if (defined(batches)) {
             String this_batch  = select_first([batches])[i]
         }
@@ -189,6 +194,7 @@ workflow GeacCohort {
                 reference_fasta_index = reference_fasta_index,
                 read_type             = this_read_type,
                 pipeline              = this_pipeline,
+                family_size_tags      = this_family_size_tags,
                 batch                 = this_batch,
                 label1                = this_label1,
                 label2                = this_label2,
@@ -290,6 +296,7 @@ task Collect {
         String read_type
         String pipeline
 
+        String? family_size_tags
         String? sample_id
         String? subject_id
         String? sample_type
@@ -344,6 +351,7 @@ task Collect {
             --output           ~{output_arg} \
             --read-type        ~{read_type} \
             --pipeline         ~{pipeline} \
+            ~{"--family-size-tags " + family_size_tags} \
             --min-base-qual    ~{min_base_qual} \
             --min-map-qual     ~{min_map_qual} \
             --max-pileup-depth ~{max_pileup_depth} \

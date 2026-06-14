@@ -45,7 +45,8 @@ Important options:
 | `--reads-output` | off | Also write `.reads.parquet` alongside `.locus.parquet` |
 | `--input-checksum-sha256` | off | Hash input BAM/CRAM and store checksum in output provenance |
 | `--read-type` | `duplex` | `raw`, `simplex`, or `duplex` |
-| `--pipeline` | none | `fgbio`, `dragen`, or `raw` |
+| `--pipeline` | none | Free-text pipeline label stored in the `pipeline` column. `fgbio`/`dragen` (case-insensitive) also select built-in family-size tag schemes (`aD`/`bD`/`cD` and `XV`/`XW`); any other value records the label and reads no family size unless `--family-size-tags` is given. |
+| `--family-size-tags` | none | Override family-size aux tags, as `ab=XX,ba=YY,total=ZZ[,fallback=sum\|none]` (e.g. `ab=aD,ba=bD,total=cD,fallback=sum`). Overrides the `--pipeline` preset. A tag absent from a read yields a null family size. |
 | `--vcf` | none | VCF/BCF variant-call annotation |
 | `--variants-tsv` | none | TSV variant annotation alternative to `--vcf` |
 | `--gnomad` | none | bgzip+tabix gnomAD VCF/BCF for AF annotation |

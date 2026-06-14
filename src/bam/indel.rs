@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use rust_htslib::bam::pileup::Indel;
 
-use crate::record::{Pipeline, VariantType};
+use crate::record::{FamilySizeScheme, VariantType};
 
 use super::pileup::{family_size_tags, fnv1a_64, hard_clip_counts, read_context_metrics, ReadDetail};
 
@@ -48,7 +48,7 @@ pub(super) fn indels_compatible(a: &str, b: &str) -> bool {
 /// so that overlapping pairs are correctly identified even when one read has no indel.
 pub(super) fn tally_indels(
     pileup: &rust_htslib::bam::pileup::Pileup,
-    pipeline: Option<Pipeline>,
+    family_size_scheme: &FamilySizeScheme,
     pos: i64,
     chrom_seq: &[u8],
     min_map_qual: u8,
@@ -150,7 +150,7 @@ pub(super) fn tally_indels(
             let context = read_context_metrics(&seq_bases, qpos);
             let (hc_leading, hc_trailing) = hard_clip_counts(&record);
             let hard_clip_before = if is_reverse { hc_trailing } else { hc_leading };
-            let (ab_count, ba_count, family_size) = family_size_tags(&record, pipeline);
+            let (ab_count, ba_count, family_size) = family_size_tags(&record, family_size_scheme);
             Some(ReadDetail {
                 qpos,
                 read_len: record.seq_len(),

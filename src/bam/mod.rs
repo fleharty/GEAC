@@ -72,6 +72,7 @@ pub fn collect_alt_bases(
     };
 
     let exclude_tags = crate::bam::pileup::parse_exclude_tags(&args.exclude_tag)?;
+    let family_size_scheme = args.family_size_scheme()?;
 
     let region_input = parse_region_input(args.region.as_deref())?;
     let region_filter = match &region_input {
@@ -125,7 +126,7 @@ pub fn collect_alt_bases(
                 read_details,
             } = tally_pileup(
                 &pileup,
-                args.pipeline,
+                &family_size_scheme,
                 args.min_base_qual,
                 args.min_map_qual,
                 args.include_duplicates,
@@ -245,7 +246,7 @@ pub fn collect_alt_bases(
 
             let (indels, indel_read_details) = tally_indels(
                 &pileup,
-                args.pipeline,
+                &family_size_scheme,
                 pos,
                 ref_cache.current_seq(),
                 args.min_map_qual,
@@ -327,7 +328,7 @@ pub fn collect_alt_bases(
             args.sample_type.clone(),
             args.batch.clone(),
             args.read_type,
-            args.pipeline,
+            args.pipeline.clone(),
             input_checksum_sha256,
             ti,
             region_filter.as_ref(),
@@ -415,7 +416,7 @@ impl SampleMetricsAccumulator {
         sample_type: Option<String>,
         batch: Option<String>,
         read_type: crate::record::ReadType,
-        pipeline: Option<crate::record::Pipeline>,
+        pipeline: Option<String>,
         input_checksum_sha256: Option<String>,
         target_intervals: &TargetIntervals,
         region: Option<&RegionSpec>,

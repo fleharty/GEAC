@@ -38,21 +38,64 @@ impl std::fmt::Display for ReadType {
     }
 }
 
-/// Which pipeline produced the BAM/CRAM
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Pipeline {
-    Fgbio,
-    Dragen,
-    Raw,
+/// How to extract family-size counts from a read's aux tags.
+///
+/// The `pipeline` label is now free-text (any string the user supplies), so the
+/// behavioral part — which aux tags encode family size — lives here, resolved
+/// from either a built-in preset (`fgbio`/`dragen`) or an explicit
+/// `--family-size-tags` spec. A tag that is absent from a read yields `None`,
+/// so pipelines that do not emit family size simply produce null counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilySizeScheme {
+    /// AB / top-strand raw read-count tag (fgbio `aD`, DRAGEN `XV`).
+    pub ab_tag: Option<[u8; 2]>,
+    /// BA / bottom-strand raw read-count tag (fgbio `bD`; DRAGEN has none).
+    pub ba_tag: Option<[u8; 2]>,
+    /// Total family-size tag (fgbio `cD`, DRAGEN `XW`).
+    pub total_tag: Option<[u8; 2]>,
+    /// What to do when `total_tag` is absent or non-informative.
+    pub total_fallback: TotalFallback,
 }
 
-impl std::fmt::Display for Pipeline {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Pipeline::Fgbio => write!(f, "fgbio"),
-            Pipeline::Dragen => write!(f, "dragen"),
-            Pipeline::Raw => write!(f, "raw"),
+/// Fallback rule for the total family size when `total_tag` does not yield a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TotalFallback {
+    /// No fallback: total is exactly what `total_tag` reads (or `None`).
+    None,
+    /// fgbio: when `total_tag` (`cD`) is absent, use `ab + ba` (`aD + bD`).
+    SumAbBa,
+    /// DRAGEN: use `total_tag` (`XW`) when > 0, otherwise `ab_tag` (`XV`).
+    PositiveOrAb,
+}
+
+impl FamilySizeScheme {
+    /// fgbio consensus tags: `aD` / `bD` / `cD`, with `cD` falling back to `aD + bD`.
+    pub fn fgbio() -> Self {
+        Self {
+            ab_tag: Some(*b"aD"),
+            ba_tag: Some(*b"bD"),
+            total_tag: Some(*b"cD"),
+            total_fallback: TotalFallback::SumAbBa,
+        }
+    }
+
+    /// DRAGEN family tags: `XV` (fragments) and `XW`, with `XW` preferred when > 0.
+    pub fn dragen() -> Self {
+        Self {
+            ab_tag: Some(*b"XV"),
+            ba_tag: None,
+            total_tag: Some(*b"XW"),
+            total_fallback: TotalFallback::PositiveOrAb,
+        }
+    }
+
+    /// No family-size tags (raw reads, or a pipeline that does not emit them).
+    pub fn none() -> Self {
+        Self {
+            ab_tag: None,
+            ba_tag: None,
+            total_tag: None,
+            total_fallback: TotalFallback::None,
         }
     }
 }
@@ -94,7 +137,7 @@ pub struct AltBase {
 
     // Provenance
     pub read_type: ReadType,
-    pub pipeline: Option<Pipeline>,
+    pub pipeline: Option<String>,
     /// Biological subject identifier — groups samples (e.g. multiple timepoints
     /// or tissue types) that come from the same person/animal/study subject.
     /// Used by `geac compare` to scope longitudinal and replicate analyses.
@@ -206,7 +249,7 @@ pub struct SampleMetricsRecord {
     pub sample_type: Option<String>,
     pub batch: Option<String>,
     pub read_type: ReadType,
-    pub pipeline: Option<Pipeline>,
+    pub pipeline: Option<String>,
     pub input_checksum_sha256: Option<String>,
     pub n_target_positions: i32,
     pub n_target_positions_covered: i32,
@@ -307,7 +350,7 @@ pub struct CoverageRecord {
 
     // ── Provenance ─────────────────────────────────────────────────────────────
     pub read_type: ReadType,
-    pub pipeline: Option<Pipeline>,
+    pub pipeline: Option<String>,
     pub subject_id: Option<String>,
     pub sample_type: Option<String>,
     pub batch: Option<String>,
@@ -332,7 +375,7 @@ pub struct AltRead {
     pub pos: i64,
     pub alt_allele: String,
     pub read_type: ReadType,
-    pub pipeline: Option<Pipeline>,
+    pub pipeline: Option<String>,
     pub subject_id: Option<String>,
     pub sample_type: Option<String>,
     pub batch: Option<String>,
@@ -407,7 +450,7 @@ pub struct FragmentRecord {
     /// Mapping quality of R1
     pub map_qual: i32,
     pub read_type: ReadType,
-    pub pipeline: Option<Pipeline>,
+    pub pipeline: Option<String>,
     pub subject_id: Option<String>,
     pub sample_type: Option<String>,
     pub batch: Option<String>,
@@ -459,7 +502,7 @@ pub struct IntervalRecord {
 
     // ── Provenance ────────────────────────────────────────────────────────────
     pub read_type: ReadType,
-    pub pipeline: Option<Pipeline>,
+    pub pipeline: Option<String>,
     pub subject_id: Option<String>,
     pub sample_type: Option<String>,
     pub batch: Option<String>,

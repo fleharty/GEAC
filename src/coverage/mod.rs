@@ -419,7 +419,7 @@ struct BinAccumulator {
     // provenance
     sample_id: String,
     read_type: crate::record::ReadType,
-    pipeline: Option<crate::record::Pipeline>,
+    pipeline: Option<String>,
     subject_id: Option<String>,
     sample_type: Option<String>,
     batch: Option<String>,
@@ -533,7 +533,7 @@ impl BinAccumulator {
         self.exon_number = None;
         self.sample_id = r.sample_id.clone();
         self.read_type = r.read_type;
-        self.pipeline = r.pipeline;
+        self.pipeline = r.pipeline.clone();
         self.subject_id = r.subject_id.clone();
         self.sample_type = r.sample_type.clone();
         self.batch = r.batch.clone();
@@ -656,7 +656,7 @@ impl BinAccumulator {
             feature_type: self.feature_type.clone(),
             exon_number: self.exon_number,
             read_type: self.read_type,
-            pipeline: self.pipeline,
+            pipeline: self.pipeline.clone(),
             subject_id: self.subject_id.clone(),
             sample_type: self.sample_type.clone(),
             batch: self.batch.clone(),
@@ -789,7 +789,7 @@ impl IntervalAccumulator {
                 0.0
             },
             read_type: args.read_type,
-            pipeline: args.pipeline,
+            pipeline: args.pipeline.clone(),
             subject_id: args.subject_id.clone(),
             sample_type: args.sample_type.clone(),
             batch: args.batch.clone(),
@@ -1055,7 +1055,7 @@ fn build_record(
         feature_type,
         exon_number,
         read_type: args.read_type,
-        pipeline: args.pipeline,
+        pipeline: args.pipeline.clone(),
         subject_id: args.subject_id.clone(),
         sample_type: args.sample_type.clone(),
         batch: args.batch.clone(),
@@ -1111,7 +1111,7 @@ fn build_zero_record(
         feature_type,
         exon_number,
         read_type: args.read_type,
-        pipeline: args.pipeline,
+        pipeline: args.pipeline.clone(),
         subject_id: args.subject_id.clone(),
         sample_type: args.sample_type.clone(),
         batch: args.batch.clone(),

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::record::Pipeline;
+use crate::record::{FamilySizeScheme, TotalFallback};
 use rust_htslib::bam;
 
 pub(super) fn fnv1a_64(bytes: &[u8]) -> u64 {
@@ -153,31 +153,29 @@ pub(super) fn read_context_metrics(bases: &[u8], qpos: usize) -> ReadContextMetr
 
 pub(super) fn family_size_tags(
     record: &bam::Record,
-    pipeline: Option<Pipeline>,
+    scheme: &FamilySizeScheme,
 ) -> (Option<i32>, Option<i32>, Option<i32>) {
-    match pipeline {
-        Some(Pipeline::Fgbio) => {
-            let ab = aux_i32(record, b"aD");
-            let ba = aux_i32(record, b"bD");
-            let fs = aux_i32(record, b"cD").or_else(|| match (ab, ba) {
-                (Some(a), Some(b)) => Some(a + b),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            });
-            (ab, ba, fs)
-        }
-        Some(Pipeline::Dragen) => {
-            let xv = aux_i32(record, b"XV");
-            let xw = aux_i32(record, b"XW");
-            let fs = match xw {
-                Some(w) if w > 0 => Some(w),
-                _ => xv,
-            };
-            (xv, None, fs)
-        }
-        Some(Pipeline::Raw) | None => (None, None, None),
-    }
+    let ab = scheme.ab_tag.and_then(|tag| aux_i32(record, &tag));
+    let ba = scheme.ba_tag.and_then(|tag| aux_i32(record, &tag));
+    let total = scheme.total_tag.and_then(|tag| aux_i32(record, &tag));
+
+    let fs = match scheme.total_fallback {
+        TotalFallback::None => total,
+        // fgbio: cD, else aD + bD (carrying whichever strand counts are present).
+        TotalFallback::SumAbBa => total.or(match (ab, ba) {
+            (Some(a), Some(b)) => Some(a + b),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }),
+        // DRAGEN: XW when positive, otherwise fall back to XV (the ab tag).
+        TotalFallback::PositiveOrAb => match total {
+            Some(w) if w > 0 => Some(w),
+            _ => ab,
+        },
+    };
+
+    (ab, ba, fs)
 }
 
 /// Tally each observed base at a pileup column with overlap detection.
@@ -211,7 +209,7 @@ pub(super) fn family_size_tags(
 /// that all reads covering a position are captured regardless of which allele they support.
 pub(super) fn tally_pileup(
     pileup: &rust_htslib::bam::pileup::Pileup,
-    pipeline: Option<Pipeline>,
+    family_size_scheme: &FamilySizeScheme,
     min_base_qual: u8,
     min_map_qual: u8,
     include_duplicates: bool,
@@ -283,7 +281,7 @@ pub(super) fn tally_pileup(
         let hard_clip_before = if is_reverse { hc_trailing } else { hc_leading };
 
         let (ab_count, ba_count, family_size, insert_size) = if do_collect {
-            let (ab, ba, fs) = family_size_tags(&record, pipeline);
+            let (ab, ba, fs) = family_size_tags(&record, family_size_scheme);
             let tlen = record.insert_size();
             let ins = if tlen == 0 {
                 None
@@ -733,7 +731,7 @@ pub(super) fn true_cycle(
 mod tests {
     use rust_htslib::bam::{self, Record};
 
-    use crate::record::Pipeline;
+    use crate::record::{FamilySizeScheme, TotalFallback};
 
     use super::{
         family_size_tags, locus_n_context_summary, parse_exclude_tags, read_context_metrics,
@@ -839,7 +837,7 @@ mod tests {
         let mut rec = Record::new();
         rec.push_aux(b"XV", bam::record::Aux::I32(7)).unwrap();
         rec.push_aux(b"XW", bam::record::Aux::I32(3)).unwrap();
-        let (ab, ba, fs) = family_size_tags(&rec, Some(Pipeline::Dragen));
+        let (ab, ba, fs) = family_size_tags(&rec, &FamilySizeScheme::dragen());
         assert_eq!(ab, Some(7));
         assert_eq!(ba, None);
         assert_eq!(fs, Some(3));
@@ -850,8 +848,54 @@ mod tests {
         let mut rec = Record::new();
         rec.push_aux(b"XV", bam::record::Aux::I32(5)).unwrap();
         rec.push_aux(b"XW", bam::record::Aux::I32(0)).unwrap();
-        let (_, _, fs) = family_size_tags(&rec, Some(Pipeline::Dragen));
+        let (_, _, fs) = family_size_tags(&rec, &FamilySizeScheme::dragen());
         assert_eq!(fs, Some(5));
+    }
+
+    #[test]
+    fn family_size_tags_reads_fgbio_ad_bd_cd() {
+        let mut rec = Record::new();
+        rec.push_aux(b"aD", bam::record::Aux::I32(4)).unwrap();
+        rec.push_aux(b"bD", bam::record::Aux::I32(2)).unwrap();
+        rec.push_aux(b"cD", bam::record::Aux::I32(6)).unwrap();
+        let (ab, ba, fs) = family_size_tags(&rec, &FamilySizeScheme::fgbio());
+        assert_eq!((ab, ba, fs), (Some(4), Some(2), Some(6)));
+    }
+
+    #[test]
+    fn family_size_tags_fgbio_sums_ab_ba_when_cd_absent() {
+        let mut rec = Record::new();
+        rec.push_aux(b"aD", bam::record::Aux::I32(4)).unwrap();
+        rec.push_aux(b"bD", bam::record::Aux::I32(2)).unwrap();
+        let (_, _, fs) = family_size_tags(&rec, &FamilySizeScheme::fgbio());
+        assert_eq!(fs, Some(6));
+    }
+
+    #[test]
+    fn family_size_tags_custom_direct_total_tag() {
+        let mut rec = Record::new();
+        rec.push_aux(b"fz", bam::record::Aux::I32(9)).unwrap();
+        let scheme = FamilySizeScheme {
+            ab_tag: None,
+            ba_tag: None,
+            total_tag: Some(*b"fz"),
+            total_fallback: TotalFallback::None,
+        };
+        let (ab, ba, fs) = family_size_tags(&rec, &scheme);
+        assert_eq!((ab, ba, fs), (None, None, Some(9)));
+    }
+
+    #[test]
+    fn family_size_tags_absent_tag_yields_none() {
+        let rec = Record::new();
+        let scheme = FamilySizeScheme {
+            ab_tag: None,
+            ba_tag: None,
+            total_tag: Some(*b"fz"),
+            total_fallback: TotalFallback::None,
+        };
+        let (_, _, fs) = family_size_tags(&rec, &scheme);
+        assert_eq!(fs, None);
     }
 
     #[test]
