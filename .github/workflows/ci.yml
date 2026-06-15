@@ -31,15 +31,12 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+      # Caches dependency build artifacts only — it prunes the local crate's
+      # output, test binaries, and incremental files before saving, so the cache
+      # stays small. The previous approach cached the entire target/ directory,
+      # which grew to ~5.7 GB and filled the runner disk on restore.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
 
       - name: Run tests
         run: cargo test
