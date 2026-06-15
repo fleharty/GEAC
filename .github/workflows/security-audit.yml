@@ -1,0 +1,32 @@
+name: Security audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "deny.toml"
+      - ".github/workflows/security-audit.yml"
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "deny.toml"
+      - ".github/workflows/security-audit.yml"
+  # Run daily so newly published RustSec advisories surface even without a push.
+  schedule:
+    - cron: "0 6 * * *"
+
+jobs:
+  cargo-deny:
+    name: cargo-deny (advisories + licenses)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # cargo-deny only reads Cargo.lock + crate metadata, so no system deps or
+      # crate compilation are needed — the action installs a prebuilt binary.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses bans sources
