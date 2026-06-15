@@ -3,6 +3,8 @@ name = "geac"
 version = "0.4.49"
 edition = "2021"
 description = "Genomic Evidence Atlas of Cohorts — collect alt base metrics across sequencing cohorts"
+# GEAC is distributed as source/Docker/Homebrew, not published to crates.io.
+publish = false
 
 [[bin]]
 name = "geac"
