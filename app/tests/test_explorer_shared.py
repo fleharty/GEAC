@@ -395,3 +395,25 @@ class TestParseRegion:
     def test_numeric_string_resolves_as_chrom_not_gene(self):
         r = parse_region("1", self.CHROMS)
         assert r.chrom == "chr1" and r.gene is None
+
+    def test_chrom_case_insensitive_uppercase(self):
+        r = parse_region("CHR1", self.CHROMS)
+        assert r.chrom == "chr1" and r.gene is None
+
+    def test_chrom_case_insensitive_mixed_case(self):
+        r = parse_region("Chr1", self.CHROMS)
+        assert r.chrom == "chr1"
+
+    def test_chrom_case_insensitive_without_prefix(self):
+        # User types upper-case "x"; data stores "chrX".
+        r = parse_region("x", self.CHROMS)
+        assert r.chrom == "chrX"
+
+    def test_chrom_case_insensitive_bare_data(self):
+        # Data stores bare names; user types prefixed upper-case.
+        r = parse_region("CHR1", ["1", "2", "X"])
+        assert r.chrom == "1"
+
+    def test_region_with_uppercase_chrom_resolves(self):
+        r = parse_region("CHR1:100-200", self.CHROMS)
+        assert r.chrom == "chr1" and r.start == 99 and r.end == 199

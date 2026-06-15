@@ -1473,7 +1473,7 @@ if _region.start is not None:
     else:
         conditions.append(f"pos = {_region.start}")
 if _region.gene is not None and _genes_available:
-    conditions.append(f"gene = '{_sql_str(_region.gene)}'")
+    conditions.append(f"lower(gene) = lower('{_sql_str(_region.gene)}')")
 if sample_sel:
     s_list = ", ".join(f"'{_sql_str(s)}'" for s in sample_sel)
     conditions.append(f"sample_id IN ({s_list})")

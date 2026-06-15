@@ -202,7 +202,7 @@ def _filter_clauses(extra: list[str] | None = None) -> list[str]:
         else:
             clauses.append(f"pos = {_region.start}")
     if _region.gene is not None and _has_gene:
-        clauses.append(f"gene = '{_region.gene.replace(chr(39), chr(39)*2)}'")
+        clauses.append(f"lower(gene) = lower('{_region.gene.replace(chr(39), chr(39)*2)}')")
     if on_target_sel == "On target":
         clauses.append("on_target = true")
     elif on_target_sel == "Off target":
@@ -876,7 +876,7 @@ with tab_profile:
         _prof_clauses.append(f"gene = '{_pg}'")
     elif _prof_chrom_val:
         _pc = _prof_chrom_val.replace("'", "''")
-        _prof_clauses.append(f"chrom = '{_pc}'")
+        _prof_clauses.append(f"lower(chrom) = lower('{_pc}')")
         _prof_clauses.append(f"\"end\" > {int(_prof_start_val)}")
         _prof_clauses.append(f"pos < {int(_prof_end_val)}")
 

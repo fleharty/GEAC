@@ -80,15 +80,21 @@ def parse_region(text: str, known_chroms: list[str]) -> GenomicRegion:
 
 
 def _try_resolve_chrom(name: str, known_chroms: list[str]) -> Optional[str]:
-    """Return the matching chrom from known_chroms, or None if not found."""
-    if name in known_chroms:
-        return name
-    with_chr = "chr" + name
-    if with_chr in known_chroms:
-        return with_chr
-    without_chr = name.removeprefix("chr")
-    if without_chr in known_chroms:
-        return without_chr
+    """Return the matching chrom from known_chroms, or None if not found.
+
+    Matching is case-insensitive and tolerant of a missing or extra "chr"
+    prefix, so "CHR1", "Chr1", "chr1", and "1" all resolve to the canonical
+    chromosome name as stored in the data (e.g. "chr1").
+    """
+    by_lower = {c.lower(): c for c in known_chroms}
+    lname = name.lower()
+    candidates = [lname, "chr" + lname]
+    if lname.startswith("chr"):
+        candidates.append(lname[3:])
+    for cand in candidates:
+        canonical = by_lower.get(cand)
+        if canonical is not None:
+            return canonical
     return None
 
 
