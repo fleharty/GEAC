@@ -255,6 +255,8 @@ _has_fragments = data_source.has_optional_table("fragments")
 _db_resources = data_source.sample_resources()
 _db_gnomad_paths = data_source.embedded_gnomad_paths()
 _embedded_gnomad = _db_gnomad_paths[0] if len(_db_gnomad_paths) == 1 else ""
+_db_gnomad_index_paths = data_source.embedded_gnomad_index_paths()
+_embedded_gnomad_index = _db_gnomad_index_paths[0] if len(_db_gnomad_index_paths) == 1 else ""
 _db_target_paths = data_source.embedded_target_paths()
 _embedded_targets = _db_target_paths[0] if len(_db_target_paths) == 1 else ""
 if "_alt_reads_cols_cached" not in st.session_state:
@@ -955,8 +957,10 @@ if _has_data("gnomad_af"):
     )
     gnomad_track_index = st.sidebar.text_input(
         "gnomAD track index (optional)",
-        value=_cfg.get("gnomad_track_index", ""),
-        help="Optional explicit .tbi / .csi path or URI for the gnomAD track. Leave blank to infer from the track path.",
+        value=_cfg.get("gnomad_track_index") or _embedded_gnomad_index,
+        help="Optional explicit .tbi / .csi path or URI for the gnomAD track. "
+             "Defaults to the gnomad_index_path embedded by `geac collect "
+             "--gnomad-index/--gnomad-index-uri`. Leave blank to infer from the track path.",
     )
     _gnomad_index_path = resolve_index_uri(
         gnomad_track.strip(),

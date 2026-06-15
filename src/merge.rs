@@ -693,6 +693,7 @@ fn rebuild_samples_summary(conn: &Connection) -> Result<()> {
         "bai_path",
         "variants_path",
         "gnomad_path",
+        "gnomad_index_path",
         "targets_path",
     ];
     let resource_selects: String = resource_cols

@@ -43,6 +43,7 @@ pub(super) struct LocusContext {
     bai_path: Option<String>,
     variants_path: Option<String>,
     gnomad_path: Option<String>,
+    gnomad_index_path: Option<String>,
     targets_path: Option<String>,
     on_target: Option<bool>,
     gene: Option<String>,
@@ -116,6 +117,11 @@ impl LocusContext {
                 .gnomad_uri
                 .clone()
                 .or_else(|| args.gnomad.as_ref().map(|p| abs_path(p))),
+            // Prefer --gnomad-index-uri; else the explicit --gnomad-index path.
+            gnomad_index_path: args
+                .gnomad_index_uri
+                .clone()
+                .or_else(|| args.gnomad_index.as_ref().map(|p| abs_path(p))),
             targets_path: args
                 .targets_uri
                 .clone()
@@ -195,6 +201,7 @@ impl LocusContext {
             bai_path: self.bai_path.clone(),
             variants_path: self.variants_path.clone(),
             gnomad_path: self.gnomad_path.clone(),
+            gnomad_index_path: self.gnomad_index_path.clone(),
             targets_path: self.targets_path.clone(),
             variant_called,
             variant_filter,

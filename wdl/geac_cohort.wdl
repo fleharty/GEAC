@@ -35,6 +35,7 @@ version 1.0
 ##   gnomad                  - (optional) bgzip+tabix-indexed gnomAD VCF/BCF for AF annotation
 ##   gnomad_index            - (optional) Corresponding .tbi / .csi index
 ##   gnomad_uri              - (optional) canonical gnomAD URI stored in output metadata for IGV
+##   gnomad_index_uri        - (optional) canonical gnomAD index URI stored as gnomad_index_path for IGV; defaults to gnomad_index
 ##   gnomad_af_field         - INFO field to use as allele frequency (default "AF")
 ##   targets                 - (optional) BED or Picard interval list
 ##   targets_uri             - (optional) canonical target-interval URI stored in output metadata for IGV
@@ -93,6 +94,7 @@ workflow GeacCohort {
         File?   gnomad
         File?   gnomad_index
         String? gnomad_uri
+        String? gnomad_index_uri
         String  gnomad_af_field = "AF"
 
         File?   targets
@@ -213,6 +215,7 @@ workflow GeacCohort {
                 gnomad                = gnomad,
                 gnomad_index          = gnomad_index,
                 gnomad_uri            = if defined(gnomad_uri) then select_first([gnomad_uri]) else gnomad,
+                gnomad_index_uri      = if defined(gnomad_index_uri) then select_first([gnomad_index_uri]) else gnomad_index,
                 gnomad_af_field       = gnomad_af_field,
                 targets               = targets,
                 targets_uri           = if defined(targets_uri) then select_first([targets_uri]) else targets,
@@ -334,6 +337,7 @@ task Collect {
         String? bam_uri
         String? bai_uri
         String? gnomad_uri
+        String? gnomad_index_uri
         String? targets_uri
 
         String docker_image
@@ -372,6 +376,7 @@ task Collect {
             ~{"--variants-tsv "     + variants_tsv} \
             ~{"--gnomad "           + gnomad} \
             ~{"--gnomad-uri "       + gnomad_uri} \
+            ~{"--gnomad-index-uri " + gnomad_index_uri} \
             ~{if defined(gnomad) then "--gnomad-af-field " + gnomad_af_field else ""} \
             ~{"--targets "          + targets} \
             ~{"--targets-uri "      + targets_uri} \

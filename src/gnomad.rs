@@ -5,7 +5,7 @@
 //!
 //! Usage:
 //! ```text
-//! let mut index = GnomadIndex::open(path)?;
+//! let mut index = GnomadIndex::open(path, None)?;
 //! if let Some(af) = index.get("chr1", 12345, "A", "T")? {
 //!     println!("gnomAD AF = {af}");
 //! }

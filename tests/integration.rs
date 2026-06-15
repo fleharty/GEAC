@@ -255,6 +255,42 @@ fn collect_bai_uri_takes_precedence_over_index() {
     );
 }
 
+/// `--gnomad-index-uri` is recorded as `gnomad_index_path` for IGV, independent
+/// of whether a gnomAD VCF is read.
+#[test]
+fn collect_records_gnomad_index_uri() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 200);
+    let bam = write_bam(
+        dir.path(),
+        "g.bam",
+        "sample1",
+        200,
+        vec![(50, b'T', 5, 10)],
+        20,
+    );
+
+    let out = dir.path().join("g.parquet");
+    assert_geac_success(&[
+        "collect",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--gnomad-index-uri",
+        "gs://bucket/gnomad.vcf.gz.tbi",
+    ]);
+    assert_eq!(
+        parquet_query_opt_str(&out, "gnomad_index_path", "pos = 50"),
+        Some("gs://bucket/gnomad.vcf.gz.tbi".to_string()),
+        "gnomad_index_path should record --gnomad-index-uri"
+    );
+}
+
 /// `--sample-id` flag overrides the SM tag read from the BAM header.
 #[test]
 fn collect_sample_id_override() {

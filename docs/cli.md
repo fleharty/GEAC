@@ -51,6 +51,7 @@ Important options:
 | `--variants-tsv` | none | TSV variant annotation alternative to `--vcf` |
 | `--gnomad` | none | bgzip+tabix gnomAD VCF/BCF for AF annotation |
 | `--gnomad-af-field` | `AF` | gnomAD INFO field to read |
+| `--gnomad-index`, `--gnomad-index-uri` | none | Path / canonical URI of the gnomAD index (`.tbi`/`.csi`), recorded as `gnomad_index_path` so IGV references it (`--gnomad-index-uri` wins). Note: geac's own AF annotation still requires the index co-located with `--gnomad` (htslib VCF reader limitation). |
 | `--targets` | none | BED or Picard interval list for target annotation and sample metrics |
 | `--targets-uri` | none | Canonical target path or URI to store in output metadata |
 | `--gene-annotations` | none | GFF3, GTF, or UCSC genePred gene annotations |

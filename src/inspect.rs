@@ -45,6 +45,7 @@ const RESOURCE_COLUMNS: &[&str] = &[
     "bai_path",
     "variants_path",
     "gnomad_path",
+    "gnomad_index_path",
     "targets_path",
 ];
 

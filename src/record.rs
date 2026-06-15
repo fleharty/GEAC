@@ -212,6 +212,8 @@ pub struct AltBase {
     pub variants_path: Option<String>,
     /// Path or URI of the gnomAD VCF used for allele-frequency annotation, if any.
     pub gnomad_path: Option<String>,
+    /// Path or URI of the gnomAD index (.tbi/.csi), if specified, for IGV sessions.
+    pub gnomad_index_path: Option<String>,
     /// Path or URI of the target BED / interval list used for on-target annotation, if any.
     pub targets_path: Option<String>,
 }

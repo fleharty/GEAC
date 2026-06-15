@@ -369,6 +369,10 @@ class DataSource:
         """Return distinct non-null gnomad_path values from the samples table."""
         return self._embedded_sample_paths("gnomad_path")
 
+    def embedded_gnomad_index_paths(self) -> list:
+        """Return distinct non-null gnomad_index_path values from the samples table."""
+        return self._embedded_sample_paths("gnomad_index_path")
+
     def embedded_target_paths(self) -> list:
         """Return distinct non-null targets_path values from the samples table."""
         return self._embedded_sample_paths("targets_path")

@@ -31,6 +31,7 @@ version 1.0
 ##   gnomad               - (optional) bgzip+tabix-indexed gnomAD VCF/BCF for AF annotation
 ##   gnomad_index         - (optional) Corresponding .tbi / .csi index
 ##   gnomad_uri           - (optional) canonical gnomAD URI stored in output metadata for IGV
+##   gnomad_index_uri     - (optional) canonical gnomAD index URI stored as gnomad_index_path for IGV; defaults to gnomad_index
 ##   gnomad_af_field      - INFO field to use as allele frequency (default "AF")
 ##   targets              - (optional) BED or Picard interval list; annotates on_target column
 ##   targets_uri          - (optional) canonical target-interval URI stored in output metadata for IGV
@@ -88,6 +89,7 @@ workflow GeacCollect {
         String? bai_uri
         String? variants_uri
         String? gnomad_uri
+        String? gnomad_index_uri
         String? targets_uri
         String  gnomad_af_field = "AF"
         File?   targets
@@ -155,6 +157,7 @@ workflow GeacCollect {
             bai_uri               = if defined(bai_uri) then select_first([bai_uri]) else input_bam_index,
             variants_uri          = if defined(variants_uri) then variants_uri else if defined(vcf) then vcf else variants_tsv,
             gnomad_uri            = if defined(gnomad_uri) then gnomad_uri else gnomad,
+            gnomad_index_uri      = if defined(gnomad_index_uri) then gnomad_index_uri else gnomad_index,
             targets_uri           = if defined(targets_uri) then targets_uri else targets,
             docker_image          = docker_image,
             memory_gb             = memory_gb,
@@ -215,6 +218,7 @@ task Collect {
         String? bai_uri
         String? variants_uri
         String? gnomad_uri
+        String? gnomad_index_uri
         String? targets_uri
 
         String docker_image
@@ -268,7 +272,8 @@ task Collect {
             ~{"--bam-uri "      + bam_uri} \
             ~{"--bai-uri "      + bai_uri} \
             ~{"--variants-uri " + variants_uri} \
-            ~{"--gnomad-uri "   + gnomad_uri} \
+            ~{"--gnomad-uri "       + gnomad_uri} \
+            ~{"--gnomad-index-uri " + gnomad_index_uri} \
             ~{"--targets-uri "  + targets_uri}
     >>>
 

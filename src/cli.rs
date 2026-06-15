@@ -236,6 +236,14 @@ pub struct CollectArgs {
     #[arg(long)]
     pub gnomad: Option<PathBuf>,
 
+    /// Path to the gnomAD index (.tbi/.csi), recorded as `gnomad_index_path` so
+    /// IGV references it (unless --gnomad-index-uri is given, which takes
+    /// precedence). Note: for geac's own AF annotation the index must still sit
+    /// next to --gnomad at the conventional location — htslib's VCF reader cannot
+    /// load an index from a non-conventional path.
+    #[arg(long)]
+    pub gnomad_index: Option<PathBuf>,
+
     /// INFO field to use as the allele frequency from the gnomAD VCF.
     /// Defaults to "AF". Ignored when --gnomad is not set.
     #[arg(long, default_value = "AF")]
@@ -316,6 +324,12 @@ pub struct CollectArgs {
     /// When set, stored in output Parquet instead of the local file path.
     #[arg(long)]
     pub gnomad_uri: Option<String>,
+
+    /// Canonical URI for the gnomAD index (.tbi/.csi). When set, stored as
+    /// `gnomad_index_path` for IGV session generation, taking precedence over
+    /// the local --gnomad-index path.
+    #[arg(long)]
+    pub gnomad_index_uri: Option<String>,
 
     /// Canonical URI for the target BED / interval list passed via --targets.
     /// When set, stored in output Parquet instead of the local file path.
