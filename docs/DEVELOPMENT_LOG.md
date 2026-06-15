@@ -57,6 +57,21 @@ Captured 2026-04-01. All three gating items shipped in v0.4.0.
 - Re-examine N-base handling before v0.3.0 — resolved as part of the fragment-level
   depth overhaul. See `tally_pileup` doc comment for the full classification table
   including N cases.
+- gnomAD index recorded for IGV `--gnomad-index` / `--gnomad-index-uri` (2026-06-15) —
+  follow-up to `--index`: an audit of `make_igv_session` found the gnomAD track was the
+  one IGV resource whose index had no CLI/DB flag (only inferred, or set per-session via
+  the sidebar/`geac.toml` `gnomad_track_index`). Added a `gnomad_index_path` column
+  (parallel to `bai_path`) populated by the two new flags (URI wins), aggregated into
+  `samples`, and used as the Explorer's gnomAD-track-index default. **Reading limitation,
+  deliberately not worked around:** unlike `bam::IndexedReader::from_path_and_index`,
+  rust-htslib's `bcf::IndexedReader` has only `from_path` (which requires the index
+  co-located and rejects the htslib `##idx##` filename via an existence check), so geac
+  cannot open a gnomAD against a non-conventional index. The flags therefore record the
+  index for IGV only; AF annotation still needs the index next to `--gnomad`. A temp-dir
+  symlink shim (symlink data+index into scratch with conventional names, open, clean up)
+  would restore parity but adds filesystem juggling to setup and isn't testable in the
+  current harness (no bgzip/tabix) — deferred. Additive nullable column, so
+  `DUCKDB_SCHEMA_VERSION` stays `v4` and old inputs still merge (NULL).
 - Explicitly-specifiable BAM/CRAM index `--index` (2026-06-15) — `open_bam` used
   `IndexedReader::from_path`, which only finds the index at the conventional location
   next to the BAM (`x.bam.bai` / `x.bai`). Sites that store the BAM and its `.bai`/`.crai`
