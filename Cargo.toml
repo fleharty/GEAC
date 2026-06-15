@@ -2,6 +2,10 @@
 name = "geac"
 version = "0.4.49"
 edition = "2021"
+# Minimum supported Rust version. Bumping this is a deliberate decision — CI
+# verifies the crate still builds on exactly this toolchain. 1.88 is required by
+# the comfy-table dependency (let-chains); our own code needs 1.87 (is_multiple_of).
+rust-version = "1.88"
 description = "Genomic Evidence Atlas of Cohorts — collect alt base metrics across sequencing cohorts"
 # GEAC is distributed as source/Docker/Homebrew, not published to crates.io.
 publish = false
