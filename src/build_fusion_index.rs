@@ -1102,7 +1102,7 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
         // rayon assigns items in FASTA order: one thread gets chr1 (249 MB) while
         // others burn through hundreds of small alt contigs and then sit idle.
         let mut seq_list_sorted = seq_list.clone();
-        seq_list_sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        seq_list_sorted.sort_unstable_by_key(|b| std::cmp::Reverse(b.1));
 
         let fasta_path = args.fasta.clone();
         let ed = args.edit_distance_filter;

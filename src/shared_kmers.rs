@@ -96,7 +96,7 @@ fn genome_watch_counts(fasta: &Path, watch: &HashSet<u64>, k: usize) -> Result<H
     let mut seq_list = read_fai_sequences(fasta)?;
     // Longest sequences first so big chromosomes are handed out before threads go
     // idle on small alt contigs (longest-job-first scheduling).
-    seq_list.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    seq_list.sort_unstable_by_key(|b| std::cmp::Reverse(b.1));
 
     let per_seq: Vec<HashMap<u64, u32>> = seq_list
         .par_iter()
@@ -252,7 +252,7 @@ pub fn shared_kmers(args: &SharedKmersArgs) -> Result<()> {
         }
     }
     // Deterministic order: by A hash, then B hash.
-    matches.sort_unstable_by(|x, y| (x.a, x.b).cmp(&(y.a, y.b)));
+    matches.sort_unstable_by_key(|x| (x.a, x.b));
 
     // Optional genome scan: genome-wide copy number of each matched k-mer (both
     // the A side and the B side).

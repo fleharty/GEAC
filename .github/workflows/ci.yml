@@ -29,8 +29,11 @@ jobs:
             libdeflate-dev \
             samtools
 
+      # Pinned, not @stable: clippy gains new lints every release, so a floating
+      # toolchain turns -D warnings into spontaneous CI failures on code that
+      # never changed. Bump this version deliberately and fix new lints in that PR.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: rustfmt, clippy
 
@@ -77,6 +80,41 @@ jobs:
 
       - name: Run tests
         run: cargo test
+
+  msrv:
+    name: MSRV (build on 1.88)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            clang \
+            libclang-dev \
+            libbz2-dev \
+            liblzma-dev \
+            libcurl4-openssl-dev \
+            zlib1g-dev \
+            libssl-dev \
+            libdeflate-dev \
+            samtools
+
+      # Pinned to the rust-version declared in Cargo.toml. Keep these in sync —
+      # this job exists to prove that declaration stays honest as deps change.
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      # --locked builds against the committed Cargo.lock, so a dependency bump
+      # that raises the real MSRV fails here instead of silently passing.
+      - name: Build on MSRV
+        run: cargo build --locked
 
   python-tests:
     name: Python tests

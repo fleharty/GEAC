@@ -377,7 +377,7 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
             ent.3.push(e.mapq);
         }
         let mut chroms: Vec<(&str, (usize, i64, i64, Vec<u8>))> = by_chrom.into_iter().collect();
-        chroms.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+        chroms.sort_by_key(|b| std::cmp::Reverse(b.1 .0));
         for (chrom, (count, mn, mx, mut mapqs)) in chroms {
             let mut mq: Vec<usize> = mapqs.drain(..).map(|m| m as usize).collect();
             let med_mq = median_usize(&mut mq);
