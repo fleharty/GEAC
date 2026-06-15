@@ -10,7 +10,7 @@ version 1.0
 ##
 ## Inputs (per-sample, parallel arrays — lengths must match):
 ##   input_bams              - BAM or CRAM files (localized by Cromwell for geac collect)
-##   input_bam_indices       - Corresponding .bai / .crai indices
+##   input_bam_indices       - .bai / .crai indices; passed to geac via --index, so each may live under a different name/directory than its BAM
 ##   bam_uris                - (optional) canonical BAM/CRAM URIs stored in output metadata for IGV
 ##   bai_uris                - (optional) canonical index URIs stored in output metadata for IGV
 ##   sample_ids              - (optional) override sample IDs; defaults to SM tag per BAM
@@ -25,7 +25,8 @@ version 1.0
 ##   reference_fasta_index   - Corresponding .fai index
 ##   read_types              - (optional) per-sample array of duplex|simplex|raw; defaults to "duplex" for all
 ##   pipelines               - (optional) per-sample free-text pipeline label; fgbio/dragen select built-in family-size schemes; defaults to "fgbio" for all
-##   family_size_tags        - (optional) per-sample override of family-size aux tags, e.g. "ab=aD,ba=bD,total=cD,fallback=sum"; overrides the pipeline preset for that sample
+##   family_size_tags_all    - (optional) one family-size aux-tag spec applied to ALL samples, e.g. "total=cD"; overrides the pipeline preset
+##   family_size_tags        - (optional) per-sample family-size aux-tag override (array, same length as input_bams); takes precedence over family_size_tags_all for that sample
 ##   batches                 - (optional) per-sample batch/group label stored as a column in each Parquet
 ##   labels1                 - (optional) per-sample free-text label 1 (e.g. tissue type)
 ##   labels2                 - (optional) per-sample free-text label 2 (e.g. library prep method)
@@ -81,7 +82,8 @@ workflow GeacCohort {
         File   reference_fasta_index
         Array[String]? read_types      # optional; if provided must be same length as input_bams
         Array[String]? pipelines       # optional; if provided must be same length as input_bams
-        Array[String]? family_size_tags # optional; per-sample family-size tag override, same length as input_bams
+        String? family_size_tags_all   # optional; one family-size tag spec applied to ALL samples
+        Array[String]? family_size_tags # optional; per-sample family-size tag override, same length as input_bams; takes precedence over family_size_tags_all
         Array[String]? batches         # optional; per-sample batch/group label stored as a column
         Array[String]? labels1         # optional; per-sample free-text label 1
         Array[String]? labels2         # optional; per-sample free-text label 2
@@ -148,9 +150,11 @@ workflow GeacCohort {
         }
         String this_read_type = if defined(read_types) then select_first([read_types])[i] else "duplex"
         String this_pipeline  = if defined(pipelines)  then select_first([pipelines])[i]  else "fgbio"
-        if (defined(family_size_tags)) {
-            String this_family_size_tags = select_first([family_size_tags])[i]
-        }
+        # Per-sample array overrides the cohort-wide scalar; otherwise fall back to
+        # the scalar (or None, in which case the --pipeline preset applies).
+        String? this_family_size_tags = if defined(family_size_tags)
+            then select_first([family_size_tags])[i]
+            else family_size_tags_all
         if (defined(batches)) {
             String this_batch  = select_first([batches])[i]
         }
@@ -347,6 +351,7 @@ task Collect {
 
         geac collect \
             --input            ~{input_bam} \
+            --index            ~{input_bam_index} \
             --reference        ~{reference_fasta} \
             --output           ~{output_arg} \
             --read-type        ~{read_type} \
@@ -483,6 +488,7 @@ task Fragments {
 
         geac fragments \
             --input            ~{input_bam} \
+            --index            ~{input_bam_index} \
             --reference        ~{reference_fasta} \
             --output           ~{output_name} \
             --read-type        ~{read_type} \
