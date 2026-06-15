@@ -32,7 +32,11 @@ fn encode_kmer(seq: &str, k: usize) -> Result<(u64, u64)> {
 pub fn lookup_kmer(args: &LookupKmerArgs) -> Result<()> {
     let kmer_seq = args.kmer.trim();
     let k = kmer_seq.len();
-    anyhow::ensure!(k >= 1 && k <= 31, "k-mer length must be 1–31 (got {})", k);
+    anyhow::ensure!(
+        (1..=31).contains(&k),
+        "k-mer length must be 1–31 (got {})",
+        k
+    );
 
     let (fwd, rev) = encode_kmer(kmer_seq, k)?;
     let canonical: u64 = fwd.min(rev);
@@ -78,7 +82,8 @@ pub fn lookup_kmer(args: &LookupKmerArgs) -> Result<()> {
             "{}\t{}\t{}",
             gene_name.as_deref().unwrap_or("."),
             pos_chrom.as_deref().unwrap_or("."),
-            pos.map(|p| p.to_string()).unwrap_or_else(|| ".".to_string()),
+            pos.map(|p| p.to_string())
+                .unwrap_or_else(|| ".".to_string()),
         );
     }
 

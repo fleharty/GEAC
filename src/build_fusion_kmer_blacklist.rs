@@ -32,7 +32,11 @@ pub fn build_fusion_kmer_blacklist(args: &BuildFusionKmerBlacklistArgs) -> Resul
     let min_samples = args.min_pon_samples;
     let output = args.output.display().to_string();
 
-    info!(n_inputs, min_pon_samples = min_samples, "aggregating k-mer hits from PoN samples...");
+    info!(
+        n_inputs,
+        min_pon_samples = min_samples,
+        "aggregating k-mer hits from PoN samples..."
+    );
 
     let conn = Connection::open_in_memory().context("failed to open in-memory DuckDB")?;
 

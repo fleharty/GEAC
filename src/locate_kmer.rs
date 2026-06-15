@@ -67,16 +67,18 @@ fn read_fai_sequences(fasta: &Path) -> Result<Vec<(String, usize)>> {
 pub fn locate_kmer(args: &LocateKmerArgs) -> Result<()> {
     let kmer_seq = args.kmer.trim();
     let k = kmer_seq.len();
-    anyhow::ensure!(k >= 1 && k <= 31, "k-mer length must be 1–31 (got {})", k);
+    anyhow::ensure!(
+        (1..=31).contains(&k),
+        "k-mer length must be 1–31 (got {})",
+        k
+    );
 
     let (target_fwd, target_rc) = encode_kmer(kmer_seq, k)?;
     let is_palindrome = target_fwd == target_rc;
 
     info!(
         kmer = kmer_seq,
-        k,
-        is_palindrome,
-        "searching reference for k-mer occurrences..."
+        k, is_palindrome, "searching reference for k-mer occurrences..."
     );
 
     let gene_annots = args

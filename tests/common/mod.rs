@@ -12,9 +12,7 @@ use std::path::{Path, PathBuf};
 pub fn write_reference_with_base(dir: &Path, len: usize, base: u8) -> PathBuf {
     let name = format!("ref_{}.fa", base as char);
     let fa = dir.join(&name);
-    let seq = std::iter::repeat(base as char)
-        .take(len)
-        .collect::<String>();
+    let seq = std::iter::repeat_n(base as char, len).collect::<String>();
     std::fs::write(&fa, format!(">chr1\n{seq}\n")).unwrap();
     let fai = dir.join(format!("{name}.fai"));
     std::fs::write(&fai, format!("chr1\t{len}\t6\t{len}\t{}\n", len + 1)).unwrap();
@@ -467,7 +465,7 @@ pub fn write_fragments_bam(
     // Leftmost on + strand, mate on − strand:
     let r1_plus_left: u16 = 0x1 | 0x2 | 0x20 | 0x40; // 99
     let r2_minus_right: u16 = 0x1 | 0x2 | 0x10 | 0x80; // 147
-    // Leftmost on + strand is R2; rightmost on − strand is R1:
+                                                       // Leftmost on + strand is R2; rightmost on − strand is R1:
     let r2_plus_left: u16 = 0x1 | 0x2 | 0x20 | 0x80; // 163
     let r1_minus_right: u16 = 0x1 | 0x2 | 0x10 | 0x40; // 83
 
@@ -493,7 +491,8 @@ pub fn write_fragments_bam(
         left.set_mtid(0);
         left.set_mpos(right_pos);
         left.set_insert_size(isize_left);
-        left.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+        left.push_aux(b"RG", bam::record::Aux::String("rg1"))
+            .unwrap();
         writer.write(&left).unwrap();
 
         let mut right = Record::new();
@@ -505,7 +504,9 @@ pub fn write_fragments_bam(
         right.set_mtid(0);
         right.set_mpos(p.left_pos);
         right.set_insert_size(isize_right);
-        right.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+        right
+            .push_aux(b"RG", bam::record::Aux::String("rg1"))
+            .unwrap();
         writer.write(&right).unwrap();
     }
 
@@ -798,6 +799,7 @@ pub fn duckdb_columns(db: &Path, table: &str) -> Vec<String> {
 ///
 /// Both `pos1` and `pos2` must fall within the read (read starts at pos1-10,
 /// length = `read_len`).  The reference is all-A.
+#[allow(clippy::too_many_arguments)]
 pub fn write_mnv_bam(
     dir: &Path,
     filename: &str,
@@ -847,7 +849,8 @@ pub fn write_mnv_bam(
         rec.set_tid(0);
         rec.set_pos(read_start);
         rec.set_mapq(60);
-        rec.push_aux(b"RG", bam::record::Aux::String("rg1")).unwrap();
+        rec.push_aux(b"RG", bam::record::Aux::String("rg1"))
+            .unwrap();
         writer.write(&rec).unwrap();
     };
 

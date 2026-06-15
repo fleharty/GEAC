@@ -195,7 +195,13 @@ mod tests {
     #[test]
     fn render_layout_track_paints_n_a_b_and_dot() {
         // k=11, 40 windows. N at base 5 masks windows whose [s, s+k) covers it: 0..=5.
-        let track = render_layout_track(40, &(6..=14).collect::<Vec<_>>(), &(25..=39).collect::<Vec<_>>(), &[5], 11);
+        let track = render_layout_track(
+            40,
+            &(6..=14).collect::<Vec<_>>(),
+            &(25..=39).collect::<Vec<_>>(),
+            &[5],
+            11,
+        );
         assert_eq!(&track[0..6], "NNNNNN");
         assert_eq!(&track[6..15], "AAAAAAAAA");
         assert_eq!(&track[15..25], "..........");
@@ -204,7 +210,13 @@ mod tests {
 
     #[test]
     fn render_layout_track_clean_read_has_no_n() {
-        let track = render_layout_track(40, &(0..=14).collect::<Vec<_>>(), &(25..=39).collect::<Vec<_>>(), &[], 11);
+        let track = render_layout_track(
+            40,
+            &(0..=14).collect::<Vec<_>>(),
+            &(25..=39).collect::<Vec<_>>(),
+            &[],
+            11,
+        );
         assert!(!track.contains('N'));
         assert_eq!(&track[0..15], "AAAAAAAAAAAAAAA");
     }

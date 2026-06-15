@@ -782,8 +782,8 @@ pub struct BuildFusionIndexArgs {
     /// Scan the full genome FASTA and remove k-mers that appear more than once
     /// genome-wide. Disabled by default because the candidate k-mer set (often
     /// >1 billion entries) requires tens of GB of RAM to hold in a HashMap.
-    /// At k ≥ 19 cross-gene deduplication already eliminates nearly all
-    /// non-unique k-mers; this flag adds a stricter guarantee at high memory cost.
+    /// > At k ≥ 19 cross-gene deduplication already eliminates nearly all
+    /// > non-unique k-mers; this flag adds a stricter guarantee at high memory cost.
     #[arg(long, default_value_t = false)]
     pub check_genome_uniqueness: bool,
 

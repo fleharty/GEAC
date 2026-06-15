@@ -49,10 +49,11 @@ fn load_index_gene_kmers(
         );
     }
 
-    let n_in_genes: i64 =
-        conn.query_row("SELECT count(*) FROM genes WHERE gene_name = ?", [gene], |r| {
-            r.get(0)
-        })?;
+    let n_in_genes: i64 = conn.query_row(
+        "SELECT count(*) FROM genes WHERE gene_name = ?",
+        [gene],
+        |r| r.get(0),
+    )?;
     if n_in_genes == 0 {
         bail!("gene '{gene}' is not present in the index");
     }
@@ -77,12 +78,12 @@ struct ReadEvidence {
     chrom: String, // "unmapped" when unplaced
     pos: i64,      // 0-based; -1 when unmapped
     mapq: u8,
-    a_positions: Vec<usize>, // k-mer start positions matching gene A
-    b_positions: Vec<usize>, // k-mer start positions matching gene B
-    a_hits: Vec<u64>,        // the actual gene-A k-mers hit (for error-path flagging)
-    b_hits: Vec<u64>,        // the actual gene-B k-mers hit
+    a_positions: Vec<usize>,      // k-mer start positions matching gene A
+    b_positions: Vec<usize>,      // k-mer start positions matching gene B
+    a_hits: Vec<u64>,             // the actual gene-A k-mers hit (for error-path flagging)
+    b_hits: Vec<u64>,             // the actual gene-B k-mers hit
     n_base_positions: Vec<usize>, // read positions of non-ACGT bases (N etc.)
-    n_windows: usize,        // read_len - k + 1
+    n_windows: usize,             // read_len - k + 1
 }
 
 impl ReadEvidence {
@@ -162,7 +163,9 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
     let header = bam::Header::from_template(reader.header());
     let header_view = bam::HeaderView::from_header(&header);
 
-    let want: HashSet<String> = [args.gene_a.clone(), args.gene_b.clone()].into_iter().collect();
+    let want: HashSet<String> = [args.gene_a.clone(), args.gene_b.clone()]
+        .into_iter()
+        .collect();
 
     // Collect per-read evidence for fragments tagged with exactly this gene pair.
     let mut evidence: Vec<ReadEvidence> = Vec::new();
@@ -183,7 +186,10 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
         }
 
         let seq = record.seq().as_bytes();
-        let n_windows = seq.len().saturating_sub(k).saturating_add(if seq.len() >= k { 1 } else { 0 });
+        let n_windows = seq
+            .len()
+            .saturating_sub(k)
+            .saturating_add(if seq.len() >= k { 1 } else { 0 });
         let mut a_positions = Vec::new();
         let mut b_positions = Vec::new();
         let mut a_hits = Vec::new();
@@ -246,9 +252,15 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
 
     let fragments: HashSet<&str> = evidence.iter().map(|e| e.qname.as_str()).collect();
     let spanning: Vec<&ReadEvidence> = evidence.iter().filter(|e| e.spanning()).collect();
-    let n_coherent_reads = spanning.iter().filter(|e| e.coherent(k, min_anchor)).count();
+    let n_coherent_reads = spanning
+        .iter()
+        .filter(|e| e.coherent(k, min_anchor))
+        .count();
     let n_interleaved_reads = spanning.len() - n_coherent_reads;
-    let n_no_hits = evidence.iter().filter(|e| e.a_count() == 0 && e.b_count() == 0).count();
+    let n_no_hits = evidence
+        .iter()
+        .filter(|e| e.a_count() == 0 && e.b_count() == 0)
+        .count();
 
     // Coherent fragments: a fragment is coherent if any of its reads is coherent.
     let mut coherent_frags: HashSet<&str> = HashSet::new();
@@ -265,24 +277,71 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
 
     writeln!(out, "diagnose-fusion: {}::{}", args.gene_a, args.gene_b)?;
     writeln!(out, "evidence BAM: {}", args.reads.display())?;
-    writeln!(out, "index: {}   k={k}   min_anchor={min_anchor}", args.index.display())?;
+    writeln!(
+        out,
+        "index: {}   k={k}   min_anchor={min_anchor}",
+        args.index.display()
+    )?;
     writeln!(out)?;
     writeln!(out, "== Summary ==")?;
-    writeln!(out, "fragments (FX={}::{}): {}", args.gene_a, args.gene_b, fragments.len())?;
+    writeln!(
+        out,
+        "fragments (FX={}::{}): {}",
+        args.gene_a,
+        args.gene_b,
+        fragments.len()
+    )?;
     writeln!(out, "evidence reads: {}", evidence.len())?;
-    writeln!(out, "  reads with no {}/{} k-mers (mates etc.): {}", args.gene_a, args.gene_b, n_no_hits)?;
-    writeln!(out, "spanning reads (k-mers from both genes): {}", spanning.len())?;
-    writeln!(out, "  coherent (disjoint A->B blocks = junction-like): {n_coherent_reads}")?;
-    writeln!(out, "  interleaved (overlapping/short anchor = homology-like): {n_interleaved_reads}")?;
-    writeln!(out, "coherent fragments (>=1 coherent read): {} / {}", coherent_frags.len(), fragments.len())?;
-    writeln!(out, "median anchor k-mers per spanning read: {}={med_a:.0}  {}={med_b:.0}", args.gene_a, args.gene_b)?;
-    writeln!(out, "verdict: {}", verdict(spanning.len(), n_coherent_reads, med_a, med_b, &args.gene_a, &args.gene_b))?;
+    writeln!(
+        out,
+        "  reads with no {}/{} k-mers (mates etc.): {}",
+        args.gene_a, args.gene_b, n_no_hits
+    )?;
+    writeln!(
+        out,
+        "spanning reads (k-mers from both genes): {}",
+        spanning.len()
+    )?;
+    writeln!(
+        out,
+        "  coherent (disjoint A->B blocks = junction-like): {n_coherent_reads}"
+    )?;
+    writeln!(
+        out,
+        "  interleaved (overlapping/short anchor = homology-like): {n_interleaved_reads}"
+    )?;
+    writeln!(
+        out,
+        "coherent fragments (>=1 coherent read): {} / {}",
+        coherent_frags.len(),
+        fragments.len()
+    )?;
+    writeln!(
+        out,
+        "median anchor k-mers per spanning read: {}={med_a:.0}  {}={med_b:.0}",
+        args.gene_a, args.gene_b
+    )?;
+    writeln!(
+        out,
+        "verdict: {}",
+        verdict(
+            spanning.len(),
+            n_coherent_reads,
+            med_a,
+            med_b,
+            &args.gene_a,
+            &args.gene_b
+        )
+    )?;
     writeln!(out)?;
 
     // ── Section: original alignment map, grouped by which gene the read votes ──
     // Every read is bucketed so none are lost: a clear A/B winner, a tie (equal
     // k-mer support — typical of true junction reads), or no k-mer hits at all.
-    writeln!(out, "== Original alignment of evidence reads (by voted gene) ==")?;
+    writeln!(
+        out,
+        "== Original alignment of evidence reads (by voted gene) =="
+    )?;
     let tie_label = format!("tie ({}=={})", args.gene_a, args.gene_b);
     let mut groups: Vec<(String, Vec<&ReadEvidence>)> = vec![
         (format!("{}-voting", args.gene_a), Vec::new()),
@@ -307,7 +366,9 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
         // chrom -> (count, min_pos, max_pos, mapqs)
         let mut by_chrom: HashMap<&str, (usize, i64, i64, Vec<u8>)> = HashMap::new();
         for e in group {
-            let ent = by_chrom.entry(&e.chrom).or_insert((0, i64::MAX, i64::MIN, Vec::new()));
+            let ent = by_chrom
+                .entry(&e.chrom)
+                .or_insert((0, i64::MAX, i64::MIN, Vec::new()));
             ent.0 += 1;
             if e.pos >= 0 {
                 ent.1 = ent.1.min(e.pos);
@@ -323,7 +384,10 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
             if chrom == "unmapped" {
                 writeln!(out, "  {chrom:<22} {count:>6}  median_mapq={med_mq:.0}")?;
             } else {
-                writeln!(out, "  {chrom}:{mn}-{mx}   {count:>6}  median_mapq={med_mq:.0}")?;
+                writeln!(
+                    out,
+                    "  {chrom}:{mn}-{mx}   {count:>6}  median_mapq={med_mq:.0}"
+                )?;
             }
         }
     }
@@ -347,11 +411,16 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
     // The "other" gene's index set is the substitution target that manufactures
     // the false vote; the minority set supplies genome-copy annotation.
     let other_set: &HashMap<u64, Option<i32>> = if minority_b_side { &a_kmers } else { &b_kmers };
-    let minority_set: &HashMap<u64, Option<i32>> = if minority_b_side { &b_kmers } else { &a_kmers };
+    let minority_set: &HashMap<u64, Option<i32>> =
+        if minority_b_side { &b_kmers } else { &a_kmers };
     // Count, per minority k-mer, how many distinct reads carry it (cached hashes).
     let mut kmer_read_counts: HashMap<u64, usize> = HashMap::new();
     for e in &evidence {
-        let hits = if minority_b_side { &e.b_hits } else { &e.a_hits };
+        let hits = if minority_b_side {
+            &e.b_hits
+        } else {
+            &e.a_hits
+        };
         let seen: HashSet<u64> = hits.iter().copied().collect();
         for kmer in seen {
             *kmer_read_counts.entry(kmer).or_insert(0) += 1;
@@ -375,12 +444,20 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
             .and_then(|c| *c)
             .map(|c| c.to_string())
             .unwrap_or_else(|| "NA".to_string());
-        writeln!(out, "{}\t{}\t{}\t{}", decode_kmer(kmer, k), n_reads, edit_str, copies)?;
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}",
+            decode_kmer(kmer, k),
+            n_reads,
+            edit_str,
+            copies
+        )?;
     }
     writeln!(out)?;
 
     // ── Section: per-read layout track ────────────────────────────────────────
-    let per_read_header = "qname\tchrom\tpos\tmapq\ta_count\tb_count\tspanning\tcoherent\tlayout_5to3";
+    let per_read_header =
+        "qname\tchrom\tpos\tmapq\ta_count\tb_count\tspanning\tcoherent\tlayout_5to3";
     if let Some(ref p) = args.per_read_output {
         let mut tsv = std::io::BufWriter::new(
             std::fs::File::create(p).with_context(|| format!("cannot create {}", p.display()))?,
@@ -389,9 +466,16 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
         for e in &evidence {
             write_read_row(&mut tsv, e, k, min_anchor)?;
         }
-        writeln!(out, "== Per-read k-mer layout written to {} ==", p.display())?;
+        writeln!(
+            out,
+            "== Per-read k-mer layout written to {} ==",
+            p.display()
+        )?;
     } else {
-        writeln!(out, "== Per-read k-mer layout (first 15 reads; --per-read-output for all) ==")?;
+        writeln!(
+            out,
+            "== Per-read k-mer layout (first 15 reads; --per-read-output for all) =="
+        )?;
         writeln!(out, "layout_5to3 legend: A=gene-A k-mer  B=gene-B k-mer  N=window masked by an N base  .=k-mer matched neither gene")?;
         writeln!(out, "{per_read_header}")?;
         for e in evidence.iter().take(15) {
@@ -410,7 +494,11 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
 }
 
 fn write_read_row(w: &mut impl Write, e: &ReadEvidence, k: usize, min_anchor: usize) -> Result<()> {
-    let pos = if e.pos >= 0 { e.pos.to_string() } else { "NA".to_string() };
+    let pos = if e.pos >= 0 {
+        e.pos.to_string()
+    } else {
+        "NA".to_string()
+    };
     writeln!(
         w,
         "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",

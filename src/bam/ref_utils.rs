@@ -143,7 +143,11 @@ pub(crate) fn resolve_max_pileup_depth(cli_value: u32) -> u32 {
 /// which lets the index live under a different name or directory than `input`.
 /// When `None`, htslib infers the index at the conventional location next to
 /// `input` (e.g. `input.bam.bai` / `input.bam` → `input.bai`).
-pub fn open_bam(input: &Path, reference: &Path, index: Option<&Path>) -> Result<bam::IndexedReader> {
+pub fn open_bam(
+    input: &Path,
+    reference: &Path,
+    index: Option<&Path>,
+) -> Result<bam::IndexedReader> {
     let mut reader = match index {
         Some(index_path) => bam::IndexedReader::from_path_and_index(input, index_path)
             .with_context(|| {

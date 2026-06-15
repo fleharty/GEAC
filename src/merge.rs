@@ -117,9 +117,7 @@ const TABLE_SPECS: &[TableSpec] = &[
     TableSpec {
         table: "fusions",
         suffix: Some(".fusions.parquet"),
-        index_sql: Some(
-            "CREATE INDEX IF NOT EXISTS idx_fusions_pair ON fusions (gene_a, gene_b);",
-        ),
+        index_sql: Some("CREATE INDEX IF NOT EXISTS idx_fusions_pair ON fusions (gene_a, gene_b);"),
         rebuild_samples_summary: false,
         view_only: false,
     },
@@ -321,7 +319,10 @@ fn classify_inputs(inputs: &[PathBuf]) -> (Vec<&PathBuf>, BTreeMap<&'static str,
 }
 
 /// Column names present in a Parquet file (via DuckDB's `DESCRIBE`).
-fn parquet_column_names(conn: &Connection, path: &Path) -> Result<std::collections::HashSet<String>> {
+fn parquet_column_names(
+    conn: &Connection,
+    path: &Path,
+) -> Result<std::collections::HashSet<String>> {
     let escaped = escape_path(path);
     let mut stmt = conn
         .prepare(&format!("DESCRIBE SELECT * FROM read_parquet('{escaped}')"))
@@ -916,7 +917,10 @@ fn alt_bases_column_names(conn: &Connection) -> Result<std::collections::HashSet
     conn.prepare("DESCRIBE SELECT * FROM alt_bases LIMIT 0")
         .and_then(|mut stmt| {
             stmt.query_map([], |row| row.get::<_, String>(0))
-                .map(|rows| rows.filter_map(|r| r.ok()).collect::<std::collections::HashSet<String>>())
+                .map(|rows| {
+                    rows.filter_map(|r| r.ok())
+                        .collect::<std::collections::HashSet<String>>()
+                })
         })
         .context("failed to describe alt_bases columns")
 }
@@ -938,29 +942,37 @@ fn write_on_target_tsv(conn: &Connection, path: &std::path::Path) -> Result<()> 
     // Each entry is (sql_expression, output_alias, optional_guard_column).
     // When optional_guard_column is Some(c), the column is included only if c exists.
     let column_specs: &[(&str, &str, Option<&str>)] = &[
-        ("sample_id",                                "sample_id",            None),
-        ("chrom",                                    "chrom",                None),
-        ("pos + 1",                                  "pos",                  None),
-        ("ref_allele",                               "ref_allele",           Some("ref_allele")),
-        ("alt_allele",                               "alt_allele",           None),
-        ("variant_type",                             "variant_type",         Some("variant_type")),
-        ("ROUND(alt_count * 1.0 / total_depth, 4)", "vaf",                  None),
-        ("alt_count",                                "alt_count",            None),
-        ("ref_count",                                "ref_count",            Some("ref_count")),
-        ("total_depth",                              "total_depth",          None),
-        ("fwd_alt_count",                            "fwd_alt_count",        Some("fwd_alt_count")),
-        ("rev_alt_count",                            "rev_alt_count",        Some("rev_alt_count")),
-        ("overlap_alt_agree",                        "overlap_alt_agree",    Some("overlap_alt_agree")),
-        ("overlap_alt_disagree",                     "overlap_alt_disagree", Some("overlap_alt_disagree")),
-        ("variant_called",                           "variant_called",       Some("variant_called")),
-        ("variant_filter",                           "variant_filter",       Some("variant_filter")),
-        ("gene",                                     "gene",                 Some("gene")),
-        ("gnomad_af",                                "gnomad_af",            Some("gnomad_af")),
+        ("sample_id", "sample_id", None),
+        ("chrom", "chrom", None),
+        ("pos + 1", "pos", None),
+        ("ref_allele", "ref_allele", Some("ref_allele")),
+        ("alt_allele", "alt_allele", None),
+        ("variant_type", "variant_type", Some("variant_type")),
+        ("ROUND(alt_count * 1.0 / total_depth, 4)", "vaf", None),
+        ("alt_count", "alt_count", None),
+        ("ref_count", "ref_count", Some("ref_count")),
+        ("total_depth", "total_depth", None),
+        ("fwd_alt_count", "fwd_alt_count", Some("fwd_alt_count")),
+        ("rev_alt_count", "rev_alt_count", Some("rev_alt_count")),
+        (
+            "overlap_alt_agree",
+            "overlap_alt_agree",
+            Some("overlap_alt_agree"),
+        ),
+        (
+            "overlap_alt_disagree",
+            "overlap_alt_disagree",
+            Some("overlap_alt_disagree"),
+        ),
+        ("variant_called", "variant_called", Some("variant_called")),
+        ("variant_filter", "variant_filter", Some("variant_filter")),
+        ("gene", "gene", Some("gene")),
+        ("gnomad_af", "gnomad_af", Some("gnomad_af")),
     ];
 
     let select_parts: Vec<String> = column_specs
         .iter()
-        .filter(|(_, _, guard)| guard.map_or(true, |c| cols.contains(c)))
+        .filter(|(_, _, guard)| guard.is_none_or(|c| cols.contains(c)))
         .map(|(expr, alias, _)| {
             if *expr == *alias {
                 expr.to_string()
@@ -1198,8 +1210,14 @@ mod tests {
         let err = validate_locus_inputs(&conn, &[&path])
             .expect_err("misnamed fusion parquet must be rejected");
         let msg = err.to_string();
-        assert!(msg.contains(".fusions.parquet"), "message should name the suffix: {msg}");
-        assert!(msg.contains("fusion-caller"), "message should identify the type: {msg}");
+        assert!(
+            msg.contains(".fusions.parquet"),
+            "message should name the suffix: {msg}"
+        );
+        assert!(
+            msg.contains("fusion-caller"),
+            "message should identify the type: {msg}"
+        );
     }
 
     #[test]
@@ -1231,7 +1249,8 @@ mod tests {
     /// `geac_metadata`/table SQL, used to exercise the schema-version guard.
     fn write_source_duckdb(path: &Path, setup_sql: &str) {
         let src = Connection::open(path).expect("open source duckdb");
-        src.execute_batch(setup_sql).expect("populate source duckdb");
+        src.execute_batch(setup_sql)
+            .expect("populate source duckdb");
     }
 
     #[test]
@@ -1290,7 +1309,10 @@ mod tests {
         let err = merge_duckdb_inputs(&conn, &inputs, &mut provenance)
             .expect_err("mismatched schema version must be rejected before copying");
         let msg = err.to_string();
-        assert!(msg.contains("duckdb-v1"), "message should name the input version: {msg}");
+        assert!(
+            msg.contains("duckdb-v1"),
+            "message should name the input version: {msg}"
+        );
         assert!(
             msg.contains(DUCKDB_SCHEMA_VERSION),
             "message should name the expected version: {msg}"

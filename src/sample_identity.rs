@@ -247,7 +247,7 @@ fn load_fingerprints(
     if n_markers == 0 {
         bail!("no usable sample identity markers under the current thresholds");
     }
-    let n_words = (n_markers + 63) / 64;
+    let n_words = n_markers.div_ceil(64);
     let mut samples = sample_meta
         .into_iter()
         .map(|(sample_id, subject_id)| SampleFingerprint {

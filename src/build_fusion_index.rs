@@ -101,7 +101,11 @@ pub(crate) fn parse_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
         .unwrap_or("")
         .to_lowercase();
     // Strip one level of .gz if present to inspect the underlying extension.
-    let inner = if stem.ends_with(".gz") { &stem[..stem.len() - 3] } else { &stem };
+    let inner = if stem.ends_with(".gz") {
+        &stem[..stem.len() - 3]
+    } else {
+        &stem
+    };
     if inner.ends_with(".gtf") {
         parse_gtf_gene_bodies(path)
     } else {
@@ -112,12 +116,11 @@ pub(crate) fn parse_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
 fn parse_gtf_gene_bodies(gtf_path: &Path) -> Result<Vec<GeneBody>> {
     let file = std::fs::File::open(gtf_path)
         .with_context(|| format!("cannot open GTF: {}", gtf_path.display()))?;
-    let reader: Box<dyn BufRead> =
-        if gtf_path.extension().and_then(|e| e.to_str()) == Some("gz") {
-            Box::new(BufReader::new(GzDecoder::new(file)))
-        } else {
-            Box::new(BufReader::new(file))
-        };
+    let reader: Box<dyn BufRead> = if gtf_path.extension().and_then(|e| e.to_str()) == Some("gz") {
+        Box::new(BufReader::new(GzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::new(file))
+    };
 
     let mut genes: Vec<GeneBody> = Vec::new();
 
@@ -164,12 +167,11 @@ fn parse_gtf_gene_bodies(gtf_path: &Path) -> Result<Vec<GeneBody>> {
 fn parse_genepred_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("cannot open annotation file: {}", path.display()))?;
-    let reader: Box<dyn BufRead> =
-        if path.extension().and_then(|e| e.to_str()) == Some("gz") {
-            Box::new(BufReader::new(GzDecoder::new(file)))
-        } else {
-            Box::new(BufReader::new(file))
-        };
+    let reader: Box<dyn BufRead> = if path.extension().and_then(|e| e.to_str()) == Some("gz") {
+        Box::new(BufReader::new(GzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::new(file))
+    };
 
     // Accumulate per (gene_name, chrom) → (min_start, max_end).
     let mut gene_map: HashMap<(String, String), (usize, usize)> = HashMap::new();
@@ -185,25 +187,28 @@ fn parse_genepred_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
         //   col[0] parses as integer → genePredExt+bin (e.g. ncbiRefSeq.txt)
         //   col[0] looks like a transcript accession → genePredExt without bin
         //   otherwise → refFlat (gene name first)
-        let (gene_name, chrom, start_str, end_str) =
-            if fields[0].parse::<u32>().is_ok() {
-                // genePredExt + bin: bin name chrom strand txStart txEnd … name2
-                if fields.len() < 13 { continue; }
-                (fields[12], fields[2], fields[4], fields[5])
-            } else if fields.len() >= 15
-                && (fields[0].starts_with("NM_")
-                    || fields[0].starts_with("NR_")
-                    || fields[0].starts_with("XM_")
-                    || fields[0].starts_with("XR_")
-                    || fields[0].starts_with("ENST"))
-            {
-                // genePredExt without bin: name chrom strand txStart txEnd … name2
-                (fields[11], fields[1], fields[3], fields[4])
-            } else {
-                // refFlat: geneName name chrom strand txStart txEnd …
-                if fields.len() < 6 { continue; }
-                (fields[0], fields[2], fields[4], fields[5])
-            };
+        let (gene_name, chrom, start_str, end_str) = if fields[0].parse::<u32>().is_ok() {
+            // genePredExt + bin: bin name chrom strand txStart txEnd … name2
+            if fields.len() < 13 {
+                continue;
+            }
+            (fields[12], fields[2], fields[4], fields[5])
+        } else if fields.len() >= 15
+            && (fields[0].starts_with("NM_")
+                || fields[0].starts_with("NR_")
+                || fields[0].starts_with("XM_")
+                || fields[0].starts_with("XR_")
+                || fields[0].starts_with("ENST"))
+        {
+            // genePredExt without bin: name chrom strand txStart txEnd … name2
+            (fields[11], fields[1], fields[3], fields[4])
+        } else {
+            // refFlat: geneName name chrom strand txStart txEnd …
+            if fields.len() < 6 {
+                continue;
+            }
+            (fields[0], fields[2], fields[4], fields[5])
+        };
 
         // txStart / txEnd are already 0-based half-open in GenePred.
         let start: usize = match start_str.parse() {
@@ -227,7 +232,12 @@ fn parse_genepred_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
 
     let genes = gene_map
         .into_iter()
-        .map(|((gene_name, chrom), (start, end))| GeneBody { gene_name, chrom, start, end })
+        .map(|((gene_name, chrom), (start, end))| GeneBody {
+            gene_name,
+            chrom,
+            start,
+            end,
+        })
         .collect();
     Ok(genes)
 }
@@ -461,10 +471,12 @@ impl GeneIntervals {
         let mut names: Vec<String> = Vec::new();
         let mut by_chrom: HashMap<String, Vec<(usize, usize, u32)>> = HashMap::new();
         for gene in genes {
-            let idx = *name_to_idx.entry(gene.gene_name.as_str()).or_insert_with(|| {
-                names.push(gene.gene_name.clone());
-                (names.len() - 1) as u32
-            });
+            let idx = *name_to_idx
+                .entry(gene.gene_name.as_str())
+                .or_insert_with(|| {
+                    names.push(gene.gene_name.clone());
+                    (names.len() - 1) as u32
+                });
             by_chrom
                 .entry(gene.chrom.clone())
                 .or_default()
@@ -474,8 +486,18 @@ impl GeneIntervals {
             .into_iter()
             .map(|(chrom, mut ivs)| {
                 ivs.sort_unstable_by_key(|&(s, _, _)| s);
-                let max_len = ivs.iter().map(|&(s, e, _)| e.saturating_sub(s)).max().unwrap_or(0);
-                (chrom, ChromIntervals { intervals: ivs, max_len })
+                let max_len = ivs
+                    .iter()
+                    .map(|&(s, e, _)| e.saturating_sub(s))
+                    .max()
+                    .unwrap_or(0);
+                (
+                    chrom,
+                    ChromIntervals {
+                        intervals: ivs,
+                        max_len,
+                    },
+                )
             })
             .collect();
         GeneIntervals { by_chrom, names }
@@ -599,10 +621,10 @@ fn write_kmer_bed_by_copies(
             accumulate(first_kmer, &mut cur_genes, &mut cur_intergenic);
 
             let flush = |w: &mut BufWriter<std::fs::File>,
-                             start: u32,
-                             end: u32,
-                             genes: &BTreeSet<u32>,
-                             inter: bool|
+                         start: u32,
+                         end: u32,
+                         genes: &BTreeSet<u32>,
+                         inter: bool|
              -> Result<()> {
                 if annot.is_some() {
                     let label = format_gene_label(genes, inter, gene_names);
@@ -618,7 +640,13 @@ fn write_kmer_bed_by_copies(
                     interval_end = interval_end.max(pos + k as u32);
                     accumulate(kmer, &mut cur_genes, &mut cur_intergenic);
                 } else {
-                    flush(&mut w, interval_start, interval_end, &cur_genes, cur_intergenic)?;
+                    flush(
+                        &mut w,
+                        interval_start,
+                        interval_end,
+                        &cur_genes,
+                        cur_intergenic,
+                    )?;
                     n_intervals += 1;
                     interval_start = pos;
                     interval_end = pos + k as u32;
@@ -627,7 +655,13 @@ fn write_kmer_bed_by_copies(
                     accumulate(kmer, &mut cur_genes, &mut cur_intergenic);
                 }
             }
-            flush(&mut w, interval_start, interval_end, &cur_genes, cur_intergenic)?;
+            flush(
+                &mut w,
+                interval_start,
+                interval_end,
+                &cur_genes,
+                cur_intergenic,
+            )?;
             n_intervals += 1;
         }
         info!(
@@ -927,10 +961,11 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
     // Build a per-chromosome index: chrom → [(start, end, gene_idx)]
     let mut genes_by_chrom: HashMap<String, Vec<(usize, usize, u32)>> = HashMap::new();
     for (gene_idx, gene) in genes.iter().enumerate() {
-        genes_by_chrom
-            .entry(gene.chrom.clone())
-            .or_default()
-            .push((gene.start, gene.end, gene_idx as u32));
+        genes_by_chrom.entry(gene.chrom.clone()).or_default().push((
+            gene.start,
+            gene.end,
+            gene_idx as u32,
+        ));
     }
 
     // Process chromosomes in the order they appear in the FASTA index so that
@@ -1132,10 +1167,9 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
                                 let shift = 2 * (k - 1 - pos_k);
                                 let orig = (strand >> shift) & 3;
                                 for delta in [1u64, 2, 3] {
-                                    let nbr_fwd = (strand & !(3u64 << shift))
-                                        | ((orig ^ delta) << shift);
-                                    let canonical =
-                                        nbr_fwd.min(reverse_complement(nbr_fwd, k));
+                                    let nbr_fwd =
+                                        (strand & !(3u64 << shift)) | ((orig ^ delta) << shift);
+                                    let canonical = nbr_fwd.min(reverse_complement(nbr_fwd, k));
                                     if kmer_to_gene.contains_key(&canonical) {
                                         local_rejects.insert(canonical);
                                     }
@@ -1246,14 +1280,20 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
         kmer_to_pos.retain(|kmer, _| kmer_to_gene.contains_key(kmer));
         info!(
             n_genes_removed = n_removed,
-            min_kmers,
-            "genes removed due to insufficient unique k-mers"
+            min_kmers, "genes removed due to insufficient unique k-mers"
         );
     }
 
     // Step 4 — write the index.
     info!(output = %args.output.display(), "writing fusion index...");
-    write_index(&kmer_to_gene, &kmer_to_pos, &genes, genome_copies.as_ref(), k, &args.output)?;
+    write_index(
+        &kmer_to_gene,
+        &kmer_to_pos,
+        &genes,
+        genome_copies.as_ref(),
+        k,
+        &args.output,
+    )?;
 
     // Step 5 — optional BED of merged k-mer intervals (all retained k-mers).
     if let Some(ref bed_path) = args.bed_output {
@@ -1265,11 +1305,10 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
     if let Some(ref prefix) = args.bed_output_by_copies {
         if let Some(ref counts) = genome_copies {
             info!(prefix = %prefix.display(), "writing per-copy-tier k-mer BEDs...");
-            let (annot, names): (Option<&HashMap<u64, GeneAnnot>>, &[String]) =
-                match gene_annot {
-                    Some(ref gi) => (Some(&kmer_annot), gi.names.as_slice()),
-                    None => (None, &[]),
-                };
+            let (annot, names): (Option<&HashMap<u64, GeneAnnot>>, &[String]) = match gene_annot {
+                Some(ref gi) => (Some(&kmer_annot), gi.names.as_slice()),
+                None => (None, &[]),
+            };
             write_kmer_bed_by_copies(
                 &kmer_to_pos,
                 counts,

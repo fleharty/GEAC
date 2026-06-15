@@ -4,7 +4,9 @@ use rust_htslib::bam::pileup::Indel;
 
 use crate::record::{FamilySizeScheme, VariantType};
 
-use super::pileup::{family_size_tags, fnv1a_64, hard_clip_counts, read_context_metrics, ReadDetail};
+use super::pileup::{
+    family_size_tags, fnv1a_64, hard_clip_counts, read_context_metrics, ReadDetail,
+};
 
 /// Per-indel-allele tally at a pileup position.
 pub(super) struct IndelCount {
@@ -275,12 +277,12 @@ pub(super) fn tally_indels(
                     }
                     (Some((alt1, vt1)), Some((alt2, vt2))) => {
                         if indels_compatible(alt1, alt2) {
-                            let (canon_alt, canon_vt) =
-                                if alt1.contains('N') && !alt2.contains('N') {
-                                    (&alt2, vt2)
-                                } else {
-                                    (&alt1, vt1)
-                                };
+                            let (canon_alt, canon_vt) = if alt1.contains('N') && !alt2.contains('N')
+                            {
+                                (&alt2, vt2)
+                            } else {
+                                (&alt1, vt1)
+                            };
                             let e =
                                 indels
                                     .entry(canon_alt.to_string())

@@ -16,7 +16,7 @@ use crate::gene_annotations::GeneAnnotations;
 use crate::gnomad::GnomadIndex;
 use crate::progress::ProgressReporter;
 use crate::record::{AltBase, AltRead, SampleMetricsRecord, VariantType};
-use crate::region::{RegionInput, parse_region_input};
+use crate::region::{parse_region_input, RegionInput};
 use crate::repeat::compute_repeat_metrics;
 use crate::targets::TargetIntervals;
 use crate::vcf::VariantAnnotator;
@@ -25,10 +25,10 @@ use builders::LocusContext;
 use indel::tally_indels;
 use pileup::{locus_n_context_summary, tally_pileup, PileupResult};
 
-pub(crate) use ref_utils::RefCache;
 pub(crate) use ref_utils::gc_frac;
-pub use ref_utils::{open_bam, read_group_sample_id};
 pub(crate) use ref_utils::resolve_max_pileup_depth;
+pub(crate) use ref_utils::RefCache;
+pub use ref_utils::{open_bam, read_group_sample_id};
 
 /// Process a BAM/CRAM file and return all alt base records (and optionally per-read detail records).
 ///
@@ -309,9 +309,9 @@ pub fn collect_alt_bases(
                 for (alt_allele, details) in &indel_read_details {
                     let seq = ref_cache.current_seq();
                     for detail in details {
-                        let frag_gc = detail.insert_size.and_then(|ins| {
-                            gc_frac(seq, detail.frag_start as usize, ins as usize)
-                        });
+                        let frag_gc = detail
+                            .insert_size
+                            .and_then(|ins| gc_frac(seq, detail.frag_start as usize, ins as usize));
                         read_records.push(locus.build_alt_read(alt_allele, detail, frag_gc));
                     }
                 }

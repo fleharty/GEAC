@@ -5,7 +5,7 @@ use tracing::info;
 use crate::bam::{gc_frac, open_bam, read_group_sample_id, RefCache};
 use crate::cli::FragmentsArgs;
 use crate::record::FragmentRecord;
-use crate::region::{RegionInput, parse_region_input};
+use crate::region::{parse_region_input, RegionInput};
 use crate::writer::parquet_fragments::FragmentsWriter;
 
 pub fn collect_fragments(args: &FragmentsArgs, writer: &mut FragmentsWriter) -> Result<()> {
@@ -46,7 +46,9 @@ pub fn collect_fragments(args: &FragmentsArgs, writer: &mut FragmentsWriter) -> 
 
     for fetch_region in &fetch_regions {
         match fetch_region.as_deref() {
-            Some(r) => bam.fetch(r).with_context(|| format!("failed to fetch region '{r}'"))?,
+            Some(r) => bam
+                .fetch(r)
+                .with_context(|| format!("failed to fetch region '{r}'"))?,
             None => bam.fetch(".").context("failed to fetch all reads")?,
         }
 
@@ -65,7 +67,7 @@ pub fn collect_fragments(args: &FragmentsArgs, writer: &mut FragmentsWriter) -> 
                 || !record.is_proper_pair()
                 || record.is_secondary()
                 || record.is_supplementary()
-                || (record.mapq() as u8) < args.min_map_qual
+                || record.mapq() < args.min_map_qual
             {
                 continue;
             }

@@ -123,8 +123,8 @@ impl ChromGenes {
 ///
 /// **Format auto-detection** (by file extension, stripping `.gz` first):
 /// - `.txt` / `.txt.gz`  → UCSC genePred (e.g. ncbiRefSeq.txt.gz from UCSC).
-///                          One row per transcript; `name2` column used as gene symbol.
-///                          Exon intervals are derived from the exonStarts/exonEnds columns.
+///   One row per transcript; `name2` column used as gene symbol.
+///   Exon intervals are derived from the exonStarts/exonEnds columns.
 /// - `.gff3` / `.gff`   → GFF3 (gene, exon, CDS, UTR features)
 /// - `.gtf` / other     → GTF  (gene, exon, CDS, UTR features)
 ///

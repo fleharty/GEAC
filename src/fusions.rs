@@ -59,10 +59,9 @@ fn index_meta_value(conn: &Connection, key: &str) -> Result<Option<String>> {
 
 fn index_kmer_size(conn: &Connection) -> Result<Option<usize>> {
     match index_meta_value(conn, "kmer_size")? {
-        Some(s) => Ok(Some(
-            s.parse::<usize>()
-                .with_context(|| format!("index meta kmer_size is not an integer: {s:?}"))?,
-        )),
+        Some(s) => Ok(Some(s.parse::<usize>().with_context(|| {
+            format!("index meta kmer_size is not an integer: {s:?}")
+        })?)),
         None => Ok(None),
     }
 }
@@ -245,7 +244,7 @@ fn assign_gene(
                 .entry(gene_idx)
                 .or_insert((0, 0, pos_in_read, pos_in_read));
             e.0 += 1;
-            let is_clean = kmer_blacklist.map_or(true, |bl| !bl.contains(&kmer));
+            let is_clean = kmer_blacklist.is_none_or(|bl| !bl.contains(&kmer));
             if is_clean {
                 e.1 += 1;
             }
@@ -366,16 +365,24 @@ fn read_coherence(rh: &ReadHit, ga: u32, gb: u32, k: usize, min_anchor: u32) -> 
     let (a_count, a_min, a_max, b_count, b_min, b_max) = if rh.gene_idx == ga {
         match rh.gene2_idx {
             Some(g2) if g2 == gb => (
-                rh.gene1_kmer_count, rh.gene1_kmer_min, rh.gene1_kmer_max,
-                rh.gene2_kmer_count, rh.gene2_kmer_min, rh.gene2_kmer_max,
+                rh.gene1_kmer_count,
+                rh.gene1_kmer_min,
+                rh.gene1_kmer_max,
+                rh.gene2_kmer_count,
+                rh.gene2_kmer_min,
+                rh.gene2_kmer_max,
             ),
             _ => return (false, false),
         }
     } else if rh.gene_idx == gb {
         match rh.gene2_idx {
             Some(g2) if g2 == ga => (
-                rh.gene2_kmer_count, rh.gene2_kmer_min, rh.gene2_kmer_max,
-                rh.gene1_kmer_count, rh.gene1_kmer_min, rh.gene1_kmer_max,
+                rh.gene2_kmer_count,
+                rh.gene2_kmer_min,
+                rh.gene2_kmer_max,
+                rh.gene1_kmer_count,
+                rh.gene1_kmer_min,
+                rh.gene1_kmer_max,
             ),
             _ => return (false, false),
         }
@@ -424,7 +431,13 @@ fn fusion_layout_track(
             }
         }
     }
-    render_layout_track(n_windows, &a_positions, &b_positions, &non_acgt_positions(seq), k)
+    render_layout_track(
+        n_windows,
+        &a_positions,
+        &b_positions,
+        &non_acgt_positions(seq),
+        k,
+    )
 }
 
 /// Per-fusion candidate statistics accumulated during fragment aggregation.
@@ -442,7 +455,10 @@ struct FusionStats {
 /// kmer-hits TSV — labels the same fusion identically. (The Parquet `gene_a`/`gene_b`
 /// columns are filled from `gene_names[key.0]`/`[key.1]`, matching this order.)
 fn fusion_pair_label(key: (u32, u32), gene_names: &[String]) -> String {
-    format!("{}::{}", gene_names[key.0 as usize], gene_names[key.1 as usize])
+    format!(
+        "{}::{}",
+        gene_names[key.0 as usize], gene_names[key.1 as usize]
+    )
 }
 
 // ─── Breakpoint accumulation types ───────────────────────────────────────────
@@ -470,7 +486,7 @@ fn median_i64(values: &mut [i64]) -> Option<f64> {
     }
     values.sort_unstable();
     let n = values.len();
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         Some((values[n / 2 - 1] + values[n / 2]) as f64 / 2.0)
     } else {
         Some(values[n / 2] as f64)
@@ -482,7 +498,10 @@ fn std_dev_i64(values: &[i64]) -> Option<f64> {
         return None;
     }
     let mean = values.iter().sum::<i64>() as f64 / values.len() as f64;
-    let variance = values.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>()
+    let variance = values
+        .iter()
+        .map(|&v| (v as f64 - mean).powi(2))
+        .sum::<f64>()
         / (values.len() - 1) as f64;
     Some(variance.sqrt())
 }
@@ -504,13 +523,26 @@ fn write_fusion_tsv(records: &[FusionRecord], output: &Path) -> Result<()> {
     let mut w = BufWriter::new(file);
     writeln!(w, "sample_id\tgene_a\tgene_b\tchrom_a\tchrom_b\tsupporting_reads\tmin_mapq\tn_spanning_reads\tn_coherent_fragments\tn_pon_samples\tpon_total_samples\tmax_pon_supporting_reads\tfilter")?;
     for r in records {
-        let max_pon = r.max_pon_supporting_reads.map(|v| v.to_string()).unwrap_or_else(|| "NA".to_string());
+        let max_pon = r
+            .max_pon_supporting_reads
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "NA".to_string());
         writeln!(
             w,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            r.sample_id, r.gene_a, r.gene_b, r.chrom_a, r.chrom_b, r.supporting_reads, r.min_mapq,
-            r.n_spanning_reads, r.n_coherent_fragments,
-            r.n_pon_samples, r.pon_total_samples, max_pon, r.filter
+            r.sample_id,
+            r.gene_a,
+            r.gene_b,
+            r.chrom_a,
+            r.chrom_b,
+            r.supporting_reads,
+            r.min_mapq,
+            r.n_spanning_reads,
+            r.n_coherent_fragments,
+            r.n_pon_samples,
+            r.pon_total_samples,
+            max_pon,
+            r.filter
         )?;
     }
     Ok(())
@@ -576,43 +608,76 @@ fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(
-                records.iter().map(|r| r.sample_id.as_str()).collect::<Vec<_>>(),
+                records
+                    .iter()
+                    .map(|r| r.sample_id.as_str())
+                    .collect::<Vec<_>>(),
             )) as ArrayRef,
             Arc::new(StringArray::from(
-                records.iter().map(|r| r.gene_a.as_str()).collect::<Vec<_>>(),
+                records
+                    .iter()
+                    .map(|r| r.gene_a.as_str())
+                    .collect::<Vec<_>>(),
             )) as ArrayRef,
             Arc::new(StringArray::from(
-                records.iter().map(|r| r.gene_b.as_str()).collect::<Vec<_>>(),
+                records
+                    .iter()
+                    .map(|r| r.gene_b.as_str())
+                    .collect::<Vec<_>>(),
             )) as ArrayRef,
             Arc::new(StringArray::from(
-                records.iter().map(|r| r.chrom_a.as_str()).collect::<Vec<_>>(),
+                records
+                    .iter()
+                    .map(|r| r.chrom_a.as_str())
+                    .collect::<Vec<_>>(),
             )) as ArrayRef,
             Arc::new(StringArray::from(
-                records.iter().map(|r| r.chrom_b.as_str()).collect::<Vec<_>>(),
+                records
+                    .iter()
+                    .map(|r| r.chrom_b.as_str())
+                    .collect::<Vec<_>>(),
             )) as ArrayRef,
             Arc::new(Int32Array::from(
-                records.iter().map(|r| r.supporting_reads).collect::<Vec<_>>(),
+                records
+                    .iter()
+                    .map(|r| r.supporting_reads)
+                    .collect::<Vec<_>>(),
             )) as ArrayRef,
             Arc::new(UInt8Array::from(
                 records.iter().map(|r| r.min_mapq).collect::<Vec<_>>(),
             )) as ArrayRef,
             Arc::new(Int32Array::from(
-                records.iter().map(|r| r.n_spanning_reads).collect::<Vec<_>>(),
+                records
+                    .iter()
+                    .map(|r| r.n_spanning_reads)
+                    .collect::<Vec<_>>(),
             )) as ArrayRef,
             Arc::new(Int32Array::from(
-                records.iter().map(|r| r.n_coherent_fragments).collect::<Vec<_>>(),
+                records
+                    .iter()
+                    .map(|r| r.n_coherent_fragments)
+                    .collect::<Vec<_>>(),
             )) as ArrayRef,
             Arc::new(Int32Array::from(
                 records.iter().map(|r| r.n_pon_samples).collect::<Vec<_>>(),
             )) as ArrayRef,
             Arc::new(Int32Array::from(
-                records.iter().map(|r| r.pon_total_samples).collect::<Vec<_>>(),
+                records
+                    .iter()
+                    .map(|r| r.pon_total_samples)
+                    .collect::<Vec<_>>(),
             )) as ArrayRef,
             Arc::new(Int32Array::from(
-                records.iter().map(|r| r.max_pon_supporting_reads).collect::<Vec<_>>(),
+                records
+                    .iter()
+                    .map(|r| r.max_pon_supporting_reads)
+                    .collect::<Vec<_>>(),
             )) as ArrayRef,
             Arc::new(StringArray::from(
-                records.iter().map(|r| r.filter.as_str()).collect::<Vec<_>>(),
+                records
+                    .iter()
+                    .map(|r| r.filter.as_str())
+                    .collect::<Vec<_>>(),
             )) as ArrayRef,
         ],
     )
@@ -641,18 +706,17 @@ fn annotate_fusion_pon(
     let conn = Connection::open(pon_db)
         .with_context(|| format!("failed to open fusion PoN DuckDB: {}", pon_db.display()))?;
 
-    conn.execute_batch("SELECT 1 FROM fusions LIMIT 0").context(
-        "fusion PoN DuckDB does not contain a fusions table — build it with \
+    conn.execute_batch("SELECT 1 FROM fusions LIMIT 0")
+        .context(
+            "fusion PoN DuckDB does not contain a fusions table — build it with \
          `geac merge` over normal-sample *.fusions.parquet files",
-    )?;
+        )?;
 
     let running = env!("CARGO_PKG_VERSION");
     let pon_version: Option<String> = conn
-        .query_row(
-            "SELECT geac_version FROM geac_metadata LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT geac_version FROM geac_metadata LIMIT 1", [], |r| {
+            r.get(0)
+        })
         .ok();
     if let Some(pon_v) = pon_version {
         if pon_v != running {
@@ -669,7 +733,9 @@ fn annotate_fusion_pon(
     }
 
     let pon_total_samples: i32 =
-        conn.query_row("SELECT COUNT(DISTINCT sample_id) FROM fusions", [], |r| r.get(0))?;
+        conn.query_row("SELECT COUNT(DISTINCT sample_id) FROM fusions", [], |r| {
+            r.get(0)
+        })?;
 
     // Aggregate per normalized (sorted) gene pair: how many distinct PoN samples carry
     // it and the highest supporting-read count seen.
@@ -707,7 +773,11 @@ fn annotate_fusion_pon(
         }
     }
 
-    info!(pon_total_samples, n_pon_pairs = pon_agg.len(), "fusion PoN annotation complete");
+    info!(
+        pon_total_samples,
+        n_pon_pairs = pon_agg.len(),
+        "fusion PoN annotation complete"
+    );
     Ok(())
 }
 
@@ -767,9 +837,7 @@ fn log_scan_progress(
     } else {
         info!(
             reads_processed,
-            reads_assigned,
-            reads_per_sec,
-            "BAM scan progress"
+            reads_assigned, reads_per_sec, "BAM scan progress"
         );
     }
 }
@@ -785,35 +853,41 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     );
 
     info!(index = %args.index.display(), "loading fusion k-mer index...");
-    let index = load_index(&args.index, k, args.max_kmer_copies, args.skip_version_check)?;
+    let index = load_index(
+        &args.index,
+        k,
+        args.max_kmer_copies,
+        args.skip_version_check,
+    )?;
 
-    let kmer_blacklist: Option<std::collections::HashSet<u64>> =
-        if let Some(ref bl_path) = args.fusion_kmer_blacklist {
-            let bl_conn = Connection::open_in_memory()
-                .context("failed to open DuckDB for k-mer blacklist")?;
-            let escaped = bl_path.display().to_string().replace('\'', "''");
-            let threshold = args.min_kmer_blacklist_samples;
-            let mut stmt = bl_conn
+    let kmer_blacklist: Option<std::collections::HashSet<u64>> = if let Some(ref bl_path) =
+        args.fusion_kmer_blacklist
+    {
+        let bl_conn =
+            Connection::open_in_memory().context("failed to open DuckDB for k-mer blacklist")?;
+        let escaped = bl_path.display().to_string().replace('\'', "''");
+        let threshold = args.min_kmer_blacklist_samples;
+        let mut stmt = bl_conn
                 .prepare(&format!(
                     "SELECT kmer_hash FROM read_parquet('{escaped}') WHERE n_pon_samples >= {threshold}"
                 ))
                 .context("failed to query k-mer blacklist Parquet")?;
-            let mut rows = stmt.query([]).context("failed to read k-mer blacklist")?;
-            let mut set = std::collections::HashSet::new();
-            while let Some(row) = rows.next()? {
-                let h: i64 = row.get(0)?;
-                set.insert(h as u64);
-            }
-            info!(
-                n_blacklisted = set.len(),
-                min_pon_samples = threshold,
-                path = %bl_path.display(),
-                "loaded k-mer blacklist"
-            );
-            Some(set)
-        } else {
-            None
-        };
+        let mut rows = stmt.query([]).context("failed to read k-mer blacklist")?;
+        let mut set = std::collections::HashSet::new();
+        while let Some(row) = rows.next()? {
+            let h: i64 = row.get(0)?;
+            set.insert(h as u64);
+        }
+        info!(
+            n_blacklisted = set.len(),
+            min_pon_samples = threshold,
+            path = %bl_path.display(),
+            "loaded k-mer blacklist"
+        );
+        Some(set)
+    } else {
+        None
+    };
 
     let mut reader = bam::Reader::from_path(&args.bam)
         .with_context(|| format!("failed to open BAM/CRAM: {}", args.bam.display()))?;
@@ -839,9 +913,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                     }
                 }
             }
-            found.context(
-                "--sample-id not provided and no SM tag found in BAM/CRAM @RG header",
-            )?
+            found.context("--sample-id not provided and no SM tag found in BAM/CRAM @RG header")?
         }
     };
 
@@ -905,7 +977,14 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         }
 
         let seq = record.seq().as_bytes();
-        if let Some(mut rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, false, kmer_blacklist.as_ref()) {
+        if let Some(mut rh) = assign_gene(
+            &seq,
+            &index,
+            k,
+            args.min_kmer_hits,
+            false,
+            kmer_blacklist.as_ref(),
+        ) {
             rh.mapq = record.mapq();
             qname_to_reads
                 .entry(record.qname().to_vec())
@@ -914,7 +993,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             reads_assigned += 1;
         }
 
-        if reads_processed % 5_000_000 == 0 {
+        if reads_processed.is_multiple_of(5_000_000) {
             let frac = if is_cram {
                 // Coordinate-based: unmapped reads (tid < 0) cluster at the end of
                 // a coordinate-sorted file, so treat them as ~100% complete.
@@ -961,8 +1040,12 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         let mut fragment_coherent = false;
         for rh in read_hits {
             let (spanning, coherent) = read_coherence(rh, ga, gb, k, min_anchor);
-            if spanning { n_spanning += 1; }
-            if coherent { fragment_coherent = true; }
+            if spanning {
+                n_spanning += 1;
+            }
+            if coherent {
+                fragment_coherent = true;
+            }
         }
 
         let entry = fusion_counts.entry(key).or_insert(FusionStats {
@@ -974,7 +1057,9 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         entry.count += 1;
         entry.min_mapq = entry.min_mapq.min(min_mq);
         entry.n_spanning_reads += n_spanning;
-        if fragment_coherent { entry.n_coherent_fragments += 1; }
+        if fragment_coherent {
+            entry.n_coherent_fragments += 1;
+        }
     }
 
     let mut records: Vec<FusionRecord> = fusion_counts
@@ -1021,7 +1106,11 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 flagged += 1;
             }
         }
-        info!(flagged, max_pon_samples = max_pon, "flagged fusions present in PoN (filter=pon)");
+        info!(
+            flagged,
+            max_pon_samples = max_pon,
+            "flagged fusions present in PoN (filter=pon)"
+        );
     }
 
     if args.min_coherent_fragments > 0 {
@@ -1073,7 +1162,6 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     // below applies the same read-quality filters as the first pass, because that
     // pass uses reads for quantitative analysis (position estimates, k-mer counts).
     if let Some(ref reads_output) = args.reads_output {
-
         info!(
             n_fragments = fusion_qnames.len(),
             output = %reads_output.display(),
@@ -1087,9 +1175,8 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         }
 
         let header = bam::Header::from_template(reader2.header());
-        let mut writer =
-            bam::Writer::from_path(reads_output, &header, bam::Format::Bam)
-                .with_context(|| format!("failed to create output BAM: {}", reads_output.display()))?;
+        let mut writer = bam::Writer::from_path(reads_output, &header, bam::Format::Bam)
+            .with_context(|| format!("failed to create output BAM: {}", reads_output.display()))?;
 
         let mut reads_written: u64 = 0;
         for result in reader2.records() {
@@ -1106,13 +1193,21 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 // N=window masked by a non-ACGT base, .=k-mer matching neither gene.
                 // Same string as the diagnose-fusion layout_5to3 column.
                 if let Some(&(ga, gb)) = fusion_pairs.get(record.qname()) {
-                    let track = fusion_layout_track(&record.seq().as_bytes(), k, &index.kmer_to_gene, ga, gb);
+                    let track = fusion_layout_track(
+                        &record.seq().as_bytes(),
+                        k,
+                        &index.kmer_to_gene,
+                        ga,
+                        gb,
+                    );
                     let _ = record.remove_aux(b"FL");
                     record
                         .push_aux(b"FL", bam::record::Aux::String(&track))
                         .context("failed to add FL tag to BAM record")?;
                 }
-                writer.write(&record).context("failed to write BAM record")?;
+                writer
+                    .write(&record)
+                    .context("failed to write BAM record")?;
                 reads_written += 1;
             }
         }
@@ -1145,34 +1240,42 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         let target_names: Vec<String> = {
             let hdr = reader2.header();
             (0..hdr.target_count())
-                .map(|i| std::str::from_utf8(hdr.tid2name(i)).unwrap_or("?").to_string())
+                .map(|i| {
+                    std::str::from_utf8(hdr.tid2name(i))
+                        .unwrap_or("?")
+                        .to_string()
+                })
                 .collect()
         };
 
         // kmer-hits TSV writer (optional).
-        let mut kmer_hits_writer: Option<BufWriter<std::fs::File>> =
-            if let Some(ref path) = args.kmer_hits_output {
-                let file = std::fs::File::create(path)
-                    .with_context(|| format!("failed to create kmer hits TSV: {}", path.display()))?;
-                let mut w = BufWriter::new(file);
-                writeln!(w, "fusion\tsample_id\tread_name\tread_end\tchrom\tpos\tgene_matched\tkmer_pos_in_read\tkmer_hash\tkmer_seq")?;
-                Some(w)
-            } else {
-                None
-            };
+        let mut kmer_hits_writer: Option<BufWriter<std::fs::File>> = if let Some(ref path) =
+            args.kmer_hits_output
+        {
+            let file = std::fs::File::create(path)
+                .with_context(|| format!("failed to create kmer hits TSV: {}", path.display()))?;
+            let mut w = BufWriter::new(file);
+            writeln!(w, "fusion\tsample_id\tread_name\tread_end\tchrom\tpos\tgene_matched\tkmer_pos_in_read\tkmer_hash\tkmer_seq")?;
+            Some(w)
+        } else {
+            None
+        };
 
         // Breakpoint accumulators (optional): one per passing fusion.
         let mut accumulators: Option<HashMap<String, BreakpointAccumulator>> =
             if args.breakpoints_output.is_some() {
                 let mut map: HashMap<String, BreakpointAccumulator> = HashMap::new();
                 for (&(ga, gb), label) in &fusion_label {
-                    map.insert(label.clone(), BreakpointAccumulator {
-                        gene_a_idx: ga,
-                        gene_b_idx: gb,
-                        gene_a_chrom_votes: HashMap::new(),
-                        gene_b_chrom_votes: HashMap::new(),
-                        spanning_reads: Vec::new(),
-                    });
+                    map.insert(
+                        label.clone(),
+                        BreakpointAccumulator {
+                            gene_a_idx: ga,
+                            gene_b_idx: gb,
+                            gene_a_chrom_votes: HashMap::new(),
+                            gene_b_chrom_votes: HashMap::new(),
+                            spanning_reads: Vec::new(),
+                        },
+                    );
                 }
                 Some(map)
             } else {
@@ -1184,7 +1287,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         for result in reader2.records() {
             let record = result.context("error reading BAM record in detail pass")?;
             detail_reads_processed += 1;
-            if detail_reads_processed % 5_000_000 == 0 {
+            if detail_reads_processed.is_multiple_of(5_000_000) {
                 info!(detail_reads_processed, rows_written, "detail pass progress");
             }
             let Some(fusion_label_str) = fusion_qnames.get(record.qname()) else {
@@ -1201,13 +1304,23 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 continue;
             }
             let seq = record.seq().as_bytes();
-            let Some(rh) = assign_gene(&seq, &index, k, args.min_kmer_hits, true, kmer_blacklist.as_ref()) else {
+            let Some(rh) = assign_gene(
+                &seq,
+                &index,
+                k,
+                args.min_kmer_hits,
+                true,
+                kmer_blacklist.as_ref(),
+            ) else {
                 continue;
             };
             let read_end = if flags & 0x40 != 0 { "R1" } else { "R2" };
             let tid = record.tid();
             let chrom_str: &str = if tid >= 0 {
-                target_names.get(tid as usize).map(|s| s.as_str()).unwrap_or("*")
+                target_names
+                    .get(tid as usize)
+                    .map(|s| s.as_str())
+                    .unwrap_or("*")
             } else {
                 "*"
             };
@@ -1217,13 +1330,25 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             if let Some(ref mut w) = kmer_hits_writer {
                 let read_name = std::str::from_utf8(record.qname()).unwrap_or("?");
                 for &(kmer_hash, gene_idx, kmer_pos_in_read) in &rh.kmer_hits {
-                    let gene_name = index.gene_names.get(gene_idx as usize).map(|s| s.as_str()).unwrap_or("?");
+                    let gene_name = index
+                        .gene_names
+                        .get(gene_idx as usize)
+                        .map(|s| s.as_str())
+                        .unwrap_or("?");
                     let kmer_seq = decode_kmer(kmer_hash, k);
                     writeln!(
                         w,
                         "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                        fusion_label_str, sample_id, read_name, read_end, chrom_str, pos1,
-                        gene_name, kmer_pos_in_read, kmer_hash as i64, kmer_seq
+                        fusion_label_str,
+                        sample_id,
+                        read_name,
+                        read_end,
+                        chrom_str,
+                        pos1,
+                        gene_name,
+                        kmer_pos_in_read,
+                        kmer_hash as i64,
+                        kmer_seq
                     )?;
                     rows_written += 1;
                 }
@@ -1246,9 +1371,13 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                     if chrom_str == "*" {
                         // Unmapped: skip for chromosome votes and breakpoint estimates.
                     } else if !a_positions.is_empty() && b_positions.is_empty() {
-                        *acc.gene_a_chrom_votes.entry(chrom_str.to_string()).or_insert(0) += 1;
+                        *acc.gene_a_chrom_votes
+                            .entry(chrom_str.to_string())
+                            .or_insert(0) += 1;
                     } else if a_positions.is_empty() && !b_positions.is_empty() {
-                        *acc.gene_b_chrom_votes.entry(chrom_str.to_string()).or_insert(0) += 1;
+                        *acc.gene_b_chrom_votes
+                            .entry(chrom_str.to_string())
+                            .or_insert(0) += 1;
                     } else if !a_positions.is_empty() && !b_positions.is_empty() {
                         // Spanning read.
                         let last_a = *a_positions.iter().max().unwrap();
@@ -1258,7 +1387,10 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                         acc.spanning_reads.push(SpanningReadData {
                             chrom: chrom_str.to_string(),
                             pos: pos1,
-                            last_a, first_a, last_b, first_b,
+                            last_a,
+                            first_a,
+                            last_b,
+                            first_b,
                         });
                     }
                 }
@@ -1271,8 +1403,9 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
 
         // Compute and write breakpoints TSV.
         if let Some(ref bp_path) = args.breakpoints_output {
-            let file = std::fs::File::create(bp_path)
-                .with_context(|| format!("failed to create breakpoints TSV: {}", bp_path.display()))?;
+            let file = std::fs::File::create(bp_path).with_context(|| {
+                format!("failed to create breakpoints TSV: {}", bp_path.display())
+            })?;
             let mut w = BufWriter::new(file);
             writeln!(w, "fusion\tgene_a\tchrom_a\tbreakpoint_a\tbp_a_n\tbp_a_std\tgene_b\tchrom_b\tbreakpoint_b\tbp_b_n\tbp_b_std\tn_spanning_reads")?;
 
@@ -1298,10 +1431,14 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                         .map(|(c, _)| c.clone())
                         .unwrap_or_else(|| fallback.to_string())
                 };
-                let chrom_a =
-                    modal_chrom(&acc.gene_a_chrom_votes, &index.gene_chroms[acc.gene_a_idx as usize]);
-                let chrom_b =
-                    modal_chrom(&acc.gene_b_chrom_votes, &index.gene_chroms[acc.gene_b_idx as usize]);
+                let chrom_a = modal_chrom(
+                    &acc.gene_a_chrom_votes,
+                    &index.gene_chroms[acc.gene_a_idx as usize],
+                );
+                let chrom_b = modal_chrom(
+                    &acc.gene_b_chrom_votes,
+                    &index.gene_chroms[acc.gene_b_idx as usize],
+                );
 
                 let mut bp_a_estimates: Vec<i64> = Vec::new();
                 let mut bp_b_estimates: Vec<i64> = Vec::new();
@@ -1334,16 +1471,29 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 let bp_b_std = std_dev_i64(&bp_b_estimates);
                 let bp_b_n = bp_b_estimates.len();
 
-                let fmt_opt_f64 = |v: Option<f64>| v.map(|x| format!("{:.1}", x)).unwrap_or_else(|| "NA".to_string());
-                let fmt_opt_i64 = |v: Option<f64>| v.map(|x| format!("{}", x as i64)).unwrap_or_else(|| "NA".to_string());
+                let fmt_opt_f64 = |v: Option<f64>| {
+                    v.map(|x| format!("{:.1}", x))
+                        .unwrap_or_else(|| "NA".to_string())
+                };
+                let fmt_opt_i64 = |v: Option<f64>| {
+                    v.map(|x| format!("{}", x as i64))
+                        .unwrap_or_else(|| "NA".to_string())
+                };
 
                 writeln!(
                     w,
                     "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                    label, gene_a, chrom_a,
-                    fmt_opt_i64(bp_a), bp_a_n, fmt_opt_f64(bp_a_std),
-                    gene_b, chrom_b,
-                    fmt_opt_i64(bp_b), bp_b_n, fmt_opt_f64(bp_b_std),
+                    label,
+                    gene_a,
+                    chrom_a,
+                    fmt_opt_i64(bp_a),
+                    bp_a_n,
+                    fmt_opt_f64(bp_a_std),
+                    gene_b,
+                    chrom_b,
+                    fmt_opt_i64(bp_b),
+                    bp_b_n,
+                    fmt_opt_f64(bp_b_std),
                     n_spanning,
                 )?;
             }
@@ -1385,7 +1535,7 @@ mod tests {
     /// and counts default sensibly; tests override what they exercise.
     fn mk_read(
         gene_idx: u32,
-        g1: (u32, u32, u32), // (count, min, max)
+        g1: (u32, u32, u32),                 // (count, min, max)
         gene2: Option<(u32, u32, u32, u32)>, // (idx, count, min, max)
     ) -> ReadHit {
         let (g2_idx, g2_count, g2_min, g2_max) = match gene2 {

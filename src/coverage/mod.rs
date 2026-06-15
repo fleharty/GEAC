@@ -9,7 +9,7 @@ use crate::bam::{open_bam, read_group_sample_id, resolve_max_pileup_depth, RefCa
 use crate::cli::CoverageArgs;
 use crate::gene_annotations::GeneAnnotations;
 use crate::record::{CoverageRecord, IntervalRecord};
-use crate::region::{RegionInput, parse_region_input};
+use crate::region::{parse_region_input, RegionInput};
 use crate::targets::TargetIntervals;
 use crate::track::TrackSet;
 use crate::writer::parquet_coverage::CoverageWriter;
@@ -98,101 +98,106 @@ pub fn collect_coverage(
                 .with_context(|| format!("failed to fetch region '{r}'"))?;
         }
 
-    let mut plp = reader.pileup();
-    plp.set_max_depth(resolve_max_pileup_depth(args.max_pileup_depth));
-    for pileup in plp {
-        let pileup = pileup.context("error reading pileup")?;
-        let tid = pileup.tid() as usize;
-        let pos = pileup.pos() as i64;
+        let mut plp = reader.pileup();
+        plp.set_max_depth(resolve_max_pileup_depth(args.max_pileup_depth));
+        for pileup in plp {
+            let pileup = pileup.context("error reading pileup")?;
+            let tid = pileup.tid() as usize;
+            let pos = pileup.pos() as i64;
 
-        let (chrom, _) = ref_cache.get(&bam_contigs, tid, pos as usize)?;
+            let (chrom, _) = ref_cache.get(&bam_contigs, tid, pos as usize)?;
 
-        // Skip positions outside targets when targets are provided
-        if let Some(ti) = target_intervals {
-            if !ti.contains(&chrom, pos) {
+            // Skip positions outside targets when targets are provided
+            if let Some(ti) = target_intervals {
+                if !ti.contains(&chrom, pos) {
+                    continue;
+                }
+            }
+
+            let tally = tally_coverage(&pileup, args.min_map_qual);
+
+            let gc = compute_gc_content(ref_cache.current_seq(), pos as usize, args.gc_window);
+            let annotation = gene_annots.and_then(|g| g.get(&chrom, pos));
+            let gene = annotation.as_ref().map(|a| a.gene.clone());
+            let feature_type = annotation.as_ref().and_then(|a| a.feature_type.clone());
+            let exon_number = annotation.as_ref().and_then(|a| a.exon_number);
+            let track_values = track_set.map_or_else(Vec::new, |ts| ts.lookup(&chrom, pos));
+
+            // Update interval accumulator before the min_depth gate so that low-depth
+            // positions still contribute to per-interval stats.
+            if do_intervals {
+                if let Some(idx) = target_intervals.and_then(|ti| ti.interval_index(&chrom, pos)) {
+                    interval_accs[idx].push_tally(
+                        &tally,
+                        gc,
+                        gene.clone(),
+                        feature_type.clone(),
+                        args,
+                    );
+                }
+            }
+
+            if tally.total_depth < args.min_depth {
+                if has_targets {
+                    seen.insert((chrom.clone(), pos));
+                }
+                if let Some(ref mut cov) = covered {
+                    cov.mark(&chrom, pos);
+                }
                 continue;
             }
-        }
 
-        let tally = tally_coverage(&pileup, args.min_map_qual);
+            let on_target = target_intervals.map(|ti| ti.contains(&chrom, pos));
 
-        let gc = compute_gc_content(ref_cache.current_seq(), pos as usize, args.gc_window);
-        let annotation = gene_annots.and_then(|g| g.get(&chrom, pos));
-        let gene = annotation.as_ref().map(|a| a.gene.clone());
-        let feature_type = annotation.as_ref().and_then(|a| a.feature_type.clone());
-        let exon_number = annotation.as_ref().and_then(|a| a.exon_number);
-        let track_values = track_set.map_or_else(Vec::new, |ts| ts.lookup(&chrom, pos));
-
-        // Update interval accumulator before the min_depth gate so that low-depth
-        // positions still contribute to per-interval stats.
-        if do_intervals {
-            if let Some(idx) = target_intervals.and_then(|ti| ti.interval_index(&chrom, pos)) {
-                interval_accs[idx].push_tally(&tally, gc, gene.clone(), feature_type.clone(), args);
-            }
-        }
-
-        if tally.total_depth < args.min_depth {
             if has_targets {
                 seen.insert((chrom.clone(), pos));
             }
             if let Some(ref mut cov) = covered {
                 cov.mark(&chrom, pos);
             }
-            continue;
+
+            let record = build_record(
+                &sample_id,
+                &chrom,
+                pos,
+                &tally,
+                gc,
+                track_values,
+                on_target,
+                gene,
+                feature_type,
+                exon_number,
+                args,
+            );
+            if let Some(bin) = acc.push(record) {
+                writer.push(bin)?;
+                positions_written += 1;
+            }
+
+            positions_seen += 1;
+
+            // Check clock every 10_000 positions to limit overhead; skip if interval is 0
+            if args.progress_interval > 0 && positions_seen.is_multiple_of(10_000) {
+                let now = std::time::Instant::now();
+                if now.duration_since(last_progress) >= progress_interval {
+                    info!(
+                        positions_written = %fmt_with_commas(positions_written),
+                        locus = %format!("{}:{}", chrom, fmt_with_commas(pos as u64)),
+                        elapsed = %fmt_elapsed(start.elapsed()),
+                        "coverage progress"
+                    );
+                    last_progress = now;
+                }
+            }
         }
 
-        let on_target = target_intervals.map(|ti| ti.contains(&chrom, pos));
-
-        if has_targets {
-            seen.insert((chrom.clone(), pos));
-        }
-        if let Some(ref mut cov) = covered {
-            cov.mark(&chrom, pos);
-        }
-
-        let record = build_record(
-            &sample_id,
-            &chrom,
-            pos,
-            &tally,
-            gc,
-            track_values,
-            on_target,
-            gene,
-            feature_type,
-            exon_number,
-            args,
-        );
-        if let Some(bin) = acc.push(record) {
+        // Flush partial bin at interval boundary so positions from different intervals
+        // are never merged into the same bin.
+        if let Some(bin) = acc.finish() {
             writer.push(bin)?;
             positions_written += 1;
         }
-
-        positions_seen += 1;
-
-        // Check clock every 10_000 positions to limit overhead; skip if interval is 0
-        if args.progress_interval > 0 && positions_seen % 10_000 == 0 {
-            let now = std::time::Instant::now();
-            if now.duration_since(last_progress) >= progress_interval {
-                info!(
-                    positions_written = %fmt_with_commas(positions_written),
-                    locus = %format!("{}:{}", chrom, fmt_with_commas(pos as u64)),
-                    elapsed = %fmt_elapsed(start.elapsed()),
-                    "coverage progress"
-                );
-                last_progress = now;
-            }
-        }
-    }
-
-    // Flush partial bin at interval boundary so positions from different intervals
-    // are never merged into the same bin.
-    if let Some(bin) = acc.finish() {
-        writer.push(bin)?;
-        positions_written += 1;
-    }
-    acc = BinAccumulator::new(args.bin_size);
-
+        acc = BinAccumulator::new(args.bin_size);
     } // end fetch_regions loop
 
     // Fill in zero-depth positions within targets that had no reads

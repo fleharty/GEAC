@@ -6,7 +6,9 @@ use rust_htslib::bam;
 pub(super) fn fnv1a_64(bytes: &[u8]) -> u64 {
     const OFFSET: u64 = 14695981039346656037;
     const PRIME: u64 = 1099511628211;
-    bytes.iter().fold(OFFSET, |h, &b| (h ^ b as u64).wrapping_mul(PRIME))
+    bytes
+        .iter()
+        .fold(OFFSET, |h, &b| (h ^ b as u64).wrapping_mul(PRIME))
 }
 
 /// Per-read detail collected during tallying, used to build AltRead records.
@@ -295,35 +297,32 @@ pub(super) fn tally_pileup(
 
         let qname = record.qname().to_vec();
         let fragment_id = fnv1a_64(&qname);
-        by_qname
-            .entry(qname)
-            .or_default()
-            .push(LocusRead {
-                base,
-                is_reverse,
-                is_first_in_pair,
-                qpos,
-                read_len,
-                hard_clip_before,
-                base_qual,
-                map_qual,
-                fragment_id,
-                ab_count,
-                ba_count,
-                family_size,
-                insert_size,
-                frag_start: if record.mpos() >= 0 {
-                    record.pos().min(record.mpos())
-                } else {
-                    record.pos()
-                },
-                n_before_alt: context.n_before_alt,
-                n_after_alt: context.n_after_alt,
-                n_n_before_alt: context.n_n_before_alt,
-                n_n_after_alt: context.n_n_after_alt,
-                leading_n_run_len: context.leading_n_run_len,
-                trailing_n_run_len: context.trailing_n_run_len,
-            });
+        by_qname.entry(qname).or_default().push(LocusRead {
+            base,
+            is_reverse,
+            is_first_in_pair,
+            qpos,
+            read_len,
+            hard_clip_before,
+            base_qual,
+            map_qual,
+            fragment_id,
+            ab_count,
+            ba_count,
+            family_size,
+            insert_size,
+            frag_start: if record.mpos() >= 0 {
+                record.pos().min(record.mpos())
+            } else {
+                record.pos()
+            },
+            n_before_alt: context.n_before_alt,
+            n_after_alt: context.n_after_alt,
+            n_n_before_alt: context.n_n_before_alt,
+            n_n_after_alt: context.n_n_after_alt,
+            leading_n_run_len: context.leading_n_run_len,
+            trailing_n_run_len: context.trailing_n_run_len,
+        });
     }
 
     // Second pass: tally with overlap detection.
@@ -901,7 +900,10 @@ mod tests {
     #[test]
     fn parse_exclude_tags_validates_form_and_length() {
         let ok = parse_exclude_tags(&["RX:bad".to_string(), "XY:3".to_string()]).unwrap();
-        assert_eq!(ok, vec![(*b"RX", "bad".to_string()), (*b"XY", "3".to_string())]);
+        assert_eq!(
+            ok,
+            vec![(*b"RX", "bad".to_string()), (*b"XY", "3".to_string())]
+        );
         // value may contain a colon
         let colon = parse_exclude_tags(&["ZZ:a:b".to_string()]).unwrap();
         assert_eq!(colon, vec![(*b"ZZ", "a:b".to_string())]);
@@ -913,7 +915,8 @@ mod tests {
     #[test]
     fn read_excluded_by_tag_matches_string_and_int_exactly() {
         let mut rec = Record::new();
-        rec.push_aux(b"RX", bam::record::Aux::String("bad")).unwrap();
+        rec.push_aux(b"RX", bam::record::Aux::String("bad"))
+            .unwrap();
         rec.push_aux(b"XY", bam::record::Aux::I32(3)).unwrap();
 
         // exact string match drops; non-match keeps

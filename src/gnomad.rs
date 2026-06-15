@@ -170,7 +170,10 @@ mod tests {
         // GEAC "-TCG" at anchor "A" -> VCF REF="ATCG", ALT="A"
         // This is the case previously broken: the caller used to pass the
         // deleted bases as ref_allele, producing "TCGTCG" for the VCF REF.
-        assert_eq!(geac_to_vcf_alleles("A", "-TCG"), ("ATCG".into(), "A".into()));
+        assert_eq!(
+            geac_to_vcf_alleles("A", "-TCG"),
+            ("ATCG".into(), "A".into())
+        );
     }
 
     #[test]

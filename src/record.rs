@@ -262,7 +262,6 @@ pub struct SampleMetricsRecord {
     pub pct_fragment_bases_on_target: Option<f32>,
 }
 
-
 /// PoN cross-annotation for a tumor alt locus.
 /// One row per (tumor_sample_id, chrom, pos, tumor_alt_allele).
 /// Positions are 0-based.

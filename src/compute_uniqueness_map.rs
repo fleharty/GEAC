@@ -75,9 +75,7 @@ pub fn compute_uniqueness_map(args: &ComputeUniquenessMapArgs) -> Result<()> {
 
         // ── Query pass: assign min_k to newly-resolved positions ─────────────────
         let mut newly_resolved: u64 = 0;
-        for ((chrom, buf), (seq_name, seq_len)) in
-            results.iter_mut().zip(seq_list.iter())
-        {
+        for ((chrom, buf), (seq_name, seq_len)) in results.iter_mut().zip(seq_list.iter()) {
             debug_assert_eq!(chrom, seq_name);
             let seq = match fai.fetch_seq(seq_name, 0, seq_len.saturating_sub(1)) {
                 Ok(s) => s.to_vec(),
@@ -130,25 +128,23 @@ pub fn compute_uniqueness_map(args: &ComputeUniquenessMapArgs) -> Result<()> {
 
     for (chrom, buf) in &results {
         // Determine which positions to output.
-        let include: Box<dyn Fn(usize) -> bool> = match region_filter
-            .as_ref()
-            .and_then(|rf| rf.get(chrom.as_str()))
-        {
-            Some(intervals) => Box::new(move |pos: usize| {
-                intervals
-                    .binary_search_by(|&(s, e)| {
-                        if e <= pos {
-                            std::cmp::Ordering::Less
-                        } else if s > pos {
-                            std::cmp::Ordering::Greater
-                        } else {
-                            std::cmp::Ordering::Equal
-                        }
-                    })
-                    .is_ok()
-            }),
-            None => Box::new(|_pos: usize| true),
-        };
+        let include: Box<dyn Fn(usize) -> bool> =
+            match region_filter.as_ref().and_then(|rf| rf.get(chrom.as_str())) {
+                Some(intervals) => Box::new(move |pos: usize| {
+                    intervals
+                        .binary_search_by(|&(s, e)| {
+                            if e <= pos {
+                                std::cmp::Ordering::Less
+                            } else if s > pos {
+                                std::cmp::Ordering::Greater
+                            } else {
+                                std::cmp::Ordering::Equal
+                            }
+                        })
+                        .is_ok()
+                }),
+                None => Box::new(|_pos: usize| true),
+            };
 
         if args.no_merge {
             for (pos, &val) in buf.iter().enumerate() {
@@ -219,14 +215,8 @@ fn load_bed_regions(path: &std::path::Path) -> Result<HashMap<String, Vec<(usize
         }
         let mut fields = line.split('\t');
         let chrom = fields.next().unwrap_or("").to_string();
-        let start: usize = fields
-            .next()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let end: usize = fields
-            .next()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+        let start: usize = fields.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let end: usize = fields.next().and_then(|s| s.parse().ok()).unwrap_or(0);
         if !chrom.is_empty() && end > start {
             map.entry(chrom).or_default().push((start, end));
         }

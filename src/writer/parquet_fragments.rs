@@ -148,7 +148,10 @@ fn records_to_batch(records: &[FragmentRecord], schema: Arc<Schema>) -> Result<R
             .collect::<Vec<_>>(),
     ));
     let batch: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.batch.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.batch.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let label1: ArrayRef = Arc::new(StringArray::from(
         records
@@ -178,9 +181,25 @@ fn records_to_batch(records: &[FragmentRecord], schema: Arc<Schema>) -> Result<R
     RecordBatch::try_new(
         schema,
         vec![
-            sample_id, chrom, frag_start, frag_end, midpoint, insert_size, map_qual, read_type,
-            pipeline, gc_content, end_motif_5p, end_motif_3p, subject_id, sample_type,
-            batch, label1, label2, label3, timepoint,
+            sample_id,
+            chrom,
+            frag_start,
+            frag_end,
+            midpoint,
+            insert_size,
+            map_qual,
+            read_type,
+            pipeline,
+            gc_content,
+            end_motif_5p,
+            end_motif_3p,
+            subject_id,
+            sample_type,
+            batch,
+            label1,
+            label2,
+            label3,
+            timepoint,
         ],
     )
     .context("failed to create Arrow record batch")

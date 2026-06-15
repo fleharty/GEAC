@@ -1,24 +1,30 @@
 #![deny(unsafe_code)]
-#![deny(unsafe_code)]
+// Builder/tally functions carry many genomic fields by design; grouping them into
+// param structs purely to satisfy the lint would obscure rather than clarify.
+#![allow(clippy::too_many_arguments)]
+// A few intermediate collections use rich tuple types that are clearer inline than
+// behind a one-off type alias.
+#![allow(clippy::type_complexity)]
+// `Command` is a clap subcommand enum; boxing variants to equalize their size is
+// unidiomatic for derive-based CLIs.
+#![allow(clippy::large_enum_variant)]
 mod bam;
 mod build_fusion_index;
-mod compute_uniqueness_map;
 mod build_fusion_kmer_blacklist;
 mod cli;
 mod cohort;
+mod compute_uniqueness_map;
 mod coverage;
 mod diagnose_fusion;
 mod extract_gene;
 mod fragments;
 mod fusions;
-mod locate_kmer;
-mod lookup_kmer;
-mod scan_read;
-mod shared_kmers;
 mod gene_annotations;
 mod gnomad;
 mod inspect;
 mod kmer;
+mod locate_kmer;
+mod lookup_kmer;
 mod merge;
 mod normal;
 mod pon;
@@ -28,6 +34,8 @@ mod record;
 mod region;
 mod repeat;
 mod sample_identity;
+mod scan_read;
+mod shared_kmers;
 mod targets;
 mod track;
 mod variants_tsv;

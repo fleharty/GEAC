@@ -91,25 +91,46 @@ fn records_to_batch(records: &[AltRead], schema: Arc<Schema>) -> Result<RecordBa
             .collect::<Vec<_>>(),
     ));
     let subject_id: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.subject_id.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.subject_id.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let sample_type: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.sample_type.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.sample_type.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let batch: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.batch.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.batch.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let label1: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.label1.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.label1.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let label2: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.label2.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.label2.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let label3: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.label3.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.label3.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let timepoint: ArrayRef = Arc::new(StringArray::from(
-        records.iter().map(|r| r.timepoint.as_deref()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(|r| r.timepoint.as_deref())
+            .collect::<Vec<_>>(),
     ));
     let cycle: ArrayRef = Arc::new(Int32Array::from_iter_values(
         records.iter().map(|r| r.cycle),

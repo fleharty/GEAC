@@ -92,11 +92,7 @@ fn gene_body_kmers(
 /// Count genome-wide canonical-k-mer occurrences, but only for k-mers in `watch`.
 /// Scans the full FASTA in parallel (one task per sequence, each opening its own
 /// faidx reader since it is not Send) and keeps memory to O(|watch|).
-fn genome_watch_counts(
-    fasta: &Path,
-    watch: &HashSet<u64>,
-    k: usize,
-) -> Result<HashMap<u64, u32>> {
+fn genome_watch_counts(fasta: &Path, watch: &HashSet<u64>, k: usize) -> Result<HashMap<u64, u32>> {
     let mut seq_list = read_fai_sequences(fasta)?;
     // Longest sequences first so big chromosomes are handed out before threads go
     // idle on small alt contigs (longest-job-first scheduling).
@@ -147,11 +143,9 @@ fn load_index_gene_kmers(index_path: &Path, gene: &str, k: usize) -> Result<Hash
         .with_context(|| format!("failed to open fusion index: {}", index_path.display()))?;
 
     let index_k: Option<String> = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = 'kmer_size'",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT value FROM meta WHERE key = 'kmer_size'", [], |r| {
+            r.get(0)
+        })
         .ok();
     if let Some(s) = index_k {
         let ik: usize = s
@@ -197,10 +191,14 @@ pub fn shared_kmers(args: &SharedKmersArgs) -> Result<()> {
     }
 
     let genes = parse_gene_bodies(&args.gene_annotation)?;
-    let bodies_a: Vec<&GeneBody> =
-        genes.iter().filter(|g| g.gene_name == args.gene_a).collect();
-    let bodies_b: Vec<&GeneBody> =
-        genes.iter().filter(|g| g.gene_name == args.gene_b).collect();
+    let bodies_a: Vec<&GeneBody> = genes
+        .iter()
+        .filter(|g| g.gene_name == args.gene_a)
+        .collect();
+    let bodies_b: Vec<&GeneBody> = genes
+        .iter()
+        .filter(|g| g.gene_name == args.gene_b)
+        .collect();
     if bodies_a.is_empty() {
         bail!("gene '{}' not found in annotation", args.gene_a);
     }

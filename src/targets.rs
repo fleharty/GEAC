@@ -234,6 +234,21 @@ impl TargetIntervals {
     }
 }
 
+/// Merge a sorted (by start) vec of intervals, combining any that overlap or abut.
+fn merge_intervals(sorted: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(sorted.len());
+    for (start, end) in sorted {
+        if let Some(last) = merged.last_mut() {
+            if start <= last.1 {
+                last.1 = last.1.max(end);
+                continue;
+            }
+        }
+        merged.push((start, end));
+    }
+    merged
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,19 +402,4 @@ mod tests {
         assert!(t.contains("chr1", 100));
         assert_eq!(t.n_targets(), 1);
     }
-}
-
-/// Merge a sorted (by start) vec of intervals, combining any that overlap or abut.
-fn merge_intervals(sorted: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
-    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(sorted.len());
-    for (start, end) in sorted {
-        if let Some(last) = merged.last_mut() {
-            if start <= last.1 {
-                last.1 = last.1.max(end);
-                continue;
-            }
-        }
-        merged.push((start, end));
-    }
-    merged
 }

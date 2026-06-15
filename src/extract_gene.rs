@@ -121,18 +121,26 @@ struct ReadDetail {
     read_name: Vec<u8>,
     read_end: bool, // true = R1
     chrom: String,
-    pos: i64, // 0-based
+    pos: i64,                      // 0-based
     kmer_hits: Vec<(u64, String)>, // (kmer_hash, gene_name)
 }
 
 // ─── TSV output ───────────────────────────────────────────────────────────────
 
-fn write_kmer_hits_tsv(details: &[ReadDetail], sample_id: &str, k: usize, output: &Path) -> Result<()> {
+fn write_kmer_hits_tsv(
+    details: &[ReadDetail],
+    sample_id: &str,
+    k: usize,
+    output: &Path,
+) -> Result<()> {
     use std::io::{BufWriter, Write};
     let file = std::fs::File::create(output)
         .with_context(|| format!("failed to create kmer hits TSV: {}", output.display()))?;
     let mut w = BufWriter::new(file);
-    writeln!(w, "gene_matched\tsample_id\tread_name\tread_end\tchrom\tpos\tkmer_hash\tkmer_seq")?;
+    writeln!(
+        w,
+        "gene_matched\tsample_id\tread_name\tread_end\tchrom\tpos\tkmer_hash\tkmer_seq"
+    )?;
     for d in details {
         let read_name = std::str::from_utf8(&d.read_name).unwrap_or("?");
         let read_end = if d.read_end { "R1" } else { "R2" };
@@ -199,9 +207,7 @@ pub fn extract_gene(args: &ExtractGeneArgs) -> Result<()> {
                     }
                 }
             }
-            found.context(
-                "--sample-id not provided and no SM tag found in BAM/CRAM @RG header",
-            )?
+            found.context("--sample-id not provided and no SM tag found in BAM/CRAM @RG header")?
         }
     };
 
@@ -209,7 +215,11 @@ pub fn extract_gene(args: &ExtractGeneArgs) -> Result<()> {
     let target_names: Vec<String> = {
         let hdr = reader.header();
         (0..hdr.target_count())
-            .map(|i| std::str::from_utf8(hdr.tid2name(i)).unwrap_or("?").to_string())
+            .map(|i| {
+                std::str::from_utf8(hdr.tid2name(i))
+                    .unwrap_or("?")
+                    .to_string()
+            })
             .collect()
     };
 
@@ -349,7 +359,10 @@ pub fn extract_gene(args: &ExtractGeneArgs) -> Result<()> {
             let chrom = {
                 let tid = record.tid();
                 if tid >= 0 {
-                    target_names.get(tid as usize).cloned().unwrap_or_else(|| "*".to_string())
+                    target_names
+                        .get(tid as usize)
+                        .cloned()
+                        .unwrap_or_else(|| "*".to_string())
                 } else {
                     "*".to_string()
                 }
@@ -363,7 +376,7 @@ pub fn extract_gene(args: &ExtractGeneArgs) -> Result<()> {
             });
         }
 
-        if reads_processed % 5_000_000 == 0 {
+        if reads_processed.is_multiple_of(5_000_000) {
             info!(reads_processed, reads_matched, "BAM scan progress");
         }
     }
@@ -432,10 +445,13 @@ pub fn extract_gene(args: &ExtractGeneArgs) -> Result<()> {
     for result in reader2.records() {
         let record = result.context("error reading BAM record in second pass")?;
         if matching_qnames.contains(record.qname()) {
-            writer.write(&record).context("failed to write BAM record")?;
+            writer
+                .write(&record)
+                .context("failed to write BAM record")?;
             reads_written += 1;
         } else if let Some(ref mut cw) = complement_writer {
-            cw.write(&record).context("failed to write complement BAM record")?;
+            cw.write(&record)
+                .context("failed to write complement BAM record")?;
             complement_written += 1;
         }
     }

@@ -181,9 +181,10 @@ fn collect_opens_bam_with_explicitly_named_index() {
 
     // Move the conventional index aside so htslib's inference ({bam}.bai)
     // would fail — proving the run only succeeds because of --index.
-    let conventional = dir
-        .path()
-        .join(format!("{}.bai", bam.file_name().unwrap().to_str().unwrap()));
+    let conventional = dir.path().join(format!(
+        "{}.bai",
+        bam.file_name().unwrap().to_str().unwrap()
+    ));
     let custom_index = dir.path().join("elsewhere.bai");
     std::fs::rename(&conventional, &custom_index).expect("rename index");
 
@@ -226,9 +227,10 @@ fn collect_bai_uri_takes_precedence_over_index() {
         vec![(50, b'T', 5, 10)],
         20,
     );
-    let conventional = dir
-        .path()
-        .join(format!("{}.bai", bam.file_name().unwrap().to_str().unwrap()));
+    let conventional = dir.path().join(format!(
+        "{}.bai",
+        bam.file_name().unwrap().to_str().unwrap()
+    ));
     let custom_index = dir.path().join("local.bai");
     std::fs::rename(&conventional, &custom_index).expect("rename index");
 
@@ -1936,8 +1938,6 @@ fn coverage_no_targets_skips_zero_depth() {
     assert_eq!(n, 20, "expected 20 covered positions, got {n}");
 }
 
-/// Adaptive thresholding flushes a partially filled bin before emitting low-depth
-
 /// insert_size is collected from properly-paired R1 reads; mean_insert_size reflects
 /// the TLEN set on those reads and n_insert_size_obs counts them.
 #[test]
@@ -2440,15 +2440,15 @@ fn reads_fragment_id_enables_mnv_detection() {
         "mnv.bam",
         "sample1",
         200,
-        50,  // pos1 (0-based)
+        50, // pos1 (0-based)
         b'T',
-        51,  // pos2 (0-based)
+        51, // pos2 (0-based)
         b'G',
-        3,   // n_mnv
-        2,   // n_pos1_only
-        2,   // n_pos2_only
-        5,   // n_ref
-        20,  // read_len
+        3,  // n_mnv
+        2,  // n_pos1_only
+        2,  // n_pos2_only
+        5,  // n_ref
+        20, // read_len
     );
 
     let out_stem = dir.path().join("mnv.parquet");
@@ -2473,7 +2473,11 @@ fn reads_fragment_id_enables_mnv_detection() {
     assert!(reads_pq.exists(), "reads parquet not created");
 
     // Both positions should appear as alt loci.
-    assert_eq!(parquet_count(&locus_pq), 2, "expected 2 alt loci (pos 50 and 51)");
+    assert_eq!(
+        parquet_count(&locus_pq),
+        2,
+        "expected 2 alt loci (pos 50 and 51)"
+    );
     assert_eq!(parquet_query_i32(&locus_pq, "alt_count", "pos = 50"), 5);
     assert_eq!(parquet_query_i32(&locus_pq, "alt_count", "pos = 51"), 5);
 
@@ -2512,15 +2516,16 @@ fn reads_fragment_id_enables_mnv_detection() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(co_count, 3, "co_count: expected 3 fragments carrying both alts");
+    assert_eq!(
+        co_count, 3,
+        "co_count: expected 3 fragments carrying both alts"
+    );
 
     // frac_cooccurring = co_count / alt_count at pos1.
     let alt_count_pos1: i64 = conn
-        .query_row(
-            "SELECT alt_count FROM alt_bases WHERE pos = 50",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT alt_count FROM alt_bases WHERE pos = 50", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     let frac: f64 = co_count as f64 / alt_count_pos1 as f64;
     assert!(
@@ -2606,8 +2611,14 @@ fn fragments_emits_record_for_both_r1_strand_orientations() {
         2,
         "both R1-on-+ and R1-on-− proper pairs must produce a fragment record"
     );
-    assert_eq!(parquet_query_i64(&out, "frag_start", "frag_start = 100"), 100);
-    assert_eq!(parquet_query_i64(&out, "frag_start", "frag_start = 300"), 300);
+    assert_eq!(
+        parquet_query_i64(&out, "frag_start", "frag_start = 100"),
+        100
+    );
+    assert_eq!(
+        parquet_query_i64(&out, "frag_start", "frag_start = 300"),
+        300
+    );
 }
 
 // ── Experimental: fusion detection ──────────────────────────────────────────────
@@ -2678,8 +2689,7 @@ fn fusions_label_ordering_consistent_across_outputs() {
 
     let bam_path = dir.path().join("reads.bam");
     {
-        let mut writer =
-            bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
+        let mut writer = bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
         let qual = vec![30u8; 60];
         for (flags, rseq) in [(77u16, r1), (141u16, r2)] {
             let mut rec = bam::record::Record::new();
@@ -2778,19 +2788,17 @@ fn fusions_junction_coherence_filter() {
     // Write a two-contig FASTA (chr1 = gene A, chr2 = gene B).
     let fa = dir.path().join("ref.fa");
     let len = 300usize;
-    std::fs::write(
-        &fa,
-        format!(">chr1\n{gene_a_seq}\n>chr2\n{gene_b_seq}\n"),
-    ).unwrap();
+    std::fs::write(&fa, format!(">chr1\n{gene_a_seq}\n>chr2\n{gene_b_seq}\n")).unwrap();
     std::fs::write(
         dir.path().join("ref.fa.fai"),
         format!(
             "chr1\t{len}\t6\t{len}\t{}\nchr2\t{len}\t{}\t{len}\t{}\n",
             len + 1,
-            6 + len + 1 + 6,   // offset of ">chr2\n" then the sequence
+            6 + len + 1 + 6, // offset of ">chr2\n" then the sequence
             len + 1,
         ),
-    ).unwrap();
+    )
+    .unwrap();
 
     // GTF: GENE_A on chr1, GENE_B on chr2.
     let gtf = dir.path().join("genes.gtf");
@@ -2800,17 +2808,22 @@ fn fusions_junction_coherence_filter() {
             "chr1\tt\tgene\t1\t{len}\t.\t+\t.\tgene_name \"GENE_A\";\n\
              chr2\tt\tgene\t1\t{len}\t.\t+\t.\tgene_name \"GENE_B\";\n"
         ),
-    ).unwrap();
+    )
+    .unwrap();
 
     // Build the index.
     let index = dir.path().join("idx.duckdb");
     assert_geac_success(&[
         "experimental",
         "build-fusion-index",
-        "--gene-annotation", gtf.to_str().unwrap(),
-        "--fasta", fa.to_str().unwrap(),
-        "--min-gene-kmers", "1",
-        "--output", index.to_str().unwrap(),
+        "--gene-annotation",
+        gtf.to_str().unwrap(),
+        "--fasta",
+        fa.to_str().unwrap(),
+        "--min-gene-kmers",
+        "1",
+        "--output",
+        index.to_str().unwrap(),
     ]);
 
     // Fragment 1: genuine spanning read — left half from GENE_A, right half from GENE_B.
@@ -2819,9 +2832,10 @@ fn fusions_junction_coherence_filter() {
     let k = 23usize;
     // Grab a stretch from the middle of each gene body (away from edges).
     let span_read: Vec<u8> = [
-        gene_a_seq[50..50 + half].as_bytes(),
-        gene_b_seq[50..50 + half].as_bytes(),
-    ].concat();
+        &gene_a_seq.as_bytes()[50..50 + half],
+        &gene_b_seq.as_bytes()[50..50 + half],
+    ]
+    .concat();
 
     // Fragment 2: discordant pair to give Fragment 2 a reason to exist — R1 from
     // GENE_A only, R2 from GENE_B only. This gives non-coherent supporting reads = 0
@@ -2843,9 +2857,9 @@ fn fusions_junction_coherence_filter() {
     //   frag1: single spanning read (R1 = gene_a_half + gene_b_half, R2 = pure gene_B)
     //   frag2: discordant pair only  (R1 = pure gene_A, R2 = pure gene_B)
     let r1_span = &span_read;
-    let r2_span = gene_b_seq[100..100 + half + half].as_bytes();
-    let r1_discord = gene_a_seq[100..100 + half + half].as_bytes();
-    let r2_discord = gene_b_seq[150..150 + half + half].as_bytes();
+    let r2_span = &gene_b_seq.as_bytes()[100..100 + half + half];
+    let r1_discord = &gene_a_seq.as_bytes()[100..100 + half + half];
+    let r2_discord = &gene_b_seq.as_bytes()[150..150 + half + half];
 
     let bam_path = dir.path().join("reads.bam");
     {
@@ -2856,31 +2870,39 @@ fn fusions_junction_coherence_filter() {
             sq.push_tag(b"LN", ln as i64);
             header.push_record(&sq);
         }
-        let mut writer =
-            bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
+        let mut writer = bam::Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
         let qual_span = vec![30u8; r1_span.len()];
         let qual_norm = vec![30u8; half + half];
         // frag1 spanning
         for (qname, flags, seq, qual) in [
-            (b"span1" as &[u8], 77u16, r1_span.as_slice(), qual_span.as_slice()),
-            (b"span1",          141,   r2_span,             qual_norm.as_slice()),
+            (
+                b"span1" as &[u8],
+                77u16,
+                r1_span.as_slice(),
+                qual_span.as_slice(),
+            ),
+            (b"span1", 141, r2_span, qual_norm.as_slice()),
         ] {
             let mut rec = bam::record::Record::new();
             rec.set(qname, None, seq, qual);
-            rec.set_tid(-1); rec.set_pos(-1);
-            rec.set_mtid(-1); rec.set_mpos(-1);
+            rec.set_tid(-1);
+            rec.set_pos(-1);
+            rec.set_mtid(-1);
+            rec.set_mpos(-1);
             rec.set_flags(flags);
             writer.write(&rec).unwrap();
         }
         // frag2 discordant
         for (qname, flags, seq) in [
             (b"disc1" as &[u8], 77u16, r1_discord),
-            (b"disc1",          141,   r2_discord),
+            (b"disc1", 141, r2_discord),
         ] {
             let mut rec = bam::record::Record::new();
             rec.set(qname, None, seq, &qual_norm);
-            rec.set_tid(-1); rec.set_pos(-1);
-            rec.set_mtid(-1); rec.set_mpos(-1);
+            rec.set_tid(-1);
+            rec.set_pos(-1);
+            rec.set_mtid(-1);
+            rec.set_mpos(-1);
             rec.set_flags(flags);
             writer.write(&rec).unwrap();
         }
@@ -2890,35 +2912,64 @@ fn fusions_junction_coherence_filter() {
 
     // With default --min-coherent-fragments 0: both fragments count, 1 candidate passes.
     assert_geac_success(&[
-        "experimental", "fusions",
-        "--bam", bam_path.to_str().unwrap(),
-        "--index", index.to_str().unwrap(),
-        "--sample-id", "HG002",
-        "--output", out.to_str().unwrap(),
-        "--min-supporting-reads", "1",
-        "--kmer-size", &k.to_string(),
+        "experimental",
+        "fusions",
+        "--bam",
+        bam_path.to_str().unwrap(),
+        "--index",
+        index.to_str().unwrap(),
+        "--sample-id",
+        "HG002",
+        "--output",
+        out.to_str().unwrap(),
+        "--min-supporting-reads",
+        "1",
+        "--kmer-size",
+        &k.to_string(),
     ]);
-    assert_eq!(parquet_count(&out), 1, "default: one GENE_A::GENE_B candidate");
+    assert_eq!(
+        parquet_count(&out),
+        1,
+        "default: one GENE_A::GENE_B candidate"
+    );
 
     // Check coherence columns are present and sensible.
     // span1's R1 hits both genes → n_spanning_reads >= 1, n_coherent_reads >= 1.
     let n_spanning = parquet_query_i32(&out, "n_spanning_reads", "supporting_reads >= 1");
     let n_coherent = parquet_query_i32(&out, "n_coherent_fragments", "supporting_reads >= 1");
-    assert!(n_spanning >= 1, "expect at least one spanning read; got {n_spanning}");
-    assert!(n_coherent >= 1, "expect at least one coherent fragment; got {n_coherent}");
+    assert!(
+        n_spanning >= 1,
+        "expect at least one spanning read; got {n_spanning}"
+    );
+    assert!(
+        n_coherent >= 1,
+        "expect at least one coherent fragment; got {n_coherent}"
+    );
 
     // With --min-coherent-fragments 1: the candidate has coherent reads → still passes.
     assert_geac_success(&[
-        "experimental", "fusions",
-        "--bam", bam_path.to_str().unwrap(),
-        "--index", index.to_str().unwrap(),
-        "--sample-id", "HG002",
-        "--output", out.to_str().unwrap(),
-        "--min-supporting-reads", "1",
-        "--min-coherent-fragments", "1",
-        "--kmer-size", &k.to_string(),
+        "experimental",
+        "fusions",
+        "--bam",
+        bam_path.to_str().unwrap(),
+        "--index",
+        index.to_str().unwrap(),
+        "--sample-id",
+        "HG002",
+        "--output",
+        out.to_str().unwrap(),
+        "--min-supporting-reads",
+        "1",
+        "--min-coherent-fragments",
+        "1",
+        "--kmer-size",
+        &k.to_string(),
     ]);
-    assert_eq!(parquet_count(&out), 1, "min-coherent-fragments 1: coherent candidate survives");
+    assert_eq!(
+        parquet_count(&out),
+        1,
+        "min-coherent-fragments 1: coherent candidate survives"
+    );
 }
 
 /// A fusion present in the PoN above the --max-pon-samples threshold is *tagged*
@@ -2942,7 +2993,8 @@ fn fusions_pon_tags_calls_instead_of_dropping() {
             6 + len + 1 + 6,
             len + 1,
         ),
-    ).unwrap();
+    )
+    .unwrap();
 
     let gtf = dir.path().join("genes.gtf");
     std::fs::write(
@@ -2951,25 +3003,32 @@ fn fusions_pon_tags_calls_instead_of_dropping() {
             "chr1\tt\tgene\t1\t{len}\t.\t+\t.\tgene_name \"GENE_A\";\n\
              chr2\tt\tgene\t1\t{len}\t.\t+\t.\tgene_name \"GENE_B\";\n"
         ),
-    ).unwrap();
+    )
+    .unwrap();
 
     let index = dir.path().join("idx.duckdb");
     assert_geac_success(&[
-        "experimental", "build-fusion-index",
-        "--gene-annotation", gtf.to_str().unwrap(),
-        "--fasta", fa.to_str().unwrap(),
-        "--min-gene-kmers", "1",
-        "--output", index.to_str().unwrap(),
+        "experimental",
+        "build-fusion-index",
+        "--gene-annotation",
+        gtf.to_str().unwrap(),
+        "--fasta",
+        fa.to_str().unwrap(),
+        "--min-gene-kmers",
+        "1",
+        "--output",
+        index.to_str().unwrap(),
     ]);
 
     // A single spanning read (left half GENE_A, right half GENE_B) → one candidate.
     let half = 60usize;
     let k = 23usize;
     let span_read: Vec<u8> = [
-        gene_a_seq[50..50 + half].as_bytes(),
-        gene_b_seq[50..50 + half].as_bytes(),
-    ].concat();
-    let r2_span = gene_b_seq[100..100 + half + half].as_bytes();
+        &gene_a_seq.as_bytes()[50..50 + half],
+        &gene_b_seq.as_bytes()[50..50 + half],
+    ]
+    .concat();
+    let r2_span = &gene_b_seq.as_bytes()[100..100 + half + half];
 
     let bam_path = dir.path().join("reads.bam");
     {
@@ -2984,13 +3043,20 @@ fn fusions_pon_tags_calls_instead_of_dropping() {
         let qual_span = vec![30u8; span_read.len()];
         let qual_norm = vec![30u8; half + half];
         for (qname, flags, seq, qual) in [
-            (b"span1" as &[u8], 77u16, span_read.as_slice(), qual_span.as_slice()),
+            (
+                b"span1" as &[u8],
+                77u16,
+                span_read.as_slice(),
+                qual_span.as_slice(),
+            ),
             (b"span1", 141, r2_span, qual_norm.as_slice()),
         ] {
             let mut rec = bam::record::Record::new();
             rec.set(qname, None, seq, qual);
-            rec.set_tid(-1); rec.set_pos(-1);
-            rec.set_mtid(-1); rec.set_mpos(-1);
+            rec.set_tid(-1);
+            rec.set_pos(-1);
+            rec.set_mtid(-1);
+            rec.set_mpos(-1);
             rec.set_flags(flags);
             writer.write(&rec).unwrap();
         }
@@ -3000,51 +3066,87 @@ fn fusions_pon_tags_calls_instead_of_dropping() {
     // `geac merge` routes it to the fusions table.
     let normal_pq = dir.path().join("normal.fusions.parquet");
     assert_geac_success(&[
-        "experimental", "fusions",
-        "--bam", bam_path.to_str().unwrap(),
-        "--index", index.to_str().unwrap(),
-        "--sample-id", "HG001",
-        "--output", normal_pq.to_str().unwrap(),
-        "--min-supporting-reads", "1",
-        "--kmer-size", &k.to_string(),
+        "experimental",
+        "fusions",
+        "--bam",
+        bam_path.to_str().unwrap(),
+        "--index",
+        index.to_str().unwrap(),
+        "--sample-id",
+        "HG001",
+        "--output",
+        normal_pq.to_str().unwrap(),
+        "--min-supporting-reads",
+        "1",
+        "--kmer-size",
+        &k.to_string(),
     ]);
     let pon_db = dir.path().join("fusion_pon.duckdb");
     assert_geac_success(&[
-        "merge", normal_pq.to_str().unwrap(),
-        "--output", pon_db.to_str().unwrap(),
+        "merge",
+        normal_pq.to_str().unwrap(),
+        "--output",
+        pon_db.to_str().unwrap(),
     ]);
 
     // Annotate-only (no --max-pon-samples): row stays, filter=PASS, n_pon_samples=1.
     let out = dir.path().join("tumor.fusions.parquet");
     assert_geac_success(&[
-        "experimental", "fusions",
-        "--bam", bam_path.to_str().unwrap(),
-        "--index", index.to_str().unwrap(),
-        "--sample-id", "HG002",
-        "--output", out.to_str().unwrap(),
-        "--min-supporting-reads", "1",
-        "--kmer-size", &k.to_string(),
-        "--fusion-pon", pon_db.to_str().unwrap(),
+        "experimental",
+        "fusions",
+        "--bam",
+        bam_path.to_str().unwrap(),
+        "--index",
+        index.to_str().unwrap(),
+        "--sample-id",
+        "HG002",
+        "--output",
+        out.to_str().unwrap(),
+        "--min-supporting-reads",
+        "1",
+        "--kmer-size",
+        &k.to_string(),
+        "--fusion-pon",
+        pon_db.to_str().unwrap(),
     ]);
     assert_eq!(parquet_count(&out), 1, "annotate-only: call present");
-    assert_eq!(parquet_query_i32(&out, "n_pon_samples", "supporting_reads >= 1"), 1);
-    assert_eq!(parquet_query_str(&out, "filter", "supporting_reads >= 1"), "PASS");
+    assert_eq!(
+        parquet_query_i32(&out, "n_pon_samples", "supporting_reads >= 1"),
+        1
+    );
+    assert_eq!(
+        parquet_query_str(&out, "filter", "supporting_reads >= 1"),
+        "PASS"
+    );
 
     // With --max-pon-samples 0: present in 1 > 0 PoN samples → tagged, NOT dropped.
     assert_geac_success(&[
-        "experimental", "fusions",
-        "--bam", bam_path.to_str().unwrap(),
-        "--index", index.to_str().unwrap(),
-        "--sample-id", "HG002",
-        "--output", out.to_str().unwrap(),
-        "--min-supporting-reads", "1",
-        "--kmer-size", &k.to_string(),
-        "--fusion-pon", pon_db.to_str().unwrap(),
-        "--max-pon-samples", "0",
+        "experimental",
+        "fusions",
+        "--bam",
+        bam_path.to_str().unwrap(),
+        "--index",
+        index.to_str().unwrap(),
+        "--sample-id",
+        "HG002",
+        "--output",
+        out.to_str().unwrap(),
+        "--min-supporting-reads",
+        "1",
+        "--kmer-size",
+        &k.to_string(),
+        "--fusion-pon",
+        pon_db.to_str().unwrap(),
+        "--max-pon-samples",
+        "0",
     ]);
     assert_eq!(
-        parquet_count(&out), 1,
+        parquet_count(&out),
+        1,
         "max-pon-samples 0: call retained (tagged, not dropped)"
     );
-    assert_eq!(parquet_query_str(&out, "filter", "supporting_reads >= 1"), "pon");
+    assert_eq!(
+        parquet_query_str(&out, "filter", "supporting_reads >= 1"),
+        "pon"
+    );
 }

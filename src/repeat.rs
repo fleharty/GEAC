@@ -45,8 +45,8 @@ pub fn compute_repeat_metrics(seq: &[u8], pos: usize, window: usize) -> RepeatMe
         left += 1;
     }
     let mut right = 0usize;
-    for i in (pos_in_w + 1)..w.len() {
-        if w[i] != base {
+    for &b in &w[pos_in_w + 1..] {
+        if b != base {
             break;
         }
         right += 1;

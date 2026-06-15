@@ -160,8 +160,8 @@ impl AnnotationTrack {
             return ct.get(pos);
         }
         // Try bridging chr prefix.
-        let alt = if chrom.starts_with("chr") {
-            chrom[3..].to_string()
+        let alt = if let Some(rest) = chrom.strip_prefix("chr") {
+            rest.to_string()
         } else {
             format!("chr{chrom}")
         };

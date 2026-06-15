@@ -6,7 +6,7 @@ use crate::kmer::kmer_iter;
 
 pub fn scan_read(args: &ScanReadArgs) -> Result<()> {
     let k = args.kmer_size as usize;
-    anyhow::ensure!(k >= 1 && k <= 31, "--kmer-size must be 1–31");
+    anyhow::ensure!((1..=31).contains(&k), "--kmer-size must be 1–31");
 
     let conn = Connection::open(&args.index)
         .with_context(|| format!("failed to open fusion index: {}", args.index.display()))?;
@@ -41,7 +41,8 @@ pub fn scan_read(args: &ScanReadArgs) -> Result<()> {
                 kmer_str,
                 gene.as_deref().unwrap_or("."),
                 chrom.as_deref().unwrap_or("."),
-                pos.map(|p| p.to_string()).unwrap_or_else(|| ".".to_string()),
+                pos.map(|p| p.to_string())
+                    .unwrap_or_else(|| ".".to_string()),
             );
         }
     }
