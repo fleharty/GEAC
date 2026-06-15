@@ -137,9 +137,25 @@ pub(crate) fn resolve_max_pileup_depth(cli_value: u32) -> u32 {
     }
 }
 
-pub fn open_bam(input: &Path, reference: &Path) -> Result<bam::IndexedReader> {
-    let mut reader = bam::IndexedReader::from_path(input)
-        .with_context(|| format!("failed to open BAM/CRAM: {}", input.display()))?;
+/// Open an indexed BAM/CRAM reader.
+///
+/// When `index` is `Some`, the reader is opened against that explicit index file,
+/// which lets the index live under a different name or directory than `input`.
+/// When `None`, htslib infers the index at the conventional location next to
+/// `input` (e.g. `input.bam.bai` / `input.bam` → `input.bai`).
+pub fn open_bam(input: &Path, reference: &Path, index: Option<&Path>) -> Result<bam::IndexedReader> {
+    let mut reader = match index {
+        Some(index_path) => bam::IndexedReader::from_path_and_index(input, index_path)
+            .with_context(|| {
+                format!(
+                    "failed to open BAM/CRAM {} with index {}",
+                    input.display(),
+                    index_path.display()
+                )
+            })?,
+        None => bam::IndexedReader::from_path(input)
+            .with_context(|| format!("failed to open BAM/CRAM: {}", input.display()))?,
+    };
     reader
         .set_reference(reference)
         .with_context(|| format!("failed to set reference: {}", reference.display()))?;

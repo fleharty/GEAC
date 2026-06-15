@@ -71,7 +71,7 @@ pub fn annotate_normal(args: &AnnotateNormalArgs) -> Result<Vec<NormalEvidence>>
     info!(n_loci, n_chroms = targets.len(), "loaded tumor loci");
 
     // ── Step 2: open normal BAM ───────────────────────────────────────────────
-    let mut bam = open_bam(&args.normal_bam, &args.reference)?;
+    let mut bam = open_bam(&args.normal_bam, &args.reference, None)?;
 
     let normal_sample_id = match &args.normal_sample_id {
         Some(id) => id.clone(),

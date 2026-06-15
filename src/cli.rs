@@ -118,6 +118,13 @@ pub struct CollectArgs {
     #[arg(short = 'r', long)]
     pub reference: PathBuf,
 
+    /// Path to the BAM/CRAM index file (.bai/.crai). Use when the index is not at
+    /// the conventional location next to --input (e.g. a different name or
+    /// directory). When set, it is also stored as `bai_path` for IGV session
+    /// generation — unless --bai-uri is given, which takes precedence.
+    #[arg(long)]
+    pub index: Option<PathBuf>,
+
     /// Sample identifier (used as sample_id in output records).
     /// If omitted, the SM tag from the BAM/CRAM read group header is used.
     /// Exits with an error if neither is provided.
@@ -530,6 +537,11 @@ pub struct CoverageArgs {
     #[arg(short = 'r', long)]
     pub reference: PathBuf,
 
+    /// Path to the BAM/CRAM index file (.bai/.crai). Use when the index is not at
+    /// the conventional location next to --input (different name or directory).
+    #[arg(long)]
+    pub index: Option<PathBuf>,
+
     /// Sample identifier.
     /// If omitted, the SM tag from the BAM/CRAM read group header is used.
     #[arg(short, long)]
@@ -654,6 +666,11 @@ pub struct FragmentsArgs {
     /// Reference FASTA (required for GC content and end motifs)
     #[arg(short = 'r', long)]
     pub reference: PathBuf,
+
+    /// Path to the BAM/CRAM index file (.bai/.crai). Use when the index is not at
+    /// the conventional location next to --input (different name or directory).
+    #[arg(long)]
+    pub index: Option<PathBuf>,
 
     /// Sample identifier.
     /// If omitted, the SM tag from the BAM/CRAM read group header is used.

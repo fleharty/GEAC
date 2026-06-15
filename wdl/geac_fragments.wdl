@@ -157,6 +157,7 @@ task Fragments {
 
         geac fragments \
             --input            ~{input_bam} \
+            --index            ~{input_bam_index} \
             --reference        ~{reference_fasta} \
             --output           ~{output_name} \
             --read-type        ~{read_type} \

@@ -63,7 +63,8 @@ Important options:
 | `--exclude-tag` | none | Drop reads whose aux tag equals a value, as `TAG:VALUE` (e.g. `RX:bad`). Exact string match across string/char/integer tags; reads lacking the tag are kept. Repeatable. |
 | `--region` | whole input | Region string or BED/Picard interval list |
 | `--repeat-window` | `10` | Bases on each side for homopolymer/STR metrics |
-| `--bam-uri`, `--bai-uri` | local paths | Canonical BAM/index URIs for IGV and cloud provenance |
+| `--index` | inferred next to `--input` | Path to the BAM/CRAM index (`.bai`/`.crai`) when it is not at the conventional location (different name or directory). Also recorded as `bai_path` for IGV unless `--bai-uri` is given. |
+| `--bam-uri`, `--bai-uri` | local paths | Canonical BAM/index URIs for IGV and cloud provenance. `--bai-uri` takes precedence over `--index` for the stored `bai_path`. |
 | `--variants-uri`, `--gnomad-uri` | local paths | Canonical annotation URIs for provenance |
 
 When `--reads-output` is set, `sample.parquet` becomes:

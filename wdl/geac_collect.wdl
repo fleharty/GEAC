@@ -8,7 +8,7 @@ version 1.0
 ##
 ## Inputs:
 ##   input_bam            - BAM or CRAM file
-##   input_bam_index      - Corresponding .bai / .crai index
+##   input_bam_index      - .bai / .crai index; passed to geac via --index, so it may live under a different name or directory than input_bam
 ##   bam_uri              - (optional) canonical BAM/CRAM URI stored in output metadata for IGV
 ##   bai_uri              - (optional) canonical index URI stored in output metadata for IGV
 ##   reference_fasta      - Reference FASTA
@@ -234,6 +234,7 @@ task Collect {
 
         geac collect \
             --input            ~{input_bam} \
+            --index            ~{input_bam_index} \
             --reference        ~{reference_fasta} \
             --output           ~{output_arg} \
             --read-type        ~{read_type} \

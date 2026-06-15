@@ -30,7 +30,7 @@ pub fn collect_coverage(
     track_set: Option<&TrackSet>,
     writer: &mut CoverageWriter,
 ) -> Result<Vec<IntervalRecord>> {
-    let mut reader = open_bam(&args.input, &args.reference)?;
+    let mut reader = open_bam(&args.input, &args.reference, args.index.as_deref())?;
     let mut ref_cache = RefCache::new(&args.reference)?;
 
     let sample_id = match &args.sample_id {

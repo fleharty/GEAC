@@ -9,7 +9,7 @@ use crate::region::{RegionInput, parse_region_input};
 use crate::writer::parquet_fragments::FragmentsWriter;
 
 pub fn collect_fragments(args: &FragmentsArgs, writer: &mut FragmentsWriter) -> Result<()> {
-    let mut bam = open_bam(&args.input, &args.reference)?;
+    let mut bam = open_bam(&args.input, &args.reference, args.index.as_deref())?;
     let mut ref_cache = RefCache::new(&args.reference)?;
 
     let sample_id = match &args.sample_id {

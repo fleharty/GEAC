@@ -99,7 +99,13 @@ impl LocusContext {
                     .clone()
                     .unwrap_or_else(|| abs_path(&args.input)),
             ),
-            bai_path: args.bai_uri.clone(),
+            // Prefer the canonical --bai-uri; otherwise fall back to the explicit
+            // --index path (absolute) so a specifically-named index is recorded
+            // for IGV. None when neither is given.
+            bai_path: args
+                .bai_uri
+                .clone()
+                .or_else(|| args.index.as_ref().map(|p| abs_path(p))),
             variants_path: args.variants_uri.clone().or_else(|| {
                 args.vcf
                     .as_ref()

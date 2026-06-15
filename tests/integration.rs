@@ -164,6 +164,97 @@ fn collect_optionally_records_input_checksum_sha256() {
     );
 }
 
+/// `--index` lets geac open a BAM whose index lives under a non-conventional
+/// name/location, and records that path as `bai_path` for IGV.
+#[test]
+fn collect_opens_bam_with_explicitly_named_index() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 200);
+    let bam = write_bam(
+        dir.path(),
+        "reads.bam",
+        "sample1",
+        200,
+        vec![(50, b'T', 5, 10)],
+        20,
+    );
+
+    // Move the conventional index aside so htslib's inference ({bam}.bai)
+    // would fail — proving the run only succeeds because of --index.
+    let conventional = dir
+        .path()
+        .join(format!("{}.bai", bam.file_name().unwrap().to_str().unwrap()));
+    let custom_index = dir.path().join("elsewhere.bai");
+    std::fs::rename(&conventional, &custom_index).expect("rename index");
+
+    let out = dir.path().join("idx.parquet");
+    assert_geac_success(&[
+        "collect",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--index",
+        custom_index.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+        "--read-type",
+        "raw",
+    ]);
+
+    let expected = std::fs::canonicalize(&custom_index)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        parquet_query_opt_str(&out, "bai_path", "pos = 50"),
+        Some(expected),
+        "bai_path should record the explicitly-specified --index path"
+    );
+}
+
+/// `--bai-uri` takes precedence over `--index` for the recorded `bai_path`.
+#[test]
+fn collect_bai_uri_takes_precedence_over_index() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 200);
+    let bam = write_bam(
+        dir.path(),
+        "reads2.bam",
+        "sample1",
+        200,
+        vec![(50, b'T', 5, 10)],
+        20,
+    );
+    let conventional = dir
+        .path()
+        .join(format!("{}.bai", bam.file_name().unwrap().to_str().unwrap()));
+    let custom_index = dir.path().join("local.bai");
+    std::fs::rename(&conventional, &custom_index).expect("rename index");
+
+    let out = dir.path().join("uri.parquet");
+    assert_geac_success(&[
+        "collect",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--index",
+        custom_index.to_str().unwrap(),
+        "--bai-uri",
+        "gs://bucket/sample.bam.bai",
+        "--output",
+        out.to_str().unwrap(),
+        "--read-type",
+        "raw",
+    ]);
+    assert_eq!(
+        parquet_query_opt_str(&out, "bai_path", "pos = 50"),
+        Some("gs://bucket/sample.bam.bai".to_string()),
+        "--bai-uri should win over --index for bai_path"
+    );
+}
+
 /// `--sample-id` flag overrides the SM tag read from the BAM header.
 #[test]
 fn collect_sample_id_override() {
