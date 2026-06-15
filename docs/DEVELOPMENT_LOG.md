@@ -57,6 +57,19 @@ Captured 2026-04-01. All three gating items shipped in v0.4.0.
 - Re-examine N-base handling before v0.3.0 — resolved as part of the fragment-level
   depth overhaul. See `tally_pileup` doc comment for the full classification table
   including N cases.
+- Explicitly-specifiable BAM/CRAM index `--index` (2026-06-15) — `open_bam` used
+  `IndexedReader::from_path`, which only finds the index at the conventional location
+  next to the BAM (`x.bam.bai` / `x.bai`). Sites that store the BAM and its `.bai`/`.crai`
+  separately — different directory, or a different basename — could not be processed.
+  Added a `--index <PATH>` flag (collect/coverage/fragments) that routes through a new
+  `open_bam(input, reference, index: Option<&Path>)` using `from_path_and_index` when set.
+  For `collect`, the explicit index path also feeds `bai_path` (fallback after `--bai-uri`,
+  which still wins), so the Explorer's existing `resolve_index_uri` wires IGV to the right
+  index — no Explorer change needed. All WDLs (collect, cohort Collect+Fragments, standalone
+  coverage/fragments) now pass `--index` from their already-localized index inputs, which
+  also hardens them against Cromwell localizing BAM and index under non-co-located names.
+  No schema change — `bai_path` shipped in v0.4.38. Two integration tests move the
+  conventional index aside to prove the open only succeeds via `--index`.
 - Flexible `--pipeline` + configurable family-size tags (2026-06-14) — `--pipeline`
   was a closed `fgbio`/`dragen`/`raw` enum that served two jobs at once: a provenance
   label *and* a behavioral discriminant selecting which aux tags `family_size_tags`
