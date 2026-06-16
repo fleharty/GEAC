@@ -245,7 +245,7 @@ workflow GeacCohort {
                         targets               = targets,
                         targets_uri           = if defined(targets_uri) then select_first([targets_uri]) else targets,
                         gene_annotations      = gene_annotations,
-                        region                = shard,
+                        region_bed            = shard,
                         sample_metrics_partial = defined(targets),
                         repeat_window         = repeat_window,
                         min_base_qual         = min_base_qual,
@@ -429,6 +429,10 @@ task Collect {
         File?   targets
         File?   gene_annotations
         String? region
+        # A BED/interval-list passed as a File so Cromwell localizes it into the
+        # task (a File bound to a String input is NOT localized). Used for shard
+        # scatter; takes precedence over the string `region` when set.
+        File?   region_bed
         Int     repeat_window
 
         Int     min_base_qual
@@ -490,7 +494,7 @@ task Collect {
             ~{"--targets "          + targets} \
             ~{"--targets-uri "      + targets_uri} \
             ~{"--gene-annotations " + gene_annotations} \
-            ~{"--region "           + region} \
+            ~{if defined(region_bed) then "--region " + region_bed else if defined(region) then "--region " + region else ""} \
             --repeat-window ~{repeat_window} \
             ~{if include_duplicates    then "--include-duplicates"    else ""} \
             ~{if include_secondary     then "--include-secondary"     else ""} \
