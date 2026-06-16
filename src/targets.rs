@@ -199,6 +199,22 @@ impl TargetIntervals {
         &self.named
     }
 
+    /// All merged, non-overlapping intervals as `(chrom, start, end)` with 0-based
+    /// half-open coordinates, in sorted (chrom, start) order. Unlike
+    /// `named_intervals`, these are guaranteed disjoint — suitable for fetching and
+    /// clipping pileup output without double-counting boundary positions.
+    pub fn merged_intervals(&self) -> Vec<(&str, u32, u32)> {
+        let mut chroms: Vec<&String> = self.by_chrom.keys().collect();
+        chroms.sort();
+        let mut out = Vec::new();
+        for chrom in chroms {
+            for &(start, end) in &self.by_chrom[chrom] {
+                out.push((chrom.as_str(), start, end));
+            }
+        }
+        out
+    }
+
     /// Number of named (original, unmerged) intervals.
     pub fn n_named_intervals(&self) -> usize {
         self.named.len()

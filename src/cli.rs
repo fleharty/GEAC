@@ -47,6 +47,12 @@ pub enum Command {
     /// Extract per-fragment metrics (insert size, GC content, end motifs) from a BAM/CRAM file
     Fragments(FragmentsArgs),
 
+    /// Split a BED / Picard interval list into N balanced shards for scatter-gather collection
+    SplitIntervals(SplitIntervalsArgs),
+
+    /// Combine per-shard partial sample-metrics Parquets into one final sample_metrics Parquet
+    AggregateMetrics(AggregateMetricsArgs),
+
     /// Experimental tools (k-mer / fusion detection). APIs and outputs may
     /// change without notice; do not rely on these in production pipelines.
     Experimental(ExperimentalArgs),
@@ -183,6 +189,13 @@ pub struct CollectArgs {
     /// "sample.parquet" → "sample.locus.parquet" and "sample.reads.parquet".
     #[arg(long)]
     pub reads_output: bool,
+
+    /// Emit `<stem>.sample_metrics_partial.parquet` (combinable sufficient
+    /// statistics for one interval shard) instead of the final sample_metrics
+    /// Parquet. Requires --targets. Combine shards with `geac aggregate-metrics`.
+    /// Used by the cohort WDL when scattering one sample across interval shards.
+    #[arg(long)]
+    pub sample_metrics_partial: bool,
 
     /// Compute SHA-256 for the input BAM/CRAM and store it in output Parquet provenance columns.
     /// Disabled by default because hashing large alignment files adds I/O and wall time.
@@ -1301,6 +1314,42 @@ fn parse_aux_tag(s: &str) -> anyhow::Result<[u8; 2]> {
         anyhow::bail!("--family-size-tags tag '{s}' must be exactly two characters (e.g. cD)");
     }
     Ok([bytes[0], bytes[1]])
+}
+
+#[derive(Parser, Debug)]
+pub struct SplitIntervalsArgs {
+    /// Input BED file or Picard interval list to split.
+    #[arg(short, long)]
+    pub input: PathBuf,
+
+    /// Number of shards to split into. Each shard receives a roughly equal share
+    /// of total target bases; large intervals (e.g. whole chromosomes) are
+    /// subdivided at base boundaries to balance shards. Clamped to at least 1 and
+    /// at most the total number of target bases.
+    #[arg(long)]
+    pub scatter_count: usize,
+
+    /// Directory to write shard BED files into (created if absent).
+    #[arg(long)]
+    pub output_dir: PathBuf,
+
+    /// Filename prefix for shard BED files, written as `<prefix>.NNNN.bed`.
+    #[arg(long, default_value = "shard")]
+    pub output_prefix: String,
+}
+
+#[derive(Parser, Debug)]
+pub struct AggregateMetricsArgs {
+    /// Per-shard partial sample-metrics Parquet files (`*.sample_metrics_partial.parquet`)
+    /// produced by `geac collect --sample-metrics-partial`. May span multiple samples;
+    /// rows are grouped by sample identity.
+    #[arg(required = true, num_args = 1..)]
+    pub inputs: Vec<PathBuf>,
+
+    /// Output Parquet path for the combined final sample_metrics table. Name it
+    /// `<sample>.sample_metrics.parquet` so `geac merge` routes it correctly.
+    #[arg(short, long)]
+    pub output: PathBuf,
 }
 
 #[cfg(test)]

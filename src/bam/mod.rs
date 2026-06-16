@@ -15,9 +15,12 @@ use crate::cli::CollectArgs;
 use crate::gene_annotations::GeneAnnotations;
 use crate::gnomad::GnomadIndex;
 use crate::progress::ProgressReporter;
-use crate::record::{AltBase, AltRead, SampleMetricsRecord, VariantType};
+use crate::record::{
+    AltBase, AltRead, SampleMetricsPartialRecord, SampleMetricsRecord, VariantType,
+};
 use crate::region::{parse_region_input, RegionInput};
 use crate::repeat::compute_repeat_metrics;
+use crate::sample_metrics_math;
 use crate::targets::TargetIntervals;
 use crate::vcf::VariantAnnotator;
 
@@ -30,6 +33,14 @@ pub(crate) use ref_utils::resolve_max_pileup_depth;
 pub(crate) use ref_utils::RefCache;
 pub use ref_utils::{open_bam, read_group_sample_id};
 
+/// Sample-metrics output of a collect run: the final record, the combinable
+/// per-shard partial (when `--sample-metrics-partial` is set), or none (no targets).
+pub enum SampleMetricsOutput {
+    None,
+    Final(SampleMetricsRecord),
+    Partial(SampleMetricsPartialRecord),
+}
+
 /// Process a BAM/CRAM file and return all alt base records (and optionally per-read detail records).
 ///
 /// When `args.reads_output` is true, the second element of the returned tuple contains one
@@ -41,7 +52,7 @@ pub fn collect_alt_bases(
     target_intervals: Option<&TargetIntervals>,
     gene_annots: Option<&GeneAnnotations>,
     mut gnomad: Option<&mut GnomadIndex>,
-) -> Result<(Vec<AltBase>, Vec<AltRead>, Option<SampleMetricsRecord>)> {
+) -> Result<(Vec<AltBase>, Vec<AltRead>, SampleMetricsOutput)> {
     let input_checksum_sha256 = if args.input_checksum_sha256 {
         Some(compute_input_sha256(&args.input)?)
     } else {
@@ -75,18 +86,42 @@ pub fn collect_alt_bases(
     let family_size_scheme = args.family_size_scheme()?;
 
     let region_input = parse_region_input(args.region.as_deref())?;
-    let region_filter = match &region_input {
-        Some(RegionInput::Single(s)) => parse_region_spec(s),
-        _ => None,
-    };
-    let fetch_regions: Vec<Option<String>> = match &region_input {
-        None => vec![None],
-        Some(RegionInput::Single(s)) => vec![Some(s.clone())],
+    // Each fetch unit is fetched independently and its emitted pileup columns are
+    // clipped to `clip`. For an interval list we fetch the *merged* (disjoint)
+    // intervals one at a time and clip each to its own bounds, so boundary
+    // over-emission from htslib (columns for reads spanning an interval edge)
+    // never leaks into — or double-counts against — an adjacent interval. This is
+    // what makes splitting one sample across interval shards exact.
+    let fetch_units: Vec<FetchUnit> = match &region_input {
+        None => vec![FetchUnit {
+            fetch: None,
+            clip: None,
+        }],
+        Some(RegionInput::Single(s)) => vec![FetchUnit {
+            fetch: Some(s.clone()),
+            clip: parse_region_spec(s),
+        }],
         Some(RegionInput::Intervals(ivs)) => ivs
-            .named_intervals()
-            .iter()
-            .map(|iv| Some(format!("{}:{}-{}", iv.chrom, iv.start + 1, iv.end)))
+            .merged_intervals()
+            .into_iter()
+            .map(|(chrom, start, end)| FetchUnit {
+                fetch: Some(format!("{}:{}-{}", chrom, start + 1, end)),
+                clip: Some(RegionSpec {
+                    chrom: chrom.to_string(),
+                    start: i64::from(start),
+                    end: Some(i64::from(end)),
+                }),
+            })
             .collect(),
+    };
+    // Region membership used when counting target positions for sample metrics:
+    // the union of all requested intervals (or the single region).
+    let metrics_region = match &region_input {
+        None => MetricsRegion::All,
+        Some(RegionInput::Single(s)) => parse_region_spec(s)
+            .map(MetricsRegion::Single)
+            .unwrap_or(MetricsRegion::All),
+        Some(RegionInput::Intervals(t)) => MetricsRegion::Intervals(t),
     };
 
     let start = Instant::now();
@@ -96,8 +131,8 @@ pub fn collect_alt_bases(
     let mut read_records: Vec<AltRead> = Vec::new();
     let mut sample_metrics_acc = target_intervals.map(|_| SampleMetricsAccumulator::default());
 
-    for fetch_region in &fetch_regions {
-        if let Some(r) = fetch_region.as_deref() {
+    for unit in &fetch_units {
+        if let Some(r) = unit.fetch.as_deref() {
             bam.fetch(r).with_context(|| {
                 format!(
                     "failed to fetch region '{r}': check that the region is valid and the BAM is indexed"
@@ -113,6 +148,12 @@ pub fn collect_alt_bases(
             let pos = pileup.pos() as i64;
 
             let (chrom, ref_base) = ref_cache.get(&targets, tid, pos as usize)?;
+            // Clip to the current fetch interval: htslib may emit columns just
+            // outside it for reads spanning the edge. Skipping them keeps interval
+            // shards a true partition (no boundary double-counting).
+            if unit.clip.as_ref().is_some_and(|c| !c.contains(&chrom, pos)) {
+                continue;
+            }
             if ref_base == 'N' {
                 continue;
             }
@@ -152,13 +193,9 @@ pub fn collect_alt_bases(
             // Deletions use range overlap instead (see indel loop below).
             let on_target = target_intervals.map(|t| t.contains(&chrom, pos));
             if let Some(acc) = sample_metrics_acc.as_mut() {
-                acc.observe_position(
-                    &chrom,
-                    pos,
-                    total_depth,
-                    on_target == Some(true),
-                    region_filter.as_ref(),
-                );
+                // Positions are already clipped to the fetch interval above, so the
+                // accumulator observes only in-region columns.
+                acc.observe_position(total_depth, on_target == Some(true));
             }
             let gene = gene_annots.and_then(|g| g.get(&chrom, pos)).map(|a| a.gene);
             let repeat =
@@ -321,8 +358,21 @@ pub fn collect_alt_bases(
 
     reporter.finish(start);
 
-    let sample_metrics = if let (Some(ti), Some(acc)) = (target_intervals, sample_metrics_acc) {
-        Some(acc.build(
+    let sample_metrics = match (target_intervals, sample_metrics_acc) {
+        (Some(ti), Some(acc)) if args.sample_metrics_partial => {
+            SampleMetricsOutput::Partial(acc.build_partial(
+                &sample_id,
+                args.subject_id.clone(),
+                args.sample_type.clone(),
+                args.batch.clone(),
+                args.read_type,
+                args.pipeline.clone(),
+                input_checksum_sha256,
+                ti,
+                &metrics_region,
+            ))
+        }
+        (Some(ti), Some(acc)) => SampleMetricsOutput::Final(acc.build(
             &sample_id,
             args.subject_id.clone(),
             args.sample_type.clone(),
@@ -331,10 +381,9 @@ pub fn collect_alt_bases(
             args.pipeline.clone(),
             input_checksum_sha256,
             ti,
-            region_filter.as_ref(),
-        ))
-    } else {
-        None
+            &metrics_region,
+        )),
+        _ => SampleMetricsOutput::None,
     };
 
     Ok((records, read_records, sample_metrics))
@@ -353,6 +402,33 @@ impl RegionSpec {
             return false;
         }
         self.end.is_none_or(|end| pos < end)
+    }
+}
+
+/// One BAM fetch plus the clip applied to its emitted pileup columns.
+struct FetchUnit {
+    /// htslib region string to fetch, or `None` to scan the whole BAM.
+    fetch: Option<String>,
+    /// Restrict emitted positions to this interval, or `None` for no clip.
+    clip: Option<RegionSpec>,
+}
+
+/// Region membership test for counting target positions in sample metrics.
+/// This is the union of all requested intervals (or the single region), as
+/// opposed to the per-fetch `RegionSpec` clip used while emitting loci.
+enum MetricsRegion<'a> {
+    All,
+    Single(RegionSpec),
+    Intervals(&'a TargetIntervals),
+}
+
+impl MetricsRegion<'_> {
+    fn contains(&self, chrom: &str, pos: i64) -> bool {
+        match self {
+            MetricsRegion::All => true,
+            MetricsRegion::Single(r) => r.contains(chrom, pos),
+            MetricsRegion::Intervals(t) => t.contains(chrom, pos),
+        }
     }
 }
 
@@ -391,17 +467,9 @@ struct SampleMetricsAccumulator {
 }
 
 impl SampleMetricsAccumulator {
-    fn observe_position(
-        &mut self,
-        chrom: &str,
-        pos: i64,
-        total_depth: i32,
-        on_target: bool,
-        region: Option<&RegionSpec>,
-    ) {
-        if region.is_some_and(|r| !r.contains(chrom, pos)) {
-            return;
-        }
+    /// Observe one pileup column. Callers must pre-clip positions to the region;
+    /// the accumulator does no region filtering itself.
+    fn observe_position(&mut self, total_depth: i32, on_target: bool) {
         self.total_fragment_bases += i64::from(total_depth);
         if on_target {
             self.on_target_fragment_bases += i64::from(total_depth);
@@ -409,8 +477,9 @@ impl SampleMetricsAccumulator {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build(
-        mut self,
+        self,
         sample_id: &str,
         subject_id: Option<String>,
         sample_type: Option<String>,
@@ -419,43 +488,16 @@ impl SampleMetricsAccumulator {
         pipeline: Option<String>,
         input_checksum_sha256: Option<String>,
         target_intervals: &TargetIntervals,
-        region: Option<&RegionSpec>,
+        region: &MetricsRegion,
     ) -> SampleMetricsRecord {
-        let mut n_target_positions = 0_i32;
-        target_intervals.for_each_position(|chrom, pos| {
-            if region.is_none_or(|r| r.contains(chrom, pos)) {
-                n_target_positions += 1;
-            }
-        });
-
-        self.covered_target_depths.sort_unstable();
-        let n_target_positions_covered = self.covered_target_depths.len() as i32;
-        let zero_target_positions =
-            n_target_positions.saturating_sub(n_target_positions_covered) as usize;
-        let sum_target_depths: i64 = self
-            .covered_target_depths
-            .iter()
-            .map(|&d| i64::from(d))
-            .sum();
-
-        let mean_target_depth_covered = if n_target_positions_covered > 0 {
-            Some(sum_target_depths as f32 / n_target_positions_covered as f32)
-        } else {
-            None
-        };
-        let mean_target_depth_all = if n_target_positions > 0 {
-            Some(sum_target_depths as f32 / n_target_positions as f32)
-        } else {
-            None
-        };
-        let median_target_depth_covered = median_sorted_i32(&self.covered_target_depths);
-        let median_target_depth_all =
-            median_sorted_with_leading_zeros(&self.covered_target_depths, zero_target_positions);
-        let pct_fragment_bases_on_target = if self.total_fragment_bases > 0 {
-            Some(self.on_target_fragment_bases as f32 / self.total_fragment_bases as f32)
-        } else {
-            None
-        };
+        let n_target_positions = count_target_positions(target_intervals, region);
+        let hist = sample_metrics_math::histogram_from_depths(&self.covered_target_depths);
+        let stats = sample_metrics_math::depth_stats(
+            &hist,
+            n_target_positions,
+            self.total_fragment_bases,
+            self.on_target_fragment_bases,
+        );
 
         SampleMetricsRecord {
             sample_id: sample_id.to_string(),
@@ -466,52 +508,62 @@ impl SampleMetricsAccumulator {
             pipeline,
             input_checksum_sha256,
             n_target_positions,
-            n_target_positions_covered,
-            mean_target_depth_covered,
-            mean_target_depth_all,
-            median_target_depth_covered,
-            median_target_depth_all,
-            pct_fragment_bases_on_target,
+            n_target_positions_covered: stats.n_target_positions_covered,
+            mean_target_depth_covered: stats.mean_target_depth_covered,
+            mean_target_depth_all: stats.mean_target_depth_all,
+            median_target_depth_covered: stats.median_target_depth_covered,
+            median_target_depth_all: stats.median_target_depth_all,
+            pct_fragment_bases_on_target: stats.pct_fragment_bases_on_target,
+        }
+    }
+
+    /// Emit combinable sufficient statistics for this shard instead of final
+    /// metrics. Used by `geac collect --sample-metrics-partial`; merged later by
+    /// `geac aggregate-metrics`.
+    #[allow(clippy::too_many_arguments)]
+    fn build_partial(
+        self,
+        sample_id: &str,
+        subject_id: Option<String>,
+        sample_type: Option<String>,
+        batch: Option<String>,
+        read_type: crate::record::ReadType,
+        pipeline: Option<String>,
+        input_checksum_sha256: Option<String>,
+        target_intervals: &TargetIntervals,
+        region: &MetricsRegion,
+    ) -> SampleMetricsPartialRecord {
+        let n_target_positions = count_target_positions(target_intervals, region);
+        let hist = sample_metrics_math::histogram_from_depths(&self.covered_target_depths);
+        let (hist_depth, hist_count): (Vec<i32>, Vec<i64>) = hist.into_iter().unzip();
+
+        SampleMetricsPartialRecord {
+            sample_id: sample_id.to_string(),
+            subject_id,
+            sample_type,
+            batch,
+            read_type,
+            pipeline,
+            input_checksum_sha256,
+            n_target_positions,
+            total_fragment_bases: self.total_fragment_bases,
+            on_target_fragment_bases: self.on_target_fragment_bases,
+            hist_depth,
+            hist_count,
         }
     }
 }
 
-fn median_sorted_i32(sorted: &[i32]) -> Option<f32> {
-    if sorted.is_empty() {
-        return None;
-    }
-    let mid = sorted.len() / 2;
-    if sorted.len() % 2 == 1 {
-        Some(sorted[mid] as f32)
-    } else {
-        Some((sorted[mid - 1] as f32 + sorted[mid] as f32) / 2.0)
-    }
-}
-
-fn median_sorted_with_leading_zeros(sorted_positive: &[i32], zero_count: usize) -> Option<f32> {
-    let total = zero_count + sorted_positive.len();
-    if total == 0 {
-        return None;
-    }
-
-    fn value_at(sorted_positive: &[i32], zero_count: usize, idx: usize) -> f32 {
-        if idx < zero_count {
-            0.0
-        } else {
-            sorted_positive[idx - zero_count] as f32
+/// Count target positions that fall within the metrics region (the union of all
+/// requested intervals, or the whole targets file when unrestricted).
+fn count_target_positions(target_intervals: &TargetIntervals, region: &MetricsRegion) -> i64 {
+    let mut n = 0_i64;
+    target_intervals.for_each_position(|chrom, pos| {
+        if region.contains(chrom, pos) {
+            n += 1;
         }
-    }
-
-    let mid = total / 2;
-    if total % 2 == 1 {
-        Some(value_at(sorted_positive, zero_count, mid))
-    } else {
-        Some(
-            (value_at(sorted_positive, zero_count, mid - 1)
-                + value_at(sorted_positive, zero_count, mid))
-                / 2.0,
-        )
-    }
+    });
+    n
 }
 
 pub(super) fn compute_input_sha256(path: &Path) -> Result<String> {

@@ -25,8 +25,7 @@ version 1.0
 ##   reference_fasta_index   - Corresponding .fai index
 ##   read_types              - (optional) per-sample array of duplex|simplex|raw; defaults to "duplex" for all
 ##   pipelines               - (optional) per-sample free-text pipeline label; fgbio/dragen select built-in family-size schemes; defaults to "fgbio" for all
-##   family_size_tags_all    - (optional) one family-size aux-tag spec applied to ALL samples, e.g. "total=cD"; overrides the pipeline preset
-##   family_size_tags        - (optional) per-sample family-size aux-tag override (array, same length as input_bams); takes precedence over family_size_tags_all for that sample
+##   family_size_tags        - (optional) one family-size aux-tag spec applied to ALL samples, e.g. "total=cD"; overrides the pipeline preset
 ##   batches                 - (optional) per-sample batch/group label stored as a column in each Parquet
 ##   labels1                 - (optional) per-sample free-text label 1 (e.g. tissue type)
 ##   labels2                 - (optional) per-sample free-text label 2 (e.g. library prep method)
@@ -41,6 +40,8 @@ version 1.0
 ##   targets_uri             - (optional) canonical target-interval URI stored in output metadata for IGV
 ##   gene_annotations        - (optional) GTF, GFF3, or UCSC genePred (.txt/.txt.gz)
 ##   region                  - (optional) restrict all samples to a genomic region
+##   scatter_interval_list    - (optional) BED/interval list; when set, each sample's collect is scattered across scatter_count shards, gathered, then merged (results identical to unsharded). Leave unset for one-collect-per-sample.
+##   scatter_count            - number of interval shards per sample when scatter_interval_list is set (default 50)
 ##   repeat_window           - bases each side of locus for homopolymer/STR scan (default 10)
 ##   max_pileup_depth        - max reads per pileup column; 0 = unlimited (default 0). htslib defaults to 8000 which silently downsamples high-coverage loci.
 ##   include_duplicates      - include PCR/optical duplicate reads (FLAG 0x400); default false
@@ -83,8 +84,7 @@ workflow GeacCohort {
         File   reference_fasta_index
         Array[String]? read_types      # optional; if provided must be same length as input_bams
         Array[String]? pipelines       # optional; if provided must be same length as input_bams
-        String? family_size_tags_all   # optional; one family-size tag spec applied to ALL samples
-        Array[String]? family_size_tags # optional; per-sample family-size tag override, same length as input_bams; takes precedence over family_size_tags_all
+        String? family_size_tags       # optional; one family-size tag spec applied to ALL samples (e.g. "total=cD")
         Array[String]? batches         # optional; per-sample batch/group label stored as a column
         Array[String]? labels1         # optional; per-sample free-text label 1
         Array[String]? labels2         # optional; per-sample free-text label 2
@@ -102,6 +102,14 @@ workflow GeacCohort {
         File?   gene_annotations
         String? region
         Int     repeat_window = 10
+
+        # Interval-scatter: when scatter_interval_list is provided, each sample's
+        # `geac collect` is split across scatter_count interval shards, run in
+        # parallel, then gathered. Loci/reads Parquets concatenate; per-shard partial
+        # sample-metrics are aggregated back into one exact row per sample. Leave
+        # scatter_interval_list unset for the original one-Collect-per-sample behavior.
+        File?   scatter_interval_list
+        Int     scatter_count = 50
 
         Int     min_base_qual = 1
         Int     min_map_qual  = 0
@@ -124,7 +132,24 @@ workflow GeacCohort {
         Int    fragments_disk_gb       = 200
         Int    merge_memory_gb         = 16
         Int    merge_disk_gb           = 50
+        Int    split_memory_gb         = 4
+        Int    split_disk_gb           = 20
+        Int    aggregate_memory_gb     = 4
+        Int    aggregate_disk_gb       = 20
         Int    preemptible             = 2
+    }
+
+    # Split the interval list once; shards are shared across all samples.
+    if (defined(scatter_interval_list)) {
+        call SplitIntervals {
+            input:
+                interval_list = select_first([scatter_interval_list]),
+                scatter_count = scatter_count,
+                docker_image  = docker_image,
+                memory_gb     = split_memory_gb,
+                disk_gb       = split_disk_gb,
+                preemptible   = preemptible,
+        }
     }
 
     scatter (i in range(length(input_bams))) {
@@ -152,11 +177,6 @@ workflow GeacCohort {
         }
         String this_read_type = if defined(read_types) then select_first([read_types])[i] else "duplex"
         String this_pipeline  = if defined(pipelines)  then select_first([pipelines])[i]  else "fgbio"
-        # Per-sample array overrides the cohort-wide scalar; otherwise fall back to
-        # the scalar (or None, in which case the --pipeline preset applies).
-        String? this_family_size_tags = if defined(family_size_tags)
-            then select_first([family_size_tags])[i]
-            else family_size_tags_all
         if (defined(batches)) {
             String this_batch  = select_first([batches])[i]
         }
@@ -192,53 +212,139 @@ workflow GeacCohort {
             select_first([targets_uri, if defined(targets) then targets else ""]),
         ]
 
-        call Collect {
-            input:
-                input_bam             = input_bams[i],
-                input_bam_index       = input_bam_indices[i],
-                reference_fasta       = reference_fasta,
-                reference_fasta_index = reference_fasta_index,
-                read_type             = this_read_type,
-                pipeline              = this_pipeline,
-                family_size_tags      = this_family_size_tags,
-                batch                 = this_batch,
-                label1                = this_label1,
-                label2                = this_label2,
-                label3                = this_label3,
-                timepoint             = this_timepoint,
-                sample_id             = this_sample_id,
-                subject_id            = this_subject_id,
-                sample_type           = this_sample_type,
-                variants_tsv          = this_variants_tsv,
-                vcf                   = this_vcf,
-                vcf_index             = this_vcf_index,
-                gnomad                = gnomad,
-                gnomad_index          = gnomad_index,
-                gnomad_uri            = if defined(gnomad_uri) then select_first([gnomad_uri]) else gnomad,
-                gnomad_index_uri      = if defined(gnomad_index_uri) then select_first([gnomad_index_uri]) else gnomad_index,
-                gnomad_af_field       = gnomad_af_field,
-                targets               = targets,
-                targets_uri           = if defined(targets_uri) then select_first([targets_uri]) else targets,
-                gene_annotations      = gene_annotations,
-                region                = region,
-                repeat_window         = repeat_window,
-                min_base_qual         = min_base_qual,
-                min_map_qual          = min_map_qual,
-                max_pileup_depth      = max_pileup_depth,
-                include_duplicates    = include_duplicates,
-                include_secondary     = include_secondary,
-                include_supplementary = include_supplementary,
-                exclude_tag           = exclude_tag,
-                reads_output          = reads_output,
-                input_checksum_sha256 = input_checksum_sha256,
-                threads               = threads,
-                bam_uri               = this_bam_uri,
-                bai_uri               = this_bai_uri,
-                docker_image          = docker_image,
-                memory_gb             = collect_memory_gb,
-                disk_gb               = collect_disk_gb,
-                preemptible           = preemptible,
+        # ── Branch A: scatter this sample across interval shards ─────────────────
+        # Each shard runs collect on its interval with --sample-metrics-partial; the
+        # per-shard partial metrics are aggregated back into one exact row per sample.
+        if (defined(scatter_interval_list)) {
+            scatter (shard in select_first([SplitIntervals.shards])) {
+                call Collect as CollectShard {
+                    input:
+                        input_bam             = input_bams[i],
+                        input_bam_index       = input_bam_indices[i],
+                        reference_fasta       = reference_fasta,
+                        reference_fasta_index = reference_fasta_index,
+                        read_type             = this_read_type,
+                        pipeline              = this_pipeline,
+                        family_size_tags      = family_size_tags,
+                        batch                 = this_batch,
+                        label1                = this_label1,
+                        label2                = this_label2,
+                        label3                = this_label3,
+                        timepoint             = this_timepoint,
+                        sample_id             = this_sample_id,
+                        subject_id            = this_subject_id,
+                        sample_type           = this_sample_type,
+                        variants_tsv          = this_variants_tsv,
+                        vcf                   = this_vcf,
+                        vcf_index             = this_vcf_index,
+                        gnomad                = gnomad,
+                        gnomad_index          = gnomad_index,
+                        gnomad_uri            = if defined(gnomad_uri) then select_first([gnomad_uri]) else gnomad,
+                        gnomad_index_uri      = if defined(gnomad_index_uri) then select_first([gnomad_index_uri]) else gnomad_index,
+                        gnomad_af_field       = gnomad_af_field,
+                        targets               = targets,
+                        targets_uri           = if defined(targets_uri) then select_first([targets_uri]) else targets,
+                        gene_annotations      = gene_annotations,
+                        region                = shard,
+                        sample_metrics_partial = defined(targets),
+                        repeat_window         = repeat_window,
+                        min_base_qual         = min_base_qual,
+                        min_map_qual          = min_map_qual,
+                        max_pileup_depth      = max_pileup_depth,
+                        include_duplicates    = include_duplicates,
+                        include_secondary     = include_secondary,
+                        include_supplementary = include_supplementary,
+                        exclude_tag           = exclude_tag,
+                        reads_output          = reads_output,
+                        input_checksum_sha256 = input_checksum_sha256,
+                        threads               = threads,
+                        bam_uri               = this_bam_uri,
+                        bai_uri               = this_bai_uri,
+                        docker_image          = docker_image,
+                        memory_gb             = collect_memory_gb,
+                        disk_gb               = collect_disk_gb,
+                        preemptible           = preemptible,
+                }
+            }
+
+            if (defined(targets)) {
+                call AggregateMetrics {
+                    input:
+                        partial_parquets = flatten(CollectShard.sample_metrics_partial_parquets),
+                        output_basename  = sub(basename(input_bams[i]), "\\.(bam|cram)$", ""),
+                        docker_image     = docker_image,
+                        memory_gb        = aggregate_memory_gb,
+                        disk_gb          = aggregate_disk_gb,
+                        preemptible      = preemptible,
+                }
+            }
+
+            Array[File] a_loci    = CollectShard.locus_parquet
+            Array[File] a_reads   = flatten(CollectShard.reads_parquets)
+            Array[File] a_metrics = if defined(AggregateMetrics.sample_metrics)
+                                    then [select_first([AggregateMetrics.sample_metrics])]
+                                    else []
         }
+
+        # ── Branch B: original single-pass collect (no scatter list provided) ────
+        if (!defined(scatter_interval_list)) {
+            call Collect as CollectWhole {
+                input:
+                    input_bam             = input_bams[i],
+                    input_bam_index       = input_bam_indices[i],
+                    reference_fasta       = reference_fasta,
+                    reference_fasta_index = reference_fasta_index,
+                    read_type             = this_read_type,
+                    pipeline              = this_pipeline,
+                    family_size_tags      = family_size_tags,
+                    batch                 = this_batch,
+                    label1                = this_label1,
+                    label2                = this_label2,
+                    label3                = this_label3,
+                    timepoint             = this_timepoint,
+                    sample_id             = this_sample_id,
+                    subject_id            = this_subject_id,
+                    sample_type           = this_sample_type,
+                    variants_tsv          = this_variants_tsv,
+                    vcf                   = this_vcf,
+                    vcf_index             = this_vcf_index,
+                    gnomad                = gnomad,
+                    gnomad_index          = gnomad_index,
+                    gnomad_uri            = if defined(gnomad_uri) then select_first([gnomad_uri]) else gnomad,
+                    gnomad_index_uri      = if defined(gnomad_index_uri) then select_first([gnomad_index_uri]) else gnomad_index,
+                    gnomad_af_field       = gnomad_af_field,
+                    targets               = targets,
+                    targets_uri           = if defined(targets_uri) then select_first([targets_uri]) else targets,
+                    gene_annotations      = gene_annotations,
+                    region                = region,
+                    sample_metrics_partial = false,
+                    repeat_window         = repeat_window,
+                    min_base_qual         = min_base_qual,
+                    min_map_qual          = min_map_qual,
+                    max_pileup_depth      = max_pileup_depth,
+                    include_duplicates    = include_duplicates,
+                    include_secondary     = include_secondary,
+                    include_supplementary = include_supplementary,
+                    exclude_tag           = exclude_tag,
+                    reads_output          = reads_output,
+                    input_checksum_sha256 = input_checksum_sha256,
+                    threads               = threads,
+                    bam_uri               = this_bam_uri,
+                    bai_uri               = this_bai_uri,
+                    docker_image          = docker_image,
+                    memory_gb             = collect_memory_gb,
+                    disk_gb               = collect_disk_gb,
+                    preemptible           = preemptible,
+            }
+            Array[File] b_loci    = [CollectWhole.locus_parquet]
+            Array[File] b_reads   = CollectWhole.reads_parquets
+            Array[File] b_metrics = CollectWhole.sample_metrics_parquets
+        }
+
+        # Unify the two mutually-exclusive branches into per-sample arrays.
+        Array[File] sample_loci    = select_first([a_loci, b_loci])
+        Array[File] sample_reads   = select_first([a_reads, b_reads])
+        Array[File] sample_metrics = select_first([a_metrics, b_metrics])
 
         if (run_fragments) {
             call Fragments {
@@ -267,15 +373,17 @@ workflow GeacCohort {
         }
     }
 
-    # Flatten per-sample reads parquet arrays into a single array.
-    # When reads_output=false every inner array is empty, so the result is [].
-    Array[File] all_reads_parquets = flatten(Collect.reads_parquets)
-    Array[File] all_sample_metrics_parquets = flatten(Collect.sample_metrics_parquets)
+    # Gather per-sample outputs across the scatter. Each sample contributes an
+    # Array[File] (one locus Parquet when unsharded, many when sharded); flatten to
+    # one flat array. reads/metrics are empty arrays when not produced.
+    Array[File] all_locus_parquets = flatten(sample_loci)
+    Array[File] all_reads_parquets = flatten(sample_reads)
+    Array[File] all_sample_metrics_parquets = flatten(sample_metrics)
     Array[File] all_fragments_parquets = select_all(Fragments.fragments_parquet)
 
     call Merge {
         input:
-            parquets       = flatten([Collect.locus_parquet, all_reads_parquets, all_sample_metrics_parquets, all_fragments_parquets]),
+            parquets       = flatten([all_locus_parquets, all_reads_parquets, all_sample_metrics_parquets, all_fragments_parquets]),
             manifest_rows  = manifest_row,
             cohort_name    = cohort_name,
             docker_image   = docker_image,
@@ -331,6 +439,7 @@ task Collect {
         Boolean include_supplementary
         Array[String] exclude_tag
         Boolean reads_output
+        Boolean sample_metrics_partial = false
         Boolean input_checksum_sha256
         Int     threads
 
@@ -389,6 +498,7 @@ task Collect {
             ~{sep=" " prefix("--exclude-tag ", exclude_tag)} \
             ~{if input_checksum_sha256 then "--input-checksum-sha256" else ""} \
             ~{if reads_output then "--reads-output" else ""} \
+            ~{if sample_metrics_partial then "--sample-metrics-partial" else ""} \
             ~{"--bam-uri " + bam_uri} \
             ~{"--bai-uri " + bai_uri}
     >>>
@@ -396,13 +506,82 @@ task Collect {
     output {
         File        locus_parquet  = locus_name
         Array[File] reads_parquets = glob("*.reads.parquet")
+        # Final sample_metrics (empty when --sample-metrics-partial); the partial
+        # glob deliberately does not match the final ".sample_metrics.parquet".
         Array[File] sample_metrics_parquets = glob("*.sample_metrics.parquet")
+        Array[File] sample_metrics_partial_parquets = glob("*.sample_metrics_partial.parquet")
     }
 
     runtime {
         docker:      docker_image
         memory:      memory_gb + " GB"
         cpu:         threads
+        disks:       "local-disk " + disk_gb + " HDD"
+        preemptible: preemptible
+    }
+}
+
+task SplitIntervals {
+
+    input {
+        File   interval_list
+        Int    scatter_count
+
+        String docker_image
+        Int    memory_gb
+        Int    disk_gb
+        Int    preemptible
+    }
+
+    command <<<
+        set -euo pipefail
+        mkdir -p shards
+        geac split-intervals \
+            --input ~{interval_list} \
+            --scatter-count ~{scatter_count} \
+            --output-dir shards
+    >>>
+
+    output {
+        Array[File] shards = glob("shards/*.bed")
+    }
+
+    runtime {
+        docker:      docker_image
+        memory:      memory_gb + " GB"
+        cpu:         1
+        disks:       "local-disk " + disk_gb + " HDD"
+        preemptible: preemptible
+    }
+}
+
+task AggregateMetrics {
+
+    input {
+        Array[File] partial_parquets
+        String      output_basename
+
+        String docker_image
+        Int    memory_gb
+        Int    disk_gb
+        Int    preemptible
+    }
+
+    command <<<
+        set -euo pipefail
+        geac aggregate-metrics \
+            --output ~{output_basename}.sample_metrics.parquet \
+            ~{sep=" " partial_parquets}
+    >>>
+
+    output {
+        File sample_metrics = output_basename + ".sample_metrics.parquet"
+    }
+
+    runtime {
+        docker:      docker_image
+        memory:      memory_gb + " GB"
+        cpu:         1
         disks:       "local-disk " + disk_gb + " HDD"
         preemptible: preemptible
     }

@@ -367,6 +367,194 @@ fn collect_region_restricts_output() {
     assert_eq!(parquet_query_i32(&out, "alt_count", "pos = 150"), 3);
 }
 
+/// `--region` with a BED file (interval-list mode) clips emitted loci to each
+/// interval exactly — no boundary over-emission, no double-counting, gaps excluded.
+/// This is the correctness foundation for scattering one sample across interval
+/// shards. BAM alts at 0-based 50, 150, 199, 200, 250 (read_len 20, so a read for
+/// the pos-200 alt covers [190,210) and overlaps a fetch of [100,200)). With a BED
+/// of [100,200) and [240,260) only 150, 199 and 250 must appear: 50 is outside,
+/// 200 is on the exclusive boundary of the first interval, and the gap is excluded.
+#[test]
+fn collect_region_bed_clips_to_intervals_without_boundary_leak() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 400);
+    let bam = write_bam(
+        dir.path(),
+        "s1.bam",
+        "sample1",
+        400,
+        vec![
+            (50, b'T', 5, 10),
+            (150, b'T', 5, 10),
+            (199, b'T', 5, 10),
+            (200, b'G', 5, 10),
+            (250, b'T', 5, 10),
+        ],
+        20,
+    );
+    // BED is 0-based half-open: [100,200) and [240,260).
+    let bed = write_bed(dir.path(), "regions.bed", &[(100, 200), (240, 260)]);
+    let out = dir.path().join("s1.parquet");
+
+    assert_geac_success(&[
+        "collect",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
+        "--region",
+        bed.to_str().unwrap(),
+    ]);
+
+    // Exactly the three in-interval alts, and the boundary/outside ones excluded.
+    assert_eq!(
+        parquet_count(&out),
+        3,
+        "expected exactly 3 in-interval loci"
+    );
+    assert_eq!(parquet_query_i32(&out, "alt_count", "pos = 150"), 5);
+    assert_eq!(parquet_query_i32(&out, "alt_count", "pos = 199"), 5);
+    assert_eq!(parquet_query_i32(&out, "alt_count", "pos = 250"), 5);
+}
+
+/// End-to-end scatter equivalence: collecting one sample across interval shards
+/// (split-intervals → per-shard collect --sample-metrics-partial → aggregate-metrics)
+/// is identical to an unsharded `collect --targets` run — both the union of locus
+/// rows and every aggregated sample_metrics column (medians included).
+#[test]
+fn collect_sharded_equals_unsharded_with_aggregated_metrics() {
+    let dir = TempDir::new().unwrap();
+    let fa = write_reference(dir.path(), 400);
+    let bam = write_bam(
+        dir.path(),
+        "s1.bam",
+        "sample1",
+        400,
+        vec![(50, b'T', 3, 7), (200, b'G', 5, 5), (350, b'C', 2, 18)],
+        20,
+    );
+    let targets = write_bed(
+        dir.path(),
+        "targets.bed",
+        &[(0, 100), (150, 250), (300, 400)],
+    );
+
+    // Unsharded baseline.
+    let whole = dir.path().join("whole.parquet");
+    assert_geac_success(&[
+        "collect",
+        "--input",
+        bam.to_str().unwrap(),
+        "--reference",
+        fa.to_str().unwrap(),
+        "--output",
+        whole.to_str().unwrap(),
+        "--read-type",
+        "raw",
+        "--pipeline",
+        "raw",
+        "--targets",
+        targets.to_str().unwrap(),
+    ]);
+    let whole_metrics = dir.path().join("whole.sample_metrics.parquet");
+
+    // Split targets into shards.
+    let shard_dir = dir.path().join("shards");
+    assert_geac_success(&[
+        "split-intervals",
+        "--input",
+        targets.to_str().unwrap(),
+        "--scatter-count",
+        "4",
+        "--output-dir",
+        shard_dir.to_str().unwrap(),
+    ]);
+    let mut shard_beds: Vec<std::path::PathBuf> = std::fs::read_dir(&shard_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().map(|e| e == "bed").unwrap_or(false))
+        .collect();
+    shard_beds.sort();
+    assert!(shard_beds.len() >= 2, "expected multiple shards");
+
+    // Per-shard collect with partial metrics.
+    let mut shard_loci = Vec::new();
+    let mut partials: Vec<String> = Vec::new();
+    for (i, bed) in shard_beds.iter().enumerate() {
+        let out = dir.path().join(format!("shard{i}.parquet"));
+        assert_geac_success(&[
+            "collect",
+            "--input",
+            bam.to_str().unwrap(),
+            "--reference",
+            fa.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--read-type",
+            "raw",
+            "--pipeline",
+            "raw",
+            "--targets",
+            targets.to_str().unwrap(),
+            "--region",
+            bed.to_str().unwrap(),
+            "--sample-metrics-partial",
+        ]);
+        shard_loci.push(out);
+        partials.push(
+            dir.path()
+                .join(format!("shard{i}.sample_metrics_partial.parquet"))
+                .to_str()
+                .unwrap()
+                .to_string(),
+        );
+    }
+
+    // Aggregate partial metrics.
+    let agg = dir.path().join("agg.sample_metrics.parquet");
+    let mut agg_args: Vec<&str> = vec!["aggregate-metrics", "--output", agg.to_str().unwrap()];
+    for p in &partials {
+        agg_args.push(p);
+    }
+    assert_geac_success(&agg_args);
+
+    // Loci: disjoint shards, so the union equals the unsharded count exactly.
+    let union: i64 = shard_loci.iter().map(|p| parquet_count(p)).sum();
+    assert_eq!(
+        union,
+        parquet_count(&whole),
+        "sharded loci union must equal unsharded loci"
+    );
+
+    // Metrics: aggregated must equal unsharded, every column bit-identical.
+    for col in ["n_target_positions", "n_target_positions_covered"] {
+        assert_eq!(
+            parquet_query_i64(&agg, col, "TRUE"),
+            parquet_query_i64(&whole_metrics, col, "TRUE"),
+            "i64 column {col} mismatch"
+        );
+    }
+    for col in [
+        "mean_target_depth_covered",
+        "mean_target_depth_all",
+        "median_target_depth_covered",
+        "median_target_depth_all",
+        "pct_fragment_bases_on_target",
+    ] {
+        assert_eq!(
+            parquet_query_f32(&agg, col, "TRUE"),
+            parquet_query_f32(&whole_metrics, col, "TRUE"),
+            "f32 column {col} mismatch"
+        );
+    }
+}
+
 // ── geac merge ────────────────────────────────────────────────────────────────
 
 /// merge combines two per-sample Parquets into a DuckDB with both samples present.
@@ -1130,11 +1318,11 @@ fn collect_targets_emits_sample_metrics_parquet() {
         "expected one sample-metrics row"
     );
     assert_eq!(
-        parquet_query_i32(&metrics_pq, "n_target_positions", "TRUE"),
+        parquet_query_i64(&metrics_pq, "n_target_positions", "TRUE"),
         40
     );
     assert_eq!(
-        parquet_query_i32(&metrics_pq, "n_target_positions_covered", "TRUE"),
+        parquet_query_i64(&metrics_pq, "n_target_positions_covered", "TRUE"),
         15
     );
     assert_eq!(

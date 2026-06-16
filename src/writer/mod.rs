@@ -6,3 +6,4 @@ pub mod parquet_normal;
 pub mod parquet_pon;
 pub mod parquet_reads;
 pub mod parquet_sample_metrics;
+pub mod parquet_sample_metrics_partial;

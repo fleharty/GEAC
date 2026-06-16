@@ -1,39 +1,42 @@
+//! Writer for per-shard partial sample metrics (`*.sample_metrics_partial.parquet`).
+//!
+//! These hold combinable sufficient statistics — scalar sums plus a covered-depth
+//! histogram stored as two `List` columns — that `geac aggregate-metrics` merges
+//! into a final sample_metrics Parquet. This format is internal to the scatter
+//! pipeline and must never be fed to `geac merge`.
+
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use arrow::array::{ArrayRef, Float32Array, Int64Array, StringArray};
+use arrow::array::{ArrayRef, Int32Builder, Int64Array, Int64Builder, ListBuilder, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
-use crate::record::SampleMetricsRecord;
+use crate::record::SampleMetricsPartialRecord;
 
-pub fn write_parquet(records: &[SampleMetricsRecord], output: &Path) -> Result<()> {
-    let schema = sample_metrics_schema();
+pub fn write_parquet(records: &[SampleMetricsPartialRecord], output: &Path) -> Result<()> {
+    let schema = schema();
     let batch = records_to_batch(records, Arc::clone(&schema))?;
 
     let file = std::fs::File::create(output)
         .with_context(|| format!("failed to create output file: {}", output.display()))?;
-
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
-
     let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))
         .context("failed to create Parquet writer")?;
-
     writer
         .write(&batch)
         .context("failed to write record batch")?;
     writer.close().context("failed to finalize Parquet file")?;
-
     Ok(())
 }
 
-fn sample_metrics_schema() -> Arc<Schema> {
+fn schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("sample_id", DataType::Utf8, false),
         Field::new("subject_id", DataType::Utf8, true),
@@ -43,16 +46,27 @@ fn sample_metrics_schema() -> Arc<Schema> {
         Field::new("pipeline", DataType::Utf8, true),
         Field::new("input_checksum_sha256", DataType::Utf8, true),
         Field::new("n_target_positions", DataType::Int64, false),
-        Field::new("n_target_positions_covered", DataType::Int64, false),
-        Field::new("mean_target_depth_covered", DataType::Float32, true),
-        Field::new("mean_target_depth_all", DataType::Float32, true),
-        Field::new("median_target_depth_covered", DataType::Float32, true),
-        Field::new("median_target_depth_all", DataType::Float32, true),
-        Field::new("pct_fragment_bases_on_target", DataType::Float32, true),
+        Field::new("total_fragment_bases", DataType::Int64, false),
+        Field::new("on_target_fragment_bases", DataType::Int64, false),
+        // List item nullability must match arrow's ListBuilder (nullable items);
+        // the values themselves are never null.
+        Field::new(
+            "hist_depth",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            false,
+        ),
+        Field::new(
+            "hist_count",
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            false,
+        ),
     ]))
 }
 
-fn records_to_batch(records: &[SampleMetricsRecord], schema: Arc<Schema>) -> Result<RecordBatch> {
+fn records_to_batch(
+    records: &[SampleMetricsPartialRecord],
+    schema: Arc<Schema>,
+) -> Result<RecordBatch> {
     let sample_id: ArrayRef = Arc::new(StringArray::from_iter_values(
         records.iter().map(|r| r.sample_id.as_str()),
     ));
@@ -68,7 +82,7 @@ fn records_to_batch(records: &[SampleMetricsRecord], schema: Arc<Schema>) -> Res
             .map(|r| r.sample_type.as_deref())
             .collect::<Vec<_>>(),
     ));
-    let batch: ArrayRef = Arc::new(StringArray::from(
+    let batch_col: ArrayRef = Arc::new(StringArray::from(
         records
             .iter()
             .map(|r| r.batch.as_deref())
@@ -80,7 +94,7 @@ fn records_to_batch(records: &[SampleMetricsRecord], schema: Arc<Schema>) -> Res
     let pipeline: ArrayRef = Arc::new(StringArray::from(
         records
             .iter()
-            .map(|r| r.pipeline.clone())
+            .map(|r| r.pipeline.as_deref())
             .collect::<Vec<_>>(),
     ));
     let input_checksum_sha256: ArrayRef = Arc::new(StringArray::from(
@@ -92,39 +106,30 @@ fn records_to_batch(records: &[SampleMetricsRecord], schema: Arc<Schema>) -> Res
     let n_target_positions: ArrayRef = Arc::new(Int64Array::from_iter_values(
         records.iter().map(|r| r.n_target_positions),
     ));
-    let n_target_positions_covered: ArrayRef = Arc::new(Int64Array::from_iter_values(
-        records.iter().map(|r| r.n_target_positions_covered),
+    let total_fragment_bases: ArrayRef = Arc::new(Int64Array::from_iter_values(
+        records.iter().map(|r| r.total_fragment_bases),
     ));
-    let mean_target_depth_covered: ArrayRef = Arc::new(Float32Array::from(
-        records
-            .iter()
-            .map(|r| r.mean_target_depth_covered)
-            .collect::<Vec<_>>(),
+    let on_target_fragment_bases: ArrayRef = Arc::new(Int64Array::from_iter_values(
+        records.iter().map(|r| r.on_target_fragment_bases),
     ));
-    let mean_target_depth_all: ArrayRef = Arc::new(Float32Array::from(
-        records
-            .iter()
-            .map(|r| r.mean_target_depth_all)
-            .collect::<Vec<_>>(),
-    ));
-    let median_target_depth_covered: ArrayRef = Arc::new(Float32Array::from(
-        records
-            .iter()
-            .map(|r| r.median_target_depth_covered)
-            .collect::<Vec<_>>(),
-    ));
-    let median_target_depth_all: ArrayRef = Arc::new(Float32Array::from(
-        records
-            .iter()
-            .map(|r| r.median_target_depth_all)
-            .collect::<Vec<_>>(),
-    ));
-    let pct_fragment_bases_on_target: ArrayRef = Arc::new(Float32Array::from(
-        records
-            .iter()
-            .map(|r| r.pct_fragment_bases_on_target)
-            .collect::<Vec<_>>(),
-    ));
+
+    let mut depth_builder = ListBuilder::new(Int32Builder::new());
+    for r in records {
+        for &d in &r.hist_depth {
+            depth_builder.values().append_value(d);
+        }
+        depth_builder.append(true);
+    }
+    let hist_depth: ArrayRef = Arc::new(depth_builder.finish());
+
+    let mut count_builder = ListBuilder::new(Int64Builder::new());
+    for r in records {
+        for &c in &r.hist_count {
+            count_builder.values().append_value(c);
+        }
+        count_builder.append(true);
+    }
+    let hist_count: ArrayRef = Arc::new(count_builder.finish());
 
     RecordBatch::try_new(
         schema,
@@ -132,17 +137,15 @@ fn records_to_batch(records: &[SampleMetricsRecord], schema: Arc<Schema>) -> Res
             sample_id,
             subject_id,
             sample_type,
-            batch,
+            batch_col,
             read_type,
             pipeline,
             input_checksum_sha256,
             n_target_positions,
-            n_target_positions_covered,
-            mean_target_depth_covered,
-            mean_target_depth_all,
-            median_target_depth_covered,
-            median_target_depth_all,
-            pct_fragment_bases_on_target,
+            total_fragment_bases,
+            on_target_fragment_bases,
+            hist_depth,
+            hist_count,
         ],
     )
     .context("failed to create Arrow record batch")

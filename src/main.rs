@@ -8,6 +8,7 @@
 // `Command` is a clap subcommand enum; boxing variants to equalize their size is
 // unidiomatic for derive-based CLIs.
 #![allow(clippy::large_enum_variant)]
+mod aggregate_metrics;
 mod bam;
 mod build_fusion_index;
 mod build_fusion_kmer_blacklist;
@@ -34,8 +35,10 @@ mod record;
 mod region;
 mod repeat;
 mod sample_identity;
+mod sample_metrics_math;
 mod scan_read;
 mod shared_kmers;
+mod split_intervals;
 mod targets;
 mod track;
 mod variants_tsv;
@@ -106,6 +109,11 @@ fn main() -> Result<()> {
                 info!(n_targets = ti.n_targets(), "target intervals loaded");
             }
 
+            anyhow::ensure!(
+                !args.sample_metrics_partial || target_intervals.is_some(),
+                "--sample-metrics-partial requires --targets"
+            );
+
             let gene_annots = args
                 .gene_annotations
                 .as_ref()
@@ -159,19 +167,30 @@ fn main() -> Result<()> {
                 writer::parquet_reads::write_parquet(&read_records, reads_path)?;
             }
 
-            if let Some(metrics) = sample_metrics {
-                let stem = args
-                    .output
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("output");
-                let parent = args.output.parent().unwrap_or(std::path::Path::new("."));
-                let sample_metrics_path = parent.join(format!("{stem}.sample_metrics.parquet"));
-                info!(
-                    output = %sample_metrics_path.display(),
-                    "writing sample metrics Parquet"
-                );
-                writer::parquet_sample_metrics::write_parquet(&[metrics], &sample_metrics_path)?;
+            match sample_metrics {
+                bam::SampleMetricsOutput::None => {}
+                bam::SampleMetricsOutput::Final(metrics) => {
+                    let stem = args
+                        .output
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("output");
+                    let parent = args.output.parent().unwrap_or(std::path::Path::new("."));
+                    let path = parent.join(format!("{stem}.sample_metrics.parquet"));
+                    info!(output = %path.display(), "writing sample metrics Parquet");
+                    writer::parquet_sample_metrics::write_parquet(&[metrics], &path)?;
+                }
+                bam::SampleMetricsOutput::Partial(partial) => {
+                    let stem = args
+                        .output
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("output");
+                    let parent = args.output.parent().unwrap_or(std::path::Path::new("."));
+                    let path = parent.join(format!("{stem}.sample_metrics_partial.parquet"));
+                    info!(output = %path.display(), "writing partial sample metrics Parquet");
+                    writer::parquet_sample_metrics_partial::write_parquet(&[partial], &path)?;
+                }
             }
 
             info!("done");
@@ -324,6 +343,27 @@ fn main() -> Result<()> {
             fragments::collect_fragments(&args, &mut frag_writer)?;
             frag_writer.close()?;
 
+            info!("done");
+        }
+
+        Command::SplitIntervals(args) => {
+            info!(
+                input = %args.input.display(),
+                scatter_count = args.scatter_count,
+                output_dir = %args.output_dir.display(),
+                "splitting intervals"
+            );
+            let n = split_intervals::run(&args)?;
+            info!(shards = n, "done");
+        }
+
+        Command::AggregateMetrics(args) => {
+            info!(
+                inputs = args.inputs.len(),
+                output = %args.output.display(),
+                "aggregating sample metrics"
+            );
+            aggregate_metrics::run(&args)?;
             info!("done");
         }
 

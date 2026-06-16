@@ -1286,3 +1286,57 @@ block. Required switching the scan loop from `reader.records()` to a manual
 Both tools are `geac experimental` (unstable). Documented in EXPERIMENTAL.md, including a
 "Diagnosing false-positive fusion calls" workflow section tying them together. No
 release cut — experimental-only, no schema or pipeline change.
+
+---
+
+## Interval-scatter for `geac collect` (whole-genome duplex parallelism)
+
+Captured 2026-06-16. Motivation: whole-genome duplex samples take >24h for a single
+`geac collect` (one BAM, single pass). The cohort WDL only scattered across *samples*,
+so one large sample was a hard wall. This adds within-sample interval scatter so one
+sample's collection runs across many genomic shards in parallel, gathered into a result
+identical to an unsharded run.
+
+**Design (three layers):**
+
+1. **Region clip is the correctness foundation.** `geac collect --region <BED>` already
+   fetched each interval, but locus emission had *no* region clip (only the metrics
+   accumulator did, and that was `None` for the interval-list path). htslib pileup over a
+   fetched interval emits columns for the full span of overlapping reads, so boundary
+   positions leaked out and would double-count across adjacent shards. Fixed in
+   `bam/mod.rs`: fetch the *merged* (disjoint) intervals and clip every emitted column to
+   the current interval (`FetchUnit { fetch, clip }`). A separate `MetricsRegion` (union
+   membership) drives `n_target_positions` counting. Verified by
+   `collect_region_bed_clips_to_intervals_without_boundary_leak` (an alt whose reads
+   overlap the fetched interval but sits on the exclusive boundary must not be emitted).
+
+2. **`geac split-intervals`** (`src/split_intervals.rs`) — reuses `TargetIntervals` and
+   GATK-style packs merged intervals into N balanced shards, subdividing large intervals
+   (whole chromosomes) at base boundaries. Output is disjoint BED shards = a true
+   partition, which is what makes shard concatenation in `geac merge` exact.
+
+3. **Exact metrics under genome-wide `--targets`.** Medians can't be recombined from
+   per-region summaries, so `--sample-metrics-partial` emits *sufficient statistics* per
+   shard — scalar sums plus a covered-depth histogram (`SampleMetricsPartialRecord`,
+   parallel `List` columns). `geac aggregate-metrics` sums the scalars, merges the
+   histograms, and reconstructs the final `SampleMetricsRecord` exactly. Both the
+   unsharded `collect` and the sharded `aggregate-metrics` paths funnel through one
+   `sample_metrics_math::depth_stats`, so equality is structural, not coincidental
+   (`collect_sharded_equals_unsharded_with_aggregated_metrics` asserts bit-identical
+   columns, medians included). **Rejected** alternative: a separate full-sample metrics
+   pass — too slow for genome-wide targets (≈ as expensive as the original collect).
+
+**Schema note:** `n_target_positions` / `n_target_positions_covered` widened `i32 → i64`.
+A genome-wide target (~3.1e9 positions) exceeds `i32::MAX` — a pre-existing latent
+overflow the scatter use case actually hits. `schema/geac_schema.json` lists column names
+only (no types) and the Explorer reads via DuckDB, so no downstream change was needed.
+
+**WDL:** `geac_cohort.wdl` gains `scatter_interval_list` + `scatter_count`. When set, a
+shared `SplitIntervals` task runs once, then a nested sample×shard scatter runs
+`CollectShard` (`--region <shard> --sample-metrics-partial`) and an `AggregateMetrics`
+task per sample; loci/reads/metrics are unified across the two mutually-exclusive branches
+(`select_first` on per-branch optionals) and fed to the unchanged `Merge`. When unset,
+behavior is exactly as before (single `CollectWhole` per sample). `fragments` stays
+unsharded. Partial Parquets never reach `geac merge`.
+
+Pipeline change — gates a release when cut (not done here).

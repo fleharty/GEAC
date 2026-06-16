@@ -110,6 +110,35 @@ MNV candidate discovery, family-size filtering, or read-context diagnostics.
 Use `geac collect --targets` to annotate on-target status and emit
 `.sample_metrics.parquet` files with target-depth summaries.
 
+### Scattering One Large Sample Across Intervals
+
+Whole-genome duplex samples can take many hours for a single `geac collect`. To
+parallelize, split the genome into shards, collect each shard independently, and
+gather the per-shard Parquets — the result is identical to an unsharded run.
+
+```bash
+# 1. Split a BED / interval list into N balanced, disjoint shards.
+geac split-intervals --input targets.bed --scatter-count 50 --output-dir shards/
+
+# 2. Collect each shard (in parallel). --region restricts work to the shard;
+#    --sample-metrics-partial emits combinable per-shard metric statistics.
+geac collect --input SAMPLE.bam --reference hg38.fa --targets targets.bed \
+  --region shards/shard.0000.bed --sample-metrics-partial --output shard.0000.parquet
+# ... repeat per shard ...
+
+# 3. Combine the per-shard partial metrics into one exact sample_metrics row
+#    (means and medians are reconstructed exactly from depth histograms).
+geac aggregate-metrics --output SAMPLE.sample_metrics.parquet *.sample_metrics_partial.parquet
+
+# 4. Merge the shard locus Parquets plus the aggregated metrics.
+geac merge --output cohort.duckdb shard.*.parquet SAMPLE.sample_metrics.parquet
+```
+
+On Terra, `wdl/geac_cohort.wdl` does all of this automatically: set
+`scatter_interval_list` and `scatter_count` and each sample is scattered across
+shards, gathered, and merged. Leave `scatter_interval_list` unset for the original
+one-task-per-sample behavior.
+
 ### Tumor/Normal And PoN Annotation
 
 ```text

@@ -38,6 +38,18 @@ impl std::fmt::Display for ReadType {
     }
 }
 
+impl ReadType {
+    /// Parse a lowercase label (the inverse of `Display`).
+    pub fn from_label(s: &str) -> Option<Self> {
+        match s {
+            "raw" => Some(ReadType::Raw),
+            "simplex" => Some(ReadType::Simplex),
+            "duplex" => Some(ReadType::Duplex),
+            _ => None,
+        }
+    }
+}
+
 /// How to extract family-size counts from a read's aux tags.
 ///
 /// The `pipeline` label is now free-text (any string the user supplies), so the
@@ -253,13 +265,41 @@ pub struct SampleMetricsRecord {
     pub read_type: ReadType,
     pub pipeline: Option<String>,
     pub input_checksum_sha256: Option<String>,
-    pub n_target_positions: i32,
-    pub n_target_positions_covered: i32,
+    // i64 (not i32): a genome-wide --targets set exceeds i32::MAX (~2.1e9) base
+    // positions, which the whole-genome duplex use case actually hits.
+    pub n_target_positions: i64,
+    pub n_target_positions_covered: i64,
     pub mean_target_depth_covered: Option<f32>,
     pub mean_target_depth_all: Option<f32>,
     pub median_target_depth_covered: Option<f32>,
     pub median_target_depth_all: Option<f32>,
     pub pct_fragment_bases_on_target: Option<f32>,
+}
+
+/// Combinable sufficient statistics for sample metrics over one interval shard,
+/// emitted by `geac collect --sample-metrics-partial`. Disjoint shards are merged
+/// by `geac aggregate-metrics` into a final [`SampleMetricsRecord`] that is exactly
+/// equal to an unsharded run — including medians, which are reconstructed from the
+/// covered-depth histogram (`hist_depth` / `hist_count`).
+#[derive(Debug, Clone)]
+pub struct SampleMetricsPartialRecord {
+    pub sample_id: String,
+    pub subject_id: Option<String>,
+    pub sample_type: Option<String>,
+    pub batch: Option<String>,
+    pub read_type: ReadType,
+    pub pipeline: Option<String>,
+    pub input_checksum_sha256: Option<String>,
+    /// Target positions within this shard (sum across shards is exact).
+    pub n_target_positions: i64,
+    /// Sum of pileup depth over all observed positions in the shard.
+    pub total_fragment_bases: i64,
+    /// Sum of pileup depth over on-target positions in the shard.
+    pub on_target_fragment_bases: i64,
+    /// Covered-target depth histogram: parallel arrays of distinct depth values and
+    /// their counts. Lossless, so median reconstructs exactly when histograms merge.
+    pub hist_depth: Vec<i32>,
+    pub hist_count: Vec<i64>,
 }
 
 /// PoN cross-annotation for a tumor alt locus.
