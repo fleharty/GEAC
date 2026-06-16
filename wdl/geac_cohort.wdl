@@ -164,40 +164,59 @@ workflow GeacCohort {
         # Variables declared inside `if` blocks are typed as optional (String?, File?)
         # in the enclosing scope, which is exactly what the Collect task expects.
         if (defined(sample_ids)) {
-            String this_sample_id    = select_first([sample_ids])[i]
+            String sample_id_set    = select_first([sample_ids])[i]
         }
         if (defined(subject_ids)) {
-            String this_subject_id   = select_first([subject_ids])[i]
+            String subject_id_set   = select_first([subject_ids])[i]
         }
         if (defined(sample_types)) {
-            String this_sample_type  = select_first([sample_types])[i]
+            String sample_type_set  = select_first([sample_types])[i]
         }
         if (defined(variants_tsvs)) {
-            File   this_variants_tsv = select_first([variants_tsvs])[i]
+            File   variants_tsv_set = select_first([variants_tsvs])[i]
         }
         if (defined(vcfs)) {
-            File   this_vcf          = select_first([vcfs])[i]
+            File   vcf_set          = select_first([vcfs])[i]
         }
         if (defined(vcf_indices)) {
-            File   this_vcf_index    = select_first([vcf_indices])[i]
+            File   vcf_index_set    = select_first([vcf_indices])[i]
         }
         String this_read_type = if defined(read_types) then select_first([read_types])[i] else "duplex"
         String this_pipeline  = if defined(pipelines)  then select_first([pipelines])[i]  else "fgbio"
         if (defined(batches)) {
-            String this_batch  = select_first([batches])[i]
+            String batch_set     = select_first([batches])[i]
         }
         if (defined(labels1)) {
-            String this_label1 = select_first([labels1])[i]
+            String label1_set    = select_first([labels1])[i]
         }
         if (defined(labels2)) {
-            String this_label2 = select_first([labels2])[i]
+            String label2_set    = select_first([labels2])[i]
         }
         if (defined(labels3)) {
-            String this_label3 = select_first([labels3])[i]
+            String label3_set    = select_first([labels3])[i]
         }
         if (defined(timepoints)) {
-            String this_timepoint = select_first([timepoints])[i]
+            String timepoint_set = select_first([timepoints])[i]
         }
+
+        # Hoist every conditional per-sample variable into a concrete, unconditional
+        # outer-scatter optional. A value declared inside `if (defined(...))` is bound
+        # only in that inner scope; referencing it as a call input inside the nested
+        # shard scatter (CollectShard) makes Cromwell promote it to a REQUIRED
+        # sub-workflow input and fail ("Failed to lookup input value for required
+        # input this_label3") when the source array is unset. Threading a plain
+        # outer-scope optional inward avoids that — same fix as targets/gnomad below.
+        String? this_sample_id    = sample_id_set
+        String? this_subject_id   = subject_id_set
+        String? this_sample_type  = sample_type_set
+        File?   this_variants_tsv = variants_tsv_set
+        File?   this_vcf          = vcf_set
+        File?   this_vcf_index    = vcf_index_set
+        String? this_batch        = batch_set
+        String? this_label1       = label1_set
+        String? this_label2       = label2_set
+        String? this_label3       = label3_set
+        String? this_timepoint    = timepoint_set
         String this_bam_uri = if defined(bam_uris) then select_first([bam_uris])[i] else input_bams[i]
         String this_bai_uri = if defined(bai_uris) then select_first([bai_uris])[i] else input_bam_indices[i]
 
@@ -217,6 +236,17 @@ workflow GeacCohort {
             select_first([gnomad_uri, if defined(gnomad) then gnomad else ""]),
             select_first([targets_uri, if defined(targets) then targets else ""]),
         ]
+
+        # Resolve all optional-derived values HERE, at the outer-scatter level (the
+        # same scope the original single-Collect call used). Computing `defined(...)`
+        # on optional workflow inputs inside the deeper shard scatter / conditional
+        # makes Cromwell treat those optionals as REQUIRED sub-workflow inputs and
+        # fail ("Failed to lookup input value for required input ...") when unset.
+        # Passing these concrete values inward avoids that.
+        Boolean this_has_targets        = defined(targets)
+        String? this_targets_uri        = if defined(targets_uri) then select_first([targets_uri]) else targets
+        String? this_gnomad_uri         = if defined(gnomad_uri) then select_first([gnomad_uri]) else gnomad
+        String? this_gnomad_index_uri   = if defined(gnomad_index_uri) then select_first([gnomad_index_uri]) else gnomad_index
 
         # ── Branch A: scatter this sample across interval shards ─────────────────
         # Each shard runs collect on its interval with --sample-metrics-partial; the

@@ -1220,3 +1220,41 @@ anomalous speed and an empty gene_stats TSV.
 **Lesson:** When adding a parser for a new tabular format, write a small unit test
 that asserts specific gene names, chromosomes, start, and end positions against a
 known two- or three-row fixture before running end-to-end.
+
+---
+
+## Conditionally-scoped WDL vars trip Cromwell inside nested scatters (2026-06-16)
+
+**Symptom:** A Terra/Cromwell run of `geac_cohort.wdl` (with interval-scatter
+enabled) failed before launching tasks with:
+`Failed to evaluate input 'this_label3' (reason 1 of 1): Failed to lookup input
+value for required input this_label3`.
+
+**Root cause:** `this_label3` (and the sibling per-sample metadata vars
+`this_sample_id`, `this_subject_id`, `this_sample_type`, `this_variants_tsv`,
+`this_vcf`, `this_vcf_index`, `this_batch`, `this_label1/2`, `this_timepoint`) was
+declared *inside* an `if (defined(labels3)) { ... }` block, so it was bound only in
+that inner conditional scope. The interval-scatter feature (v0.4.50) added a nested
+`if (defined(scatter_interval_list))` + `scatter (shard in shard_beds)` containing
+the `CollectShard` call. Passing a conditionally-scoped variable as an input to a
+call inside that nested scatter makes Cromwell promote it to a **required
+sub-workflow input** and fail to resolve it when the source array (`labels3`) was
+not supplied. miniwdl accepts the same WDL — this only manifests on Cromwell.
+
+**Why it surfaced now:** The same class of bug was fixed twice just before, for
+`SplitIntervals.shards` (`fa6e79c`) and `region_bed` (`7a48a28`), and the comment
+at `geac_cohort.wdl` already documented it for `targets`/`gnomad` — but the
+label/metadata vars never got the same treatment. They only became reachable from a
+nested scatter when interval-scatter was added.
+
+**Fix:** Hoist each conditionally-declared per-sample variable into a concrete,
+**unconditional** outer-scatter optional (`String? this_label3 = label3_set`, where
+`label3_set` is the inner `if`-scoped value). The unconditional outer-scope optional
+threads into the nested `CollectShard` scatter cleanly. WDL-only; no binary/Docker
+change.
+
+**Lesson:** On Cromwell, never pass an `if (defined(...))`-scoped variable directly
+as a call input inside a nested scatter/conditional — it gets treated as a required
+input. Resolve optional-derived per-sample values into unconditional outer-scope
+`String?`/`File?` declarations first, then thread those inward. miniwdl will not
+catch this; validate scatter-bearing WDL against Cromwell semantics.
