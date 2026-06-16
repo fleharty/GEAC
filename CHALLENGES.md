@@ -1247,14 +1247,35 @@ at `geac_cohort.wdl` already documented it for `targets`/`gnomad` — but the
 label/metadata vars never got the same treatment. They only became reachable from a
 nested scatter when interval-scatter was added.
 
-**Fix:** Hoist each conditionally-declared per-sample variable into a concrete,
-**unconditional** outer-scatter optional (`String? this_label3 = label3_set`, where
-`label3_set` is the inner `if`-scoped value). The unconditional outer-scope optional
-threads into the nested `CollectShard` scatter cleanly. WDL-only; no binary/Docker
-change.
+**First fix (insufficient):** Hoisted each var into an *unconditional* outer-scatter
+**optional** (`String? this_label3 = label3_set`). This did NOT work — the run then
+failed identically on `this_label2`. An optional whose value is only conditionally
+bound is still unresolvable at the sub-workflow boundary; Cromwell can supply a
+*workflow-input* optional (e.g. `gnomad`, declared in `input {}`) as null, but not a
+scatter-level optional. The distinction is input-optional (resolvable) vs
+scatter-level-optional (not), not conditional-block vs bare declaration.
 
-**Lesson:** On Cromwell, never pass an `if (defined(...))`-scoped variable directly
-as a call input inside a nested scatter/conditional — it gets treated as a required
-input. Resolve optional-derived per-sample values into unconditional outer-scope
-`String?`/`File?` declarations first, then thread those inward. miniwdl will not
-catch this; validate scatter-bearing WDL against Cromwell semantics.
+**Actual fix:** Make every value passed into the nested `CollectShard` call
+**concrete and non-optional** — the pattern already proven by `this_read_type` /
+`this_pipeline` (non-optional ternaries passed into the same call without error):
+- **String metadata** → non-optional with an empty-string sentinel
+  (`String this_label3 = if defined(labels3) then select_first([labels3])[i] else ""`);
+  the `Collect`/`Fragments` tasks change `String? x` → `String x = ""` and their
+  command lines to `~{if x != "" then "--flag " + x else ""}` so empty means "omit".
+- **File metadata** (`variants_tsv`, `vcf`, `vcf_index`) → pass a non-optional File
+  that falls back to a tiny placeholder (`reference_fasta_index`, the `.fai`) plus a
+  `*_present` Boolean flag; the task command guards the flag
+  (`~{if vcf_present then "--vcf " + vcf else ""}`) so the placeholder is never read.
+  This keeps any null File from crossing the boundary without localizing a large
+  dummy file.
+
+WDL-only; binary/Docker image unchanged.
+
+**Lesson:** On Cromwell, the only values that thread cleanly into a nested
+scatter/conditional (a sub-workflow) are workflow-`input{}` optionals and concrete
+non-optional values. A scatter-level *optional* — even hoisted out of its `if`
+block — is treated as a required sub-workflow input and fails when unset. For
+per-sample optionals derived inside a scatter, resolve them to non-optionals
+(empty-string sentinel for String; present-flag + placeholder for File) before
+passing them inward. miniwdl does NOT catch this (it accepts the optional form);
+only Cromwell's sub-workflow input evaluation does.

@@ -160,79 +160,51 @@ workflow GeacCohort {
 
     scatter (i in range(length(input_bams))) {
 
-        # Safely index into optional per-sample arrays.
-        # Variables declared inside `if` blocks are typed as optional (String?, File?)
-        # in the enclosing scope, which is exactly what the Collect task expects.
-        if (defined(sample_ids)) {
-            String sample_id_set    = select_first([sample_ids])[i]
-        }
-        if (defined(subject_ids)) {
-            String subject_id_set   = select_first([subject_ids])[i]
-        }
-        if (defined(sample_types)) {
-            String sample_type_set  = select_first([sample_types])[i]
-        }
-        if (defined(variants_tsvs)) {
-            File   variants_tsv_set = select_first([variants_tsvs])[i]
-        }
-        if (defined(vcfs)) {
-            File   vcf_set          = select_first([vcfs])[i]
-        }
-        if (defined(vcf_indices)) {
-            File   vcf_index_set    = select_first([vcf_indices])[i]
-        }
-        String this_read_type = if defined(read_types) then select_first([read_types])[i] else "duplex"
-        String this_pipeline  = if defined(pipelines)  then select_first([pipelines])[i]  else "fgbio"
-        if (defined(batches)) {
-            String batch_set     = select_first([batches])[i]
-        }
-        if (defined(labels1)) {
-            String label1_set    = select_first([labels1])[i]
-        }
-        if (defined(labels2)) {
-            String label2_set    = select_first([labels2])[i]
-        }
-        if (defined(labels3)) {
-            String label3_set    = select_first([labels3])[i]
-        }
-        if (defined(timepoints)) {
-            String timepoint_set = select_first([timepoints])[i]
-        }
+        # Resolve every optional per-sample array into a CONCRETE, non-optional value
+        # at the outer-scatter level. Passing an optional value (whether from an `if`
+        # block or a bare `String?` declaration) as a call input into the nested shard
+        # scatter makes Cromwell promote it to a REQUIRED sub-workflow input and fail
+        # ("Failed to lookup input value for required input this_label3") when the
+        # source array is unset — a workflow-input optional like `gnomad` resolves
+        # fine, but a scatter-level optional does not. Non-optional values thread in
+        # cleanly, same as this_read_type / this_pipeline below. Strings use an empty
+        # sentinel (the Collect/Fragments tasks skip empty flags); Files use a
+        # present-flag + placeholder so no null File crosses the boundary.
+        String this_sample_id   = if defined(sample_ids)   then select_first([sample_ids])[i]   else ""
+        String this_subject_id  = if defined(subject_ids)  then select_first([subject_ids])[i]  else ""
+        String this_sample_type = if defined(sample_types) then select_first([sample_types])[i] else ""
+        String this_read_type   = if defined(read_types)   then select_first([read_types])[i]   else "duplex"
+        String this_pipeline    = if defined(pipelines)    then select_first([pipelines])[i]    else "fgbio"
+        String this_batch       = if defined(batches)      then select_first([batches])[i]      else ""
+        String this_label1      = if defined(labels1)      then select_first([labels1])[i]      else ""
+        String this_label2      = if defined(labels2)      then select_first([labels2])[i]      else ""
+        String this_label3      = if defined(labels3)      then select_first([labels3])[i]      else ""
+        String this_timepoint   = if defined(timepoints)   then select_first([timepoints])[i]   else ""
 
-        # Hoist every conditional per-sample variable into a concrete, unconditional
-        # outer-scatter optional. A value declared inside `if (defined(...))` is bound
-        # only in that inner scope; referencing it as a call input inside the nested
-        # shard scatter (CollectShard) makes Cromwell promote it to a REQUIRED
-        # sub-workflow input and fail ("Failed to lookup input value for required
-        # input this_label3") when the source array is unset. Threading a plain
-        # outer-scope optional inward avoids that — same fix as targets/gnomad below.
-        String? this_sample_id    = sample_id_set
-        String? this_subject_id   = subject_id_set
-        String? this_sample_type  = sample_type_set
-        File?   this_variants_tsv = variants_tsv_set
-        File?   this_vcf          = vcf_set
-        File?   this_vcf_index    = vcf_index_set
-        String? this_batch        = batch_set
-        String? this_label1       = label1_set
-        String? this_label2       = label2_set
-        String? this_label3       = label3_set
-        String? this_timepoint    = timepoint_set
+        # File metadata: pass a present-flag plus a placeholder file (the tiny .fai,
+        # never read when the flag is false) so no optional/null File crosses the
+        # nested-scatter sub-workflow boundary.
+        Boolean has_variants_tsv = defined(variants_tsvs)
+        Boolean has_vcf          = defined(vcfs)
+        File this_variants_tsv = if defined(variants_tsvs) then select_first([variants_tsvs])[i] else reference_fasta_index
+        File this_vcf          = if defined(vcfs)          then select_first([vcfs])[i]          else reference_fasta_index
+        File this_vcf_index    = if defined(vcf_indices)   then select_first([vcf_indices])[i]   else reference_fasta_index
         String this_bam_uri = if defined(bam_uris) then select_first([bam_uris])[i] else input_bams[i]
         String this_bai_uri = if defined(bai_uris) then select_first([bai_uris])[i] else input_bam_indices[i]
 
         Array[String] manifest_row = [
             this_bam_uri,
             this_bai_uri,
-            select_first([this_sample_id, ""]),
-            select_first([this_subject_id, ""]),
-            select_first([this_sample_type, ""]),
-            select_first([this_batch, ""]),
+            this_sample_id,
+            this_subject_id,
+            this_sample_type,
+            this_batch,
             this_read_type,
             this_pipeline,
-            select_first([this_label1, ""]),
-            select_first([this_label2, ""]),
-            select_first([this_label3, ""]),
-            select_first([this_timepoint, ""]),
+            this_label1,
+            this_label2,
+            this_label3,
+            this_timepoint,
             select_first([gnomad_uri, if defined(gnomad) then gnomad else ""]),
             select_first([targets_uri, if defined(targets) then targets else ""]),
         ]
@@ -271,7 +243,9 @@ workflow GeacCohort {
                         subject_id            = this_subject_id,
                         sample_type           = this_sample_type,
                         variants_tsv          = this_variants_tsv,
+                        variants_tsv_present  = has_variants_tsv,
                         vcf                   = this_vcf,
+                        vcf_present           = has_vcf,
                         vcf_index             = this_vcf_index,
                         gnomad                = gnomad,
                         gnomad_index          = gnomad_index,
@@ -342,7 +316,9 @@ workflow GeacCohort {
                     subject_id            = this_subject_id,
                     sample_type           = this_sample_type,
                     variants_tsv          = this_variants_tsv,
+                    variants_tsv_present  = has_variants_tsv,
                     vcf                   = this_vcf,
+                    vcf_present           = has_vcf,
                     vcf_index             = this_vcf_index,
                     gnomad                = gnomad,
                     gnomad_index          = gnomad_index,
@@ -450,17 +426,24 @@ task Collect {
         String pipeline
 
         String? family_size_tags
-        String? sample_id
-        String? subject_id
-        String? sample_type
-        String? batch
-        String? label1
-        String? label2
-        String? label3
-        String? timepoint
-        File?   variants_tsv
-        File?   vcf
-        File?   vcf_index
+        # Per-sample string metadata: empty string means "omit this flag" (the
+        # workflow passes "" when the source array is unset; see note in the scatter).
+        String  sample_id   = ""
+        String  subject_id  = ""
+        String  sample_type = ""
+        String  batch       = ""
+        String  label1      = ""
+        String  label2      = ""
+        String  label3      = ""
+        String  timepoint   = ""
+        # Per-sample File metadata: *_present guards whether the file is real (the
+        # workflow passes a placeholder .fai when the source array is unset, so no
+        # null File crosses the nested-scatter sub-workflow boundary).
+        File    variants_tsv
+        Boolean variants_tsv_present = false
+        File    vcf
+        Boolean vcf_present          = false
+        File    vcf_index
         File?   gnomad
         File?   gnomad_index
         String  gnomad_af_field
@@ -515,16 +498,16 @@ task Collect {
             --min-base-qual    ~{min_base_qual} \
             --min-map-qual     ~{min_map_qual} \
             --max-pileup-depth ~{max_pileup_depth} \
-            ~{"--sample-id "        + sample_id} \
-            ~{"--subject-id "       + subject_id} \
-            ~{"--sample-type "      + sample_type} \
-            ~{"--batch "            + batch} \
-            ~{"--label1 "           + label1} \
-            ~{"--label2 "           + label2} \
-            ~{"--label3 "           + label3} \
-            ~{"--timepoint "        + timepoint} \
-            ~{"--vcf "              + vcf} \
-            ~{"--variants-tsv "     + variants_tsv} \
+            ~{if sample_id   != "" then "--sample-id "   + sample_id   else ""} \
+            ~{if subject_id  != "" then "--subject-id "  + subject_id  else ""} \
+            ~{if sample_type != "" then "--sample-type " + sample_type else ""} \
+            ~{if batch       != "" then "--batch "       + batch       else ""} \
+            ~{if label1      != "" then "--label1 "      + label1      else ""} \
+            ~{if label2      != "" then "--label2 "      + label2      else ""} \
+            ~{if label3      != "" then "--label3 "      + label3      else ""} \
+            ~{if timepoint   != "" then "--timepoint "   + timepoint   else ""} \
+            ~{if vcf_present          then "--vcf "          + vcf          else ""} \
+            ~{if variants_tsv_present then "--variants-tsv " + variants_tsv else ""} \
             ~{"--gnomad "           + gnomad} \
             ~{"--gnomad-uri "       + gnomad_uri} \
             ~{"--gnomad-index-uri " + gnomad_index_uri} \
@@ -689,14 +672,14 @@ task Fragments {
         String read_type
         String pipeline
 
-        String? sample_id
-        String? subject_id
-        String? sample_type
-        String? batch
-        String? label1
-        String? label2
-        String? label3
-        String? timepoint
+        String  sample_id   = ""
+        String  subject_id  = ""
+        String  sample_type = ""
+        String  batch       = ""
+        String  label1      = ""
+        String  label2      = ""
+        String  label3      = ""
+        String  timepoint   = ""
         String? region
         Int     min_map_qual
 
@@ -720,14 +703,14 @@ task Fragments {
             --read-type        ~{read_type} \
             --pipeline         ~{pipeline} \
             --min-map-qual     ~{min_map_qual} \
-            ~{"--sample-id "   + sample_id} \
-            ~{"--subject-id "  + subject_id} \
-            ~{"--sample-type " + sample_type} \
-            ~{"--batch "       + batch} \
-            ~{"--label1 "      + label1} \
-            ~{"--label2 "      + label2} \
-            ~{"--label3 "      + label3} \
-            ~{"--timepoint "   + timepoint} \
+            ~{if sample_id   != "" then "--sample-id "   + sample_id   else ""} \
+            ~{if subject_id  != "" then "--subject-id "  + subject_id  else ""} \
+            ~{if sample_type != "" then "--sample-type " + sample_type else ""} \
+            ~{if batch       != "" then "--batch "       + batch       else ""} \
+            ~{if label1      != "" then "--label1 "      + label1      else ""} \
+            ~{if label2      != "" then "--label2 "      + label2      else ""} \
+            ~{if label3      != "" then "--label3 "      + label3      else ""} \
+            ~{if timepoint   != "" then "--timepoint "   + timepoint   else ""} \
             ~{"--region "      + region}
     >>>
 
