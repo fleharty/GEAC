@@ -152,6 +152,12 @@ workflow GeacCohort {
         }
     }
 
+    # Hoist the conditional task output into a concrete workflow-level Array[File]
+    # (empty when not scattering). Referencing an optional call output from inside a
+    # nested scatter trips Cromwell's sub-workflow input evaluation; a plain
+    # Array[File] threads in cleanly.
+    Array[File] shard_beds = select_first([SplitIntervals.shards, []])
+
     scatter (i in range(length(input_bams))) {
 
         # Safely index into optional per-sample arrays.
@@ -216,7 +222,7 @@ workflow GeacCohort {
         # Each shard runs collect on its interval with --sample-metrics-partial; the
         # per-shard partial metrics are aggregated back into one exact row per sample.
         if (defined(scatter_interval_list)) {
-            scatter (shard in select_first([SplitIntervals.shards])) {
+            scatter (shard in shard_beds) {
                 call Collect as CollectShard {
                     input:
                         input_bam             = input_bams[i],
@@ -341,10 +347,12 @@ workflow GeacCohort {
             Array[File] b_metrics = CollectWhole.sample_metrics_parquets
         }
 
-        # Unify the two mutually-exclusive branches into per-sample arrays.
-        Array[File] sample_loci    = select_first([a_loci, b_loci])
-        Array[File] sample_reads   = select_first([a_reads, b_reads])
-        Array[File] sample_metrics = select_first([a_metrics, b_metrics])
+        # Unify the two mutually-exclusive branches into per-sample arrays. Exactly
+        # one branch is defined; select_all drops the null branch and flatten yields
+        # its contents (more robust than select_first, which throws if both are null).
+        Array[File] sample_loci    = flatten(select_all([a_loci, b_loci]))
+        Array[File] sample_reads   = flatten(select_all([a_reads, b_reads]))
+        Array[File] sample_metrics = flatten(select_all([a_metrics, b_metrics]))
 
         if (run_fragments) {
             call Fragments {
