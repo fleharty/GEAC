@@ -158,6 +158,25 @@ workflow GeacCohort {
     # Array[File] threads in cleanly.
     Array[File] shard_beds = select_first([SplitIntervals.shards, []])
 
+    # Resolve every cohort-level optional input into a CONCRETE value + presence flag
+    # ONCE, here at workflow scope. Cromwell compiles the nested shard scatter
+    # (CollectShard) as a sub-workflow and treats ANY optional sub-workflow input as
+    # REQUIRED — failing ("Failed to lookup input value for required input <x>") when
+    # the input is unset. Only concrete non-optionals thread in cleanly. Files fall
+    # back to the tiny .fai placeholder (never read when the *_present flag is false);
+    # strings fall back to "" (the task omits the flag when empty).
+    Boolean has_gnomad           = defined(gnomad)
+    Boolean has_targets          = defined(targets)
+    Boolean has_gene_annotations = defined(gene_annotations)
+    File gnomad_file           = if defined(gnomad)           then select_first([gnomad])           else reference_fasta_index
+    File gnomad_index_file     = if defined(gnomad_index)     then select_first([gnomad_index])     else reference_fasta_index
+    File targets_file          = if defined(targets)          then select_first([targets])          else reference_fasta_index
+    File gene_annotations_file = if defined(gene_annotations) then select_first([gene_annotations]) else reference_fasta_index
+    String family_size_tags_str = if defined(family_size_tags) then select_first([family_size_tags]) else ""
+    String gnomad_uri_str       = if defined(gnomad_uri)       then select_first([gnomad_uri])       else if defined(gnomad)       then select_first([gnomad])       else ""
+    String gnomad_index_uri_str = if defined(gnomad_index_uri) then select_first([gnomad_index_uri]) else if defined(gnomad_index) then select_first([gnomad_index]) else ""
+    String targets_uri_str      = if defined(targets_uri)      then select_first([targets_uri])      else if defined(targets)      then select_first([targets])      else ""
+
     scatter (i in range(length(input_bams))) {
 
         # Resolve every optional per-sample array into a CONCRETE, non-optional value
@@ -209,17 +228,6 @@ workflow GeacCohort {
             select_first([targets_uri, if defined(targets) then targets else ""]),
         ]
 
-        # Resolve all optional-derived values HERE, at the outer-scatter level (the
-        # same scope the original single-Collect call used). Computing `defined(...)`
-        # on optional workflow inputs inside the deeper shard scatter / conditional
-        # makes Cromwell treat those optionals as REQUIRED sub-workflow inputs and
-        # fail ("Failed to lookup input value for required input ...") when unset.
-        # Passing these concrete values inward avoids that.
-        Boolean this_has_targets        = defined(targets)
-        String? this_targets_uri        = if defined(targets_uri) then select_first([targets_uri]) else targets
-        String? this_gnomad_uri         = if defined(gnomad_uri) then select_first([gnomad_uri]) else gnomad
-        String? this_gnomad_index_uri   = if defined(gnomad_index_uri) then select_first([gnomad_index_uri]) else gnomad_index
-
         # ── Branch A: scatter this sample across interval shards ─────────────────
         # Each shard runs collect on its interval with --sample-metrics-partial; the
         # per-shard partial metrics are aggregated back into one exact row per sample.
@@ -233,7 +241,7 @@ workflow GeacCohort {
                         reference_fasta_index = reference_fasta_index,
                         read_type             = this_read_type,
                         pipeline              = this_pipeline,
-                        family_size_tags      = family_size_tags,
+                        family_size_tags      = family_size_tags_str,
                         batch                 = this_batch,
                         label1                = this_label1,
                         label2                = this_label2,
@@ -247,16 +255,19 @@ workflow GeacCohort {
                         vcf                   = this_vcf,
                         vcf_present           = has_vcf,
                         vcf_index             = this_vcf_index,
-                        gnomad                = gnomad,
-                        gnomad_index          = gnomad_index,
-                        gnomad_uri            = if defined(gnomad_uri) then select_first([gnomad_uri]) else gnomad,
-                        gnomad_index_uri      = if defined(gnomad_index_uri) then select_first([gnomad_index_uri]) else gnomad_index,
+                        gnomad                = gnomad_file,
+                        gnomad_present        = has_gnomad,
+                        gnomad_index          = gnomad_index_file,
+                        gnomad_uri            = gnomad_uri_str,
+                        gnomad_index_uri      = gnomad_index_uri_str,
                         gnomad_af_field       = gnomad_af_field,
-                        targets               = targets,
-                        targets_uri           = if defined(targets_uri) then select_first([targets_uri]) else targets,
-                        gene_annotations      = gene_annotations,
+                        targets               = targets_file,
+                        targets_present       = has_targets,
+                        targets_uri           = targets_uri_str,
+                        gene_annotations      = gene_annotations_file,
+                        gene_annotations_present = has_gene_annotations,
                         region_bed            = shard,
-                        sample_metrics_partial = defined(targets),
+                        sample_metrics_partial = has_targets,
                         repeat_window         = repeat_window,
                         min_base_qual         = min_base_qual,
                         min_map_qual          = min_map_qual,
@@ -277,7 +288,7 @@ workflow GeacCohort {
                 }
             }
 
-            if (defined(targets)) {
+            if (has_targets) {
                 call AggregateMetrics {
                     input:
                         partial_parquets = flatten(CollectShard.sample_metrics_partial_parquets),
@@ -306,7 +317,7 @@ workflow GeacCohort {
                     reference_fasta_index = reference_fasta_index,
                     read_type             = this_read_type,
                     pipeline              = this_pipeline,
-                    family_size_tags      = family_size_tags,
+                    family_size_tags      = family_size_tags_str,
                     batch                 = this_batch,
                     label1                = this_label1,
                     label2                = this_label2,
@@ -320,14 +331,17 @@ workflow GeacCohort {
                     vcf                   = this_vcf,
                     vcf_present           = has_vcf,
                     vcf_index             = this_vcf_index,
-                    gnomad                = gnomad,
-                    gnomad_index          = gnomad_index,
-                    gnomad_uri            = if defined(gnomad_uri) then select_first([gnomad_uri]) else gnomad,
-                    gnomad_index_uri      = if defined(gnomad_index_uri) then select_first([gnomad_index_uri]) else gnomad_index,
+                    gnomad                = gnomad_file,
+                    gnomad_present        = has_gnomad,
+                    gnomad_index          = gnomad_index_file,
+                    gnomad_uri            = gnomad_uri_str,
+                    gnomad_index_uri      = gnomad_index_uri_str,
                     gnomad_af_field       = gnomad_af_field,
-                    targets               = targets,
-                    targets_uri           = if defined(targets_uri) then select_first([targets_uri]) else targets,
-                    gene_annotations      = gene_annotations,
+                    targets               = targets_file,
+                    targets_present       = has_targets,
+                    targets_uri           = targets_uri_str,
+                    gene_annotations      = gene_annotations_file,
+                    gene_annotations_present = has_gene_annotations,
                     region                = region,
                     sample_metrics_partial = false,
                     repeat_window         = repeat_window,
@@ -425,7 +439,8 @@ task Collect {
         String read_type
         String pipeline
 
-        String? family_size_tags
+        # Empty string means "omit this flag" (the workflow passes "" when unset).
+        String  family_size_tags = ""
         # Per-sample string metadata: empty string means "omit this flag" (the
         # workflow passes "" when the source array is unset; see note in the scatter).
         String  sample_id   = ""
@@ -444,11 +459,17 @@ task Collect {
         File    vcf
         Boolean vcf_present          = false
         File    vcf_index
-        File?   gnomad
-        File?   gnomad_index
+        # Cohort-level File inputs follow the same present-flag + placeholder scheme as
+        # the per-sample files above (gnomad_index has no flag — it is localized beside
+        # gnomad but never named on the command line).
+        File    gnomad
+        Boolean gnomad_present          = false
+        File    gnomad_index
         String  gnomad_af_field
-        File?   targets
-        File?   gene_annotations
+        File    targets
+        Boolean targets_present         = false
+        File    gene_annotations
+        Boolean gene_annotations_present = false
         String? region
         # A BED/interval-list passed as a File so Cromwell localizes it into the
         # task (a File bound to a String input is NOT localized). Used for shard
@@ -470,9 +491,9 @@ task Collect {
 
         String? bam_uri
         String? bai_uri
-        String? gnomad_uri
-        String? gnomad_index_uri
-        String? targets_uri
+        String  gnomad_uri       = ""
+        String  gnomad_index_uri = ""
+        String  targets_uri      = ""
 
         String docker_image
         Int    memory_gb
@@ -494,7 +515,7 @@ task Collect {
             --output           ~{output_arg} \
             --read-type        ~{read_type} \
             --pipeline         ~{pipeline} \
-            ~{"--family-size-tags " + family_size_tags} \
+            ~{if family_size_tags != "" then "--family-size-tags " + family_size_tags else ""} \
             --min-base-qual    ~{min_base_qual} \
             --min-map-qual     ~{min_map_qual} \
             --max-pileup-depth ~{max_pileup_depth} \
@@ -508,13 +529,13 @@ task Collect {
             ~{if timepoint   != "" then "--timepoint "   + timepoint   else ""} \
             ~{if vcf_present          then "--vcf "          + vcf          else ""} \
             ~{if variants_tsv_present then "--variants-tsv " + variants_tsv else ""} \
-            ~{"--gnomad "           + gnomad} \
-            ~{"--gnomad-uri "       + gnomad_uri} \
-            ~{"--gnomad-index-uri " + gnomad_index_uri} \
-            ~{if defined(gnomad) then "--gnomad-af-field " + gnomad_af_field else ""} \
-            ~{"--targets "          + targets} \
-            ~{"--targets-uri "      + targets_uri} \
-            ~{"--gene-annotations " + gene_annotations} \
+            ~{if gnomad_present then "--gnomad " + gnomad else ""} \
+            ~{if gnomad_uri       != "" then "--gnomad-uri "       + gnomad_uri       else ""} \
+            ~{if gnomad_index_uri != "" then "--gnomad-index-uri " + gnomad_index_uri else ""} \
+            ~{if gnomad_present then "--gnomad-af-field " + gnomad_af_field else ""} \
+            ~{if targets_present then "--targets " + targets else ""} \
+            ~{if targets_uri      != "" then "--targets-uri "      + targets_uri      else ""} \
+            ~{if gene_annotations_present then "--gene-annotations " + gene_annotations else ""} \
             ~{if defined(region_bed) then "--region " + region_bed else if defined(region) then "--region " + region else ""} \
             --repeat-window ~{repeat_window} \
             ~{if include_duplicates    then "--include-duplicates"    else ""} \
