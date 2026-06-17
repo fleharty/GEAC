@@ -1600,12 +1600,12 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 continue;
             }
             let label = fusion_pair_label(r.pair_key, &index.gene_names);
-            let same_locus = breakpoint_stats.get(&label).is_some_and(|s| {
-                match (s.bp_a, s.bp_b) {
+            let same_locus = breakpoint_stats
+                .get(&label)
+                .is_some_and(|s| match (s.bp_a, s.bp_b) {
                     (Some(a), Some(b)) => s.chrom_a == s.chrom_b && (a - b).abs() < min_dist as f64,
                     _ => false,
-                }
-            });
+                });
             if same_locus {
                 r.filter = "samelocus".to_string();
                 flagged += 1;
