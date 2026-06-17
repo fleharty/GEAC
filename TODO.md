@@ -266,25 +266,6 @@ as a bait-bias signal. Design context in `docs/DEVELOPMENT_LOG.md`.
 Full design, rationale, and the niche this caller aims to own are in
 `docs/FUSION_DEVELOPMENT.md`. The highest-value next items (Tier 1, specificity):
 
-### ⚠ Uncommitted in working tree (FL layout tag + shared renderer) — 2026-06-13
-
-Done and verified but **not yet committed** (`git status`: `src/fusions.rs`,
-`src/diagnose_fusion.rs`, `src/kmer.rs`, `docs/EXPERIMENTAL.md`). Two layered pieces:
-
-- **`FL` BAM tag** (pre-existing this session's start): `fusions --reads-output` now
-  tags each evidence read with `FL:Z:<track>`, the per-k-mer-window A/B/N/. layout
-  against its `FX` pair — same string as `diagnose-fusion`'s `layout_5to3`.
-- **This session:** (1) tightened the `5'→3'` wording in `docs/EXPERIMENTAL.md` to
-  `reference 5'→3'` (BAM `SEQ` orientation) and added a reverse-strand note; (2)
-  factored the two duplicate layout implementations into shared
-  `kmer::render_layout_track` + `kmer::non_acgt_positions` so the `FL` tag and
-  `layout_5to3` can't drift — both `fusion_layout_track` and `ReadEvidence::layout`
-  now delegate. Added direct unit tests in `kmer.rs`.
-
-Verified: `cargo build --release` clean, `cargo test` = 45 integration + all unit
-tests pass (incl. 5 layout tests); no new clippy warnings. **Next:** review the diff
-and commit (it sits on top of the FL-tag work). Nothing blocks it.
-
 ### ▶ Resume here — FP diagnostics (updated 2026-06-12)
 
 **Where we are.** v0.4.45 shipped tooling to attribute false `GENEA::GENEB` calls to
@@ -312,18 +293,32 @@ repeat).
 - [ ] Use the swept table to pick per-panel thresholds, then feed them back into the
   **"Reduce FP fusion calls"** item below (and ultimately into `fusions` filter defaults).
 
-- [ ] **Overlap / adjacency filter** — reject pairs whose annotated gene bodies overlap
-  or sit within X bp, or whose breakpoints are same-chromosome within X bp.
+- [ ] **Overlap / adjacency filter — gene-body form** (breakpoint form shipped). The
+  breakpoint form is done: `--min-breakpoint-distance` tags `filter=samelocus` when both
+  breakpoints are same-chromosome within X bp (catches single-locus paralog leakage, e.g.
+  GNA12→GNA13::GNA11; see `docs/DEVELOPMENT_LOG.md` 2026-06-17). Still open: the
+  complementary *annotated-gene-body-overlap* check — reject pairs whose gene bodies
+  overlap or sit within X bp, using the gene coordinates already in the index, as an
+  upstream filter that does not depend on having spanning reads / a second BAM pass.
+- [ ] **Fusion filter `chimera`/`samelocus`: drop vs tag for production.** Both
+  breakpoint filters currently *tag* `filter` (rows kept), matching the PoN convention.
+  Decide whether production should drop these rows instead (or have `geac merge` / the
+  Explorer exclude non-`PASS` by default), so downstream consumers don't have to filter
+  manually. Low-risk either way; needs a product decision, not new mechanism.
 - [ ] **Split-read vs discordant-pair separation** — report `split_reads` and
   `discordant_mates` as distinct columns.
 - [ ] **VAF-like quantification** — supporting reads as a fraction of local depth;
   gates the longitudinal low-AF monitoring niche.
-- [ ] **Reduce FP fusion calls** — currently producing too many false positives on
-  real targeted panel data to be clinically useful. Needs systematic investigation:
-  run the caller on cell line BAMs (raw, simplex, duplex), catalog the FP calls,
-  identify common patterns (gene pair recurrence, low supporting read count, poor
-  k-mer uniqueness, same-chromosome proximity, probe-capture artifacts), and tighten
-  filters accordingly. This must be resolved before benchmarking is meaningful.
+- [ ] **Reduce FP fusion calls — broaden validation & set defaults.** Two mechanism-level
+  specificity filters now ship (`--max-breakpoint-std`/`--min-breakpoint-reads` →
+  `chimera`; `--min-breakpoint-distance` → `samelocus`) and gave clean separation on the
+  validation sample (1 real PASS / 533–1252 artifacts tagged; 0/1177 in a normal). No PoN.
+  Root causes confirmed: chimeric molecules (scattered breakpoints) + unindexed-paralog
+  leakage (GNA12; single-locus co-located breakpoints), *not* index k-mer leakage. Still
+  open: (a) validate on more cell-line BAMs (raw/simplex/duplex) and read-types to confirm
+  the thresholds (`std 10`, `reads 5`, `distance 10000`) generalize; (b) decide whether to
+  make the filters **on-by-default** with those values vs. opt-in as now; (c) feed any
+  `diagnose-fusion --summary-tsv` sweep results back in. This gates benchmarking.
 - [ ] **Benchmarking harness** — once FP rate is acceptable: ground truth manifest
   of known fusions per cell line sample (gene pairs, confidence tier, known
   complications); WDL runner on Terra against cell line BAMs in GCS; scoring script

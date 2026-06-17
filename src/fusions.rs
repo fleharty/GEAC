@@ -506,6 +506,99 @@ fn std_dev_i64(values: &[i64]) -> Option<f64> {
     Some(variance.sqrt())
 }
 
+/// Per-fusion breakpoint consensus, derived from the spanning reads collected in a
+/// `BreakpointAccumulator`. Drives both the breakpoints TSV and the
+/// `--max-breakpoint-std` filter. `bp_*_std` is `None` when fewer than two reads
+/// support that side (a standard deviation is undefined), which the consensus filter
+/// treats as a failure.
+struct BreakpointStats {
+    gene_a_idx: u32,
+    gene_b_idx: u32,
+    chrom_a: String,
+    chrom_b: String,
+    bp_a: Option<f64>,
+    bp_a_n: usize,
+    bp_a_std: Option<f64>,
+    bp_b: Option<f64>,
+    bp_b_n: usize,
+    bp_b_std: Option<f64>,
+    n_spanning: usize,
+}
+
+/// Estimate both breakpoints and their dispersion from one fusion's spanning reads.
+/// Each spanning read votes a position for whichever side(s) its alignment chromosome
+/// matches; the median is the breakpoint and the standard deviation is the consensus
+/// tightness. A real junction yields a tight cluster (std ~ a few bp); scattered
+/// estimates (std in the thousands+) indicate paralog/chimera artifacts.
+fn compute_breakpoint_stats(
+    acc: &BreakpointAccumulator,
+    index: &FusionIndex,
+    k: usize,
+) -> BreakpointStats {
+    // Most-voted chromosome, ties broken by lexicographically smallest name so the
+    // choice is deterministic. Falls back to the gene's annotated chromosome when no
+    // single-gene reads voted (e.g. every supporting read spans the junction).
+    let modal_chrom = |votes: &HashMap<String, u32>, fallback: &str| -> String {
+        votes
+            .iter()
+            .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+            .map(|(c, _)| c.clone())
+            .unwrap_or_else(|| fallback.to_string())
+    };
+    let chrom_a = modal_chrom(
+        &acc.gene_a_chrom_votes,
+        &index.gene_chroms[acc.gene_a_idx as usize],
+    );
+    let chrom_b = modal_chrom(
+        &acc.gene_b_chrom_votes,
+        &index.gene_chroms[acc.gene_b_idx as usize],
+    );
+
+    let mut bp_a_estimates: Vec<i64> = Vec::new();
+    let mut bp_b_estimates: Vec<i64> = Vec::new();
+    for sd in &acc.spanning_reads {
+        let a_before_b = sd.first_a < sd.first_b;
+        if sd.chrom == chrom_a {
+            let est = if a_before_b {
+                sd.pos + sd.last_a as i64 + k as i64
+            } else {
+                sd.pos + sd.first_a as i64
+            };
+            bp_a_estimates.push(est);
+        }
+        if sd.chrom == chrom_b {
+            let est = if a_before_b {
+                sd.pos + sd.first_b as i64
+            } else {
+                sd.pos + sd.last_b as i64 + k as i64
+            };
+            bp_b_estimates.push(est);
+        }
+    }
+
+    let n_spanning = acc.spanning_reads.len();
+    let bp_a_std = std_dev_i64(&bp_a_estimates);
+    let bp_b_std = std_dev_i64(&bp_b_estimates);
+    let bp_a_n = bp_a_estimates.len();
+    let bp_b_n = bp_b_estimates.len();
+    let bp_a = median_i64(&mut bp_a_estimates);
+    let bp_b = median_i64(&mut bp_b_estimates);
+
+    BreakpointStats {
+        gene_a_idx: acc.gene_a_idx,
+        gene_b_idx: acc.gene_b_idx,
+        chrom_a,
+        chrom_b,
+        bp_a,
+        bp_a_n,
+        bp_a_std,
+        bp_b,
+        bp_b_n,
+        bp_b_std,
+        n_spanning,
+    }
+}
+
 fn decode_kmer(hash: u64, k: usize) -> String {
     const BASES: [u8; 4] = *b"ACGT";
     (0..k)
@@ -1124,14 +1217,9 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         );
     }
 
-    info!(n_fusions = records.len(), "fusion candidates identified");
-    write_fusion_parquet(&records, &args.output)?;
-    info!(output = %args.output.display(), "fusion candidates written");
-
-    if let Some(ref tsv_path) = args.tsv_output {
-        write_fusion_tsv(&records, tsv_path)?;
-        info!(output = %tsv_path.display(), "fusion TSV written");
-    }
+    // The main Parquet/TSV are written AFTER the optional second BAM pass below, so
+    // that the --max-breakpoint-std consensus filter (which needs spanning-read
+    // breakpoint estimates from that pass) can set the `filter` column first.
 
     // Build fusion_label from the post-filter survivors so secondary outputs
     // (reads BAM, kmer-hits TSV, breakpoints TSV) only include evidence for
@@ -1221,9 +1309,18 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         info!(output = %reads_output.display(), "BAI index written");
     }
 
-    // Optional combined second BAM pass: produces kmer-hits TSV and/or breakpoints TSV.
-    // Both outputs share one BAM scan to avoid re-reading the file twice.
-    if args.kmer_hits_output.is_some() || args.breakpoints_output.is_some() {
+    // Per-fusion breakpoint consensus stats, populated by the second BAM pass below
+    // when breakpoints or the consensus filter are requested. Keyed by fusion label.
+    let mut breakpoint_stats: HashMap<String, BreakpointStats> = HashMap::new();
+
+    // Optional combined second BAM pass: produces kmer-hits TSV and/or breakpoints TSV,
+    // and/or the spanning-read breakpoint estimates the --max-breakpoint-std filter needs.
+    // All consumers share one BAM scan to avoid re-reading the file.
+    if args.kmer_hits_output.is_some()
+        || args.breakpoints_output.is_some()
+        || args.max_breakpoint_std.is_some()
+        || args.min_breakpoint_distance.is_some()
+    {
         use std::io::{BufWriter, Write};
 
         info!(
@@ -1261,9 +1358,13 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             None
         };
 
-        // Breakpoint accumulators (optional): one per passing fusion.
+        // Breakpoint accumulators (optional): one per passing fusion. Needed for the
+        // breakpoints TSV and/or the --max-breakpoint-std consensus filter.
         let mut accumulators: Option<HashMap<String, BreakpointAccumulator>> =
-            if args.breakpoints_output.is_some() {
+            if args.breakpoints_output.is_some()
+                || args.max_breakpoint_std.is_some()
+                || args.min_breakpoint_distance.is_some()
+            {
                 let mut map: HashMap<String, BreakpointAccumulator> = HashMap::new();
                 for (&(ga, gb), label) in &fusion_label {
                     map.insert(
@@ -1401,7 +1502,16 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             info!(rows_written, output = %path.display(), "kmer hits TSV written");
         }
 
-        // Compute and write breakpoints TSV.
+        // Reduce each fusion's accumulated spanning reads to breakpoint consensus
+        // stats. Computed once here and reused by both the breakpoints TSV and the
+        // --max-breakpoint-std filter applied after this pass.
+        if let Some(ref acc_map) = accumulators {
+            for (label, acc) in acc_map.iter() {
+                breakpoint_stats.insert(label.clone(), compute_breakpoint_stats(acc, &index, k));
+            }
+        }
+
+        // Write breakpoints TSV.
         if let Some(ref bp_path) = args.breakpoints_output {
             let file = std::fs::File::create(bp_path).with_context(|| {
                 format!("failed to create breakpoints TSV: {}", bp_path.display())
@@ -1409,97 +1519,124 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             let mut w = BufWriter::new(file);
             writeln!(w, "fusion\tgene_a\tchrom_a\tbreakpoint_a\tbp_a_n\tbp_a_std\tgene_b\tchrom_b\tbreakpoint_b\tbp_b_n\tbp_b_std\tn_spanning_reads")?;
 
-            let acc_map = accumulators.as_mut().unwrap();
-            let mut fusions_sorted: Vec<String> = acc_map.keys().cloned().collect();
+            let mut fusions_sorted: Vec<&String> = breakpoint_stats.keys().collect();
             fusions_sorted.sort_unstable();
 
-            for label in &fusions_sorted {
-                let acc = acc_map.get_mut(label.as_str()).unwrap();
-                let gene_a = &index.gene_names[acc.gene_a_idx as usize];
-                let gene_b = &index.gene_names[acc.gene_b_idx as usize];
+            let fmt_opt_f64 = |v: Option<f64>| {
+                v.map(|x| format!("{:.1}", x))
+                    .unwrap_or_else(|| "NA".to_string())
+            };
+            let fmt_opt_i64 = |v: Option<f64>| {
+                v.map(|x| format!("{}", x as i64))
+                    .unwrap_or_else(|| "NA".to_string())
+            };
 
-                // Most-voted chromosome, ties broken by lexicographically smallest
-                // name so the choice is deterministic (HashMap iteration order must
-                // not influence the result). When there are no single-gene reads to
-                // vote (e.g. every supporting read spans the junction), fall back to
-                // the gene's annotated chromosome so breakpoints can still be
-                // estimated against the spanning reads.
-                let modal_chrom = |votes: &HashMap<String, u32>, fallback: &str| -> String {
-                    votes
-                        .iter()
-                        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
-                        .map(|(c, _)| c.clone())
-                        .unwrap_or_else(|| fallback.to_string())
-                };
-                let chrom_a = modal_chrom(
-                    &acc.gene_a_chrom_votes,
-                    &index.gene_chroms[acc.gene_a_idx as usize],
-                );
-                let chrom_b = modal_chrom(
-                    &acc.gene_b_chrom_votes,
-                    &index.gene_chroms[acc.gene_b_idx as usize],
-                );
-
-                let mut bp_a_estimates: Vec<i64> = Vec::new();
-                let mut bp_b_estimates: Vec<i64> = Vec::new();
-
-                for sd in &acc.spanning_reads {
-                    let a_before_b = sd.first_a < sd.first_b;
-                    if sd.chrom == chrom_a {
-                        let est = if a_before_b {
-                            sd.pos + sd.last_a as i64 + k as i64
-                        } else {
-                            sd.pos + sd.first_a as i64
-                        };
-                        bp_a_estimates.push(est);
-                    }
-                    if sd.chrom == chrom_b {
-                        let est = if a_before_b {
-                            sd.pos + sd.first_b as i64
-                        } else {
-                            sd.pos + sd.last_b as i64 + k as i64
-                        };
-                        bp_b_estimates.push(est);
-                    }
-                }
-
-                let n_spanning = acc.spanning_reads.len();
-                let bp_a = median_i64(&mut bp_a_estimates);
-                let bp_a_std = std_dev_i64(&bp_a_estimates);
-                let bp_a_n = bp_a_estimates.len();
-                let bp_b = median_i64(&mut bp_b_estimates);
-                let bp_b_std = std_dev_i64(&bp_b_estimates);
-                let bp_b_n = bp_b_estimates.len();
-
-                let fmt_opt_f64 = |v: Option<f64>| {
-                    v.map(|x| format!("{:.1}", x))
-                        .unwrap_or_else(|| "NA".to_string())
-                };
-                let fmt_opt_i64 = |v: Option<f64>| {
-                    v.map(|x| format!("{}", x as i64))
-                        .unwrap_or_else(|| "NA".to_string())
-                };
-
+            for label in fusions_sorted {
+                let s = &breakpoint_stats[label];
+                let gene_a = &index.gene_names[s.gene_a_idx as usize];
+                let gene_b = &index.gene_names[s.gene_b_idx as usize];
                 writeln!(
                     w,
                     "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     label,
                     gene_a,
-                    chrom_a,
-                    fmt_opt_i64(bp_a),
-                    bp_a_n,
-                    fmt_opt_f64(bp_a_std),
+                    s.chrom_a,
+                    fmt_opt_i64(s.bp_a),
+                    s.bp_a_n,
+                    fmt_opt_f64(s.bp_a_std),
                     gene_b,
-                    chrom_b,
-                    fmt_opt_i64(bp_b),
-                    bp_b_n,
-                    fmt_opt_f64(bp_b_std),
-                    n_spanning,
+                    s.chrom_b,
+                    fmt_opt_i64(s.bp_b),
+                    s.bp_b_n,
+                    fmt_opt_f64(s.bp_b_std),
+                    s.n_spanning,
                 )?;
             }
             info!(output = %bp_path.display(), "breakpoints TSV written");
         }
     }
+
+    // Breakpoint-consensus filter: a real fusion's spanning reads converge on one
+    // junction base (tight std) with depth on both sides; paralog/PCR-chimera
+    // artifacts splice at scattered positions. Tag failers filter="chimera" (kept,
+    // not dropped) without clobbering a prior PoN tag.
+    if let Some(max_std) = args.max_breakpoint_std {
+        let min_n = args.min_breakpoint_reads as usize;
+        let mut flagged = 0usize;
+        for r in records.iter_mut() {
+            if r.filter != "PASS" {
+                continue;
+            }
+            let label = fusion_pair_label(r.pair_key, &index.gene_names);
+            let passes = breakpoint_stats.get(&label).is_some_and(|s| {
+                s.bp_a_n >= min_n
+                    && s.bp_b_n >= min_n
+                    && s.bp_a_std.is_some_and(|v| v <= max_std)
+                    && s.bp_b_std.is_some_and(|v| v <= max_std)
+            });
+            if !passes {
+                r.filter = "chimera".to_string();
+                flagged += 1;
+            }
+        }
+        info!(
+            flagged,
+            max_breakpoint_std = max_std,
+            min_breakpoint_reads = args.min_breakpoint_reads,
+            "tagged fusions lacking breakpoint consensus (filter=chimera)"
+        );
+    }
+
+    // Same-locus / adjacency filter: both breakpoints on one chromosome within a tiny
+    // window is the signature of single-locus paralog leakage (e.g. unindexed GNA12
+    // reads split between GNA13/GNA11, both breakpoints landing at the GNA12 locus).
+    // Such calls have a TIGHT, reproducible breakpoint, so the consensus filter passes
+    // them; this catches them on geometry instead. Tag filter="samelocus" (kept, not
+    // dropped); only touch calls still PASS so prior pon/chimera tags win.
+    if let Some(min_dist) = args.min_breakpoint_distance {
+        let mut flagged = 0usize;
+        for r in records.iter_mut() {
+            if r.filter != "PASS" {
+                continue;
+            }
+            let label = fusion_pair_label(r.pair_key, &index.gene_names);
+            let same_locus = breakpoint_stats.get(&label).is_some_and(|s| {
+                match (s.bp_a, s.bp_b) {
+                    (Some(a), Some(b)) => s.chrom_a == s.chrom_b && (a - b).abs() < min_dist as f64,
+                    _ => false,
+                }
+            });
+            if same_locus {
+                r.filter = "samelocus".to_string();
+                flagged += 1;
+            }
+        }
+        info!(
+            flagged,
+            min_breakpoint_distance = min_dist,
+            "tagged fusions whose breakpoints co-localize to one locus (filter=samelocus)"
+        );
+    }
+
+    info!(n_fusions = records.len(), "fusion candidates identified");
+    write_fusion_parquet(&records, &args.output)?;
+    info!(output = %args.output.display(), "fusion candidates written");
+
+    if let Some(ref tsv_path) = args.tsv_output {
+        write_fusion_tsv(&records, tsv_path)?;
+        info!(output = %tsv_path.display(), "fusion TSV written");
+    }
+
+    // All outputs are flushed by this point. The in-memory index holds tens of
+    // millions of k-mers; dropping it at scope exit can take several seconds, which
+    // otherwise looks like a hang after the last "written" line. Release it
+    // explicitly with bracketing logs so the pause is attributable.
+    info!(
+        n_kmers = index.kmer_to_gene.len(),
+        "all outputs written; releasing in-memory index..."
+    );
+    drop(index);
+    info!("fusion detection complete");
 
     Ok(())
 }

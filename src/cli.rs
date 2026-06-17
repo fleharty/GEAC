@@ -951,6 +951,35 @@ pub struct FusionsArgs {
     #[arg(long, default_value_t = 3)]
     pub min_anchor_kmers: u32,
 
+    /// Tag fusions whose supporting reads do not converge on a single breakpoint
+    /// with filter="chimera" (VCF-style; rows are kept, not dropped, so downstream
+    /// can include or exclude them). A real fusion has many reads agreeing on one
+    /// junction base; paralog/PCR-chimera artifacts splice at scattered positions.
+    /// When set, a fusion stays filter="PASS" only if BOTH breakpoints are supported
+    /// by at least --min-breakpoint-reads spanning reads whose position estimates
+    /// have a standard deviation <= this many bp. Triggers the same second BAM pass
+    /// as --breakpoints-output. Default: disabled (no breakpoint-consensus tagging).
+    #[arg(long)]
+    pub max_breakpoint_std: Option<f64>,
+
+    /// Minimum spanning reads converging on EACH breakpoint for a fusion to keep
+    /// filter="PASS" under the --max-breakpoint-std consensus filter. Only consulted
+    /// when --max-breakpoint-std is set.
+    #[arg(long, default_value_t = 5)]
+    pub min_breakpoint_reads: u32,
+
+    /// Tag fusions whose two breakpoints fall on the SAME chromosome within this many
+    /// bp with filter="samelocus" (rows kept, not dropped). Both partners localizing
+    /// to one spot is the signature of single-locus paralog leakage: reads from an
+    /// unindexed paralog (e.g. GNA12) carry k-mers shared with two indexed cousins
+    /// (GNA13, GNA11), fabricating a fusion whose breakpoints both sit at the real
+    /// locus. A genuine fusion places its partners on different chromosomes, or far
+    /// apart on the same one. Catches what --max-breakpoint-std cannot (the fake
+    /// breakpoint here is tight and reproducible). Triggers the same second BAM pass
+    /// as --breakpoints-output. Default: disabled.
+    #[arg(long)]
+    pub min_breakpoint_distance: Option<i64>,
+
     /// Optional k-mer blacklist Parquet produced by `geac experimental build-fusion-kmer-blacklist`.
     /// K-mers in this file are considered PoN-noisy: a read must have at least `--min-kmer-hits`
     /// *non-blacklisted* k-mer matches to contribute to fusion evidence. Blacklisted k-mers

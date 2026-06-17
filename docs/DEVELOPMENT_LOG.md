@@ -1024,6 +1024,78 @@ column is always written, so users can post-filter or inspect without re-running
 
 ---
 
+## Fusion — breakpoint-consensus filter (2026-06-17)
+
+**Motivation.** Validation of the junction-coherence filter on real data overturned the
+assumption that coherence alone separates real fusions from artifacts. On a tumor with a
+single true `FOXO1::PAX7` (1090 coherent fragments) among 534 candidates, ~533 spurious
+pairs remained — and crucially, normal controls contained paralog artifacts that *beat*
+the real call on coherence: `H3C2::H3C4` (histones, 2203 coherent frags) and
+`GNA13::GNA11` (G-proteins, 1675). Near-identical paralogs tile into clean disjoint A/B
+blocks with no actual junction, so coherence is necessary but not sufficient.
+
+**Root-cause analysis.** These residual FPs are *not* k-mer leakage — the genome-unique
+index is sound (zero exact k-mers shared between any FP gene pair). They are genuine
+chimeric molecules (paralog homology + PCR/ligation chimeras). What separates them from a
+real fusion is **breakpoint consensus**: a real fusion's spanning reads converge on one
+junction base (`bp_*_std` ≈ 2 bp over hundreds of reads); artifacts splice at scattered
+positions (`bp_*_std` 10⁴–10⁷ bp) because no single physical junction exists. Std alone is
+confounded by low read count (2 reads at one coordinate → std 0 by chance), so the test
+must require depth **and** tightness on **both** sides.
+
+**Implementation.** `--max-breakpoint-std <BP>` (enables the filter) and
+`--min-breakpoint-reads <N>` (default 5). A call keeps `filter=PASS` only if `bp_a_n` and
+`bp_b_n` ≥ N and `bp_a_std` and `bp_b_std` ≤ BP; otherwise it is tagged `filter=chimera`
+(kept, not dropped — same VCF-style convention as the PoN `filter=pon` tag). The
+breakpoint stats are produced by the existing second BAM pass (the one shared by
+`--kmer-hits-output` / `--breakpoints-output`), which the filter now also triggers on its
+own. Two structural changes in `src/fusions.rs`: (1) the per-fusion stat computation was
+extracted into `compute_breakpoint_stats()` and a `BreakpointStats` struct, shared by the
+breakpoints TSV writer and the filter; (2) the main Parquet/TSV writes moved to *after*
+the second pass so the `filter` column reflects the consensus decision. Tagging (not
+dropping) avoids any circular dependency with the `fusion_label` set that gates the second
+pass, and keeps chimera evidence available for inspection.
+
+**Validation.** 1 PASS / 533 chimera on the tumor; 0 of 1177 breakpoint-bearing calls
+passing in a normal control — perfect separation, no PoN. Thresholds are not sensitive:
+the real call sits at ~800 reads/side, std ~2 bp; the nearest FP at ≤35 reads with std
+≥40k, so N≈5–10 and S≈10–25 all behave identically. Default N=5 chosen to sit clear of
+both populations.
+
+**Why not a PoN.** A PoN masks the symptom; this filter encodes what a fusion *is*
+(reads converging on one junction) and needs no normal panel. The PoN flags remain as a
+backstop. WDL: `wdl/experimental/geac_fusions.wdl` exposes `max_breakpoint_std` (Float?)
+and `min_breakpoint_reads` (Int, default 5).
+
+**Companion: same-locus / adjacency filter (`--min-breakpoint-distance`).** A stress test
+against an index containing the histone and G-protein paralogs found one FP class the
+consensus filter cannot catch: **single-locus paralog leakage**. `GNA13::GNA11` passed
+with `bp_*_std` ≈ 1 bp over ~1900 reads, because both breakpoints localized to chr7:2.84 Mb
+(Δ = 5 bp) — the **GNA12** locus (GNA12 is not in the index). Reads from GNA12 carry
+23-mers unique among indexed genes but shared with its cousins GNA13 (chr17) and GNA11
+(chr19), split-assign to both, and — all originating from the one GNA12 locus — produce a
+tight, reproducible fake breakpoint. Confirmed via diagnose-fusion (1922 chr7 reads
+carrying both genes' k-mers) and index queries (neither gene has native k-mers on chr7).
+`--min-breakpoint-distance <BP>` tags such calls `filter=samelocus` when both breakpoints
+sit on one chromosome within BP bp, applied only to calls still PASS after the consensus
+check. Recommended 10000 (the GNA12 Δ is ~5 bp, so margin is large). The two filters are
+complementary: consensus rejects multi-locus *scatter* (PCR chimeras, histone paralogy),
+adjacency rejects single-locus *co-location*. Result on the stress index: 1 PASS
+(`PAX7::FOXO1`, chr1↔chr13) of 1254 calls; `GNA13::GNA11` → samelocus; histones → chimera.
+
+**UX: teardown visibility.** The in-memory index holds ~16 M k-mers; dropping it at exit
+took seconds after the last "written" log, reading as a hang. `detect_fusions` now logs
+`releasing in-memory index...` then `fusion detection complete`, releasing `index`
+explicitly so the pause is attributable.
+
+**Known limitation.** Inherits the reverse-strand `kmer_pos_in_read` issue noted in the
+breakpoint-localization section: reverse-strand reads widen `bp_*_std`. This inflates the
+std of *real* calls too, but the artifact/real gap (≈4 orders of magnitude) absorbs it.
+Base-pair-accurate, strand-correct breakpoints (Tier 3) would tighten the real-call std
+further.
+
+---
+
 ## `compute-uniqueness-map` command (2026-06-05)
 
 New experimental command that walks every genomic position and finds the smallest k

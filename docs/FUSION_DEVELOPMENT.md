@@ -44,6 +44,10 @@ thresholds. Outputs: Parquet, TSV, evidence BAM (`FX:Z:` tag), per-k-mer-hit TSV
 - Junction-coherence filter: `--min-coherent-fragments` requires spanning reads to show
 a disjoint A-block→B-block k-mer partition. `n_spanning_reads` and `n_coherent_reads`
 are emitted as Parquet/TSV columns unconditionally.
+- Breakpoint-consensus filter: `--max-breakpoint-std` / `--min-breakpoint-reads` tag a
+call `filter=chimera` unless both breakpoints are supported by enough spanning reads
+converging within a tight bp window. No PoN required. See the root-cause note below —
+this, not coherence, is the empirically decisive discriminator.
 - Fusion PoN: `--fusion-pon` annotates/filters against a `geac merge` of normal
 `*.fusions.parquet` files.
 
@@ -75,8 +79,41 @@ transition — two sequences spliced together.
 - **Homology / paralog FP:** the two genes' k-mers are **interleaved or overlapping**
 in `kmer_pos_in_read`, because the *same* read bases match both genes. No transition.
 
-This is the highest-value signal we already emit, and it motivates the
+This is a high-value signal we already emit, and it motivates the
 **junction-coherence filter** below.
+
+### Empirical finding: coherence is necessary but NOT sufficient; breakpoint consensus is decisive
+
+Validation on a real sample (one true `FOXO1::PAX7` among 534 candidates) plus normal
+controls overturned the assumption that k-mer co-linearity / coherent fragments alone
+can separate real from artifact. **Near-identical paralogs defeat coherence:** in a
+normal control, `H3C2::H3C4` (histone cluster) and `GNA13::GNA11` (G-proteins) produced
+*more* coherent fragments (2203, 1675) than the real fusion (1090). Because the paralog
+sequences are nearly identical, reads tile cleanly into disjoint A/B blocks — a textbook
+"coherent" partition — yet there is no junction.
+
+What still separates them is **breakpoint consensus**: a real fusion is many reads
+converging on one junction base (`bp_*_std` ≈ 2 bp over hundreds of reads); every
+artifact — paralog homology and PCR/ligation chimera alike — splices at *scattered*
+positions (`bp_*_std` in the 10⁴–10⁷ bp range), because no single physical junction
+exists. The discriminator is therefore depth **and** tightness on **both** sides:
+`bp_a_n` and `bp_b_n` ≥ N with `bp_a_std` and `bp_b_std` ≤ S. Neither alone works —
+low-`n` artifacts hit std 0 by chance, high-`n` paralog artifacts stay scattered. This
+is what `--max-breakpoint-std` / `--min-breakpoint-reads` enforce, and it gave perfect
+separation (1 PASS / 533 chimera on the tumor; 0/1177 calls passing in a normal) with
+no PoN. The mechanism is that these residual FPs are genuine chimeric molecules, not
+k-mer leakage (zero shared k-mers; the genome-unique index is sound).
+
+**One exception breakpoint consensus cannot catch: single-locus paralog leakage.** When
+the homology source is a *single* unindexed paralog, all its reads come from one genomic
+spot, so the fabricated breakpoint is tight and reproducible — it *passes* the consensus
+filter. Seen with a different index where `GNA12` (chr7, not indexed) leaked into
+`GNA13::GNA11`: both breakpoints localized to chr7:2.84 Mb (Δ = 5 bp) with `bp_*_std` ≈
+1 bp over ~1900 reads. The distinguishing geometry is that both partners land on the
+*same* chromosome a few bp apart — handled by the adjacency filter
+(`--min-breakpoint-distance`, `filter=samelocus`) below, not by consensus. The two
+filters are complementary: consensus catches multi-locus scatter, adjacency catches
+single-locus co-location.
 
 ## Roadmap (prioritized against the niche)
 
@@ -84,10 +121,25 @@ This is the highest-value signal we already emit, and it motivates the
 
 - **Junction-coherence / co-linearity filter.** ✅ Shipped. `--min-coherent-fragments`
 requires spanning reads to show disjoint A/B k-mer blocks; `n_spanning_reads` and
-`n_coherent_reads` emitted in all output. See `docs/DEVELOPMENT_LOG.md`.
-- **Overlap / adjacency filter.** Reject pairs whose annotated gene bodies overlap
-or sit within X bp, or whose breakpoints fall on the same chromosome within X bp
-(causes #2/#3). Gene coordinates already live in the index.
+`n_coherent_reads` emitted in all output. See `docs/DEVELOPMENT_LOG.md`. Necessary but
+not sufficient on its own — see the empirical finding above.
+- **Breakpoint-consensus filter.** ✅ Shipped. `--max-breakpoint-std` /
+`--min-breakpoint-reads` tag a call `filter=chimera` unless both breakpoints are
+supported by ≥N spanning reads converging within ≤S bp. This is the empirically
+decisive specificity filter (1 PASS / 533 chimera on a validation tumor; 0/1177 in a
+normal), and it needs no PoN. The remaining "breakpoint consensus tightness" idea in the
+Tier-3 confidence score now has a concrete, validated implementation to build on.
+- **Overlap / adjacency filter.** ✅ Shipped (breakpoint form). `--min-breakpoint-distance`
+tags `filter=samelocus` when both breakpoints fall on the same chromosome within X bp.
+This catches **single-locus paralog leakage** that the breakpoint-consensus filter
+cannot: reads from an *unindexed* paralog carry k-mers shared with two indexed cousins
+and split between them, so the fabricated breakpoint is tight (passes `--max-breakpoint-std`)
+but both partners land at the one foreign locus. Confirmed case — `GNA13::GNA11` in a
+validation tumor: 1922 reads aligned to chr7:2.84 Mb (the **GNA12** locus, GNA12 absent
+from the index) carrying both GNA13 (native chr17) and GNA11 (native chr19) k-mers, both
+breakpoints at chr7:2.84 Mb (Δ = 5 bp). Tagged `samelocus`; the real `PAX7::FOXO1`
+(chr1↔chr13) stays PASS. The annotated-gene-body-overlap form (using index gene
+coordinates) is still open as a complementary upstream check.
 - **Split-read vs discordant-pair separation.** Report `split_reads` (single read
 spanning the junction; base-pair resolution) and `discordant_mates` (R1/R2 in
 different genes) as distinct columns. Lets users filter on strong evidence and is a

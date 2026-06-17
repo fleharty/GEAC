@@ -31,6 +31,14 @@ version 1.0
 ##                           k-mer partition; 0 = disabled (default); set to 1+ to filter homology artifacts
 ##   min_anchor_kmers      - minimum k-mer hits from each gene for a spanning read to count as anchored
 ##                           (default: 3; only relevant when min_coherent_fragments > 0)
+##   max_breakpoint_std    - (optional) tag fusions with filter="chimera" unless BOTH breakpoints are
+##                           supported by >= min_breakpoint_reads spanning reads whose position estimates
+##                           have a standard deviation <= this many bp; rows are kept, not dropped
+##   min_breakpoint_reads  - minimum spanning reads converging on EACH breakpoint under the
+##                           max_breakpoint_std filter (default: 5; only consulted when max_breakpoint_std set)
+##   min_breakpoint_distance - (optional) tag fusions with filter="samelocus" when both breakpoints fall on the
+##                           same chromosome within this many bp (single-locus paralog leakage, e.g. unindexed
+##                           GNA12 reads split between GNA13/GNA11); rows are kept. Recommended: 10000
 ##   comment_text          - (optional) free-text note echoed straight to the data table (as the
 ##                           `comment` output); not processed by geac, never written to the Parquet/TSV
 ##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
@@ -70,6 +78,9 @@ workflow GeacFusions {
         Boolean? skip_version_check
         Int      min_coherent_fragments = 0
         Int      min_anchor_kmers       = 3
+        Float?   max_breakpoint_std
+        Int      min_breakpoint_reads   = 5
+        Int?     min_breakpoint_distance
 
         String?  comment_text
 
@@ -99,6 +110,9 @@ workflow GeacFusions {
             skip_version_check         = skip_version_check,
             min_coherent_fragments     = min_coherent_fragments,
             min_anchor_kmers           = min_anchor_kmers,
+            max_breakpoint_std         = max_breakpoint_std,
+            min_breakpoint_reads       = min_breakpoint_reads,
+            min_breakpoint_distance    = min_breakpoint_distance,
             docker_image           = docker_image,
             memory_gb              = memory_gb,
             disk_gb                = disk_gb,
@@ -139,6 +153,9 @@ task Fusions {
         Boolean? skip_version_check
         Int      min_coherent_fragments
         Int      min_anchor_kmers
+        Float?   max_breakpoint_std
+        Int      min_breakpoint_reads
+        Int?     min_breakpoint_distance
 
         String docker_image
         Int    memory_gb
@@ -182,7 +199,10 @@ task Fusions {
             ~{"--min-kmer-blacklist-samples "  + min_kmer_blacklist_samples} \
             ~{true="--skip-version-check" false="" skip_version_check} \
             --min-coherent-fragments ~{min_coherent_fragments} \
-            --min-anchor-kmers       ~{min_anchor_kmers}
+            --min-anchor-kmers       ~{min_anchor_kmers} \
+            ~{"--max-breakpoint-std "  + max_breakpoint_std} \
+            --min-breakpoint-reads   ~{min_breakpoint_reads} \
+            ~{"--min-breakpoint-distance " + min_breakpoint_distance}
     >>>
 
     output {

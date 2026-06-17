@@ -188,11 +188,18 @@ geac experimental fusions \
 | `--max-pon-samples <N>` | — | Tag fusions seen in strictly more than `N` PoN samples with `filter=pon` (rows are kept). Requires `--fusion-pon`. Default: annotate only, every row stays `filter=PASS`. |
 | `--fusion-kmer-blacklist <PATH>` | — | K-mer blacklist Parquet from `build-fusion-kmer-blacklist`. A read must have at least `--min-kmer-hits` *non-blacklisted* k-mer matches to contribute to fusion evidence. Blacklisted k-mers still contribute once a read has passed on clean evidence — they just cannot be the sole basis for including a read. Complementary to `--fusion-pon`: the PoN filters at the gene-pair level; the k-mer blacklist filters at the read level, upstream. |
 | `--min-kmer-blacklist-samples <N>` | `1` | Treat a k-mer as blacklisted only if it appears in at least `N` PoN samples in the blacklist Parquet (`n_pon_samples` column). Allows reusing one blacklist file at different stringency thresholds without rebuilding. |
+| `--max-breakpoint-std <BP>` | — | Breakpoint-consensus filter (no PoN needed). Tags a fusion `filter=chimera` (rows kept) unless **both** breakpoints are supported by ≥ `--min-breakpoint-reads` spanning reads whose position estimates have a standard deviation ≤ `BP`. A real fusion's reads converge on one junction base (std ~ a few bp); paralog/PCR-chimera artifacts splice at scattered positions (std in the thousands+), so they fail. Triggers the same second BAM pass as `--breakpoints-output`. Default: disabled. |
+| `--min-breakpoint-reads <N>` | `5` | Minimum spanning reads converging on **each** breakpoint under `--max-breakpoint-std`. Guards against tiny-`n` chance agreement (2 reads at the same coordinate give std 0 but mean nothing). Only consulted when `--max-breakpoint-std` is set. |
+| `--min-breakpoint-distance <BP>` | — | Same-locus / adjacency filter. Tags a fusion `filter=samelocus` (rows kept) when **both** breakpoints fall on the same chromosome within `BP` bp. Both partners localizing to one spot is the signature of single-locus paralog leakage: reads from an *unindexed* paralog (e.g. GNA12, chr7) carry k-mers shared with two indexed cousins (GNA13 on chr17, GNA11 on chr19) and split between them, fabricating a fusion whose breakpoints both sit at the GNA12 locus (Δ ≈ a few bp). That fake breakpoint is tight and reproducible, so `--max-breakpoint-std` passes it — this catches it on geometry instead. A genuine fusion places partners on different chromosomes, or far apart on one. Recommended: `10000` (≫ a fragment, ≪ inter-gene distance). Triggers the same second BAM pass as `--breakpoints-output`. Default: disabled. |
 
 Output Parquet/TSV columns: `sample_id, gene_a, gene_b, chrom_a, chrom_b,
-supporting_reads, min_mapq, n_pon_samples, pon_total_samples,
-max_pon_supporting_reads`. The three `*pon*` columns are `0`/`0`/`NA` unless
-`--fusion-pon` is given.
+supporting_reads, min_mapq, n_spanning_reads, n_coherent_fragments, n_pon_samples,
+pon_total_samples, max_pon_supporting_reads, filter`. The three `*pon*` columns are
+`0`/`0`/`NA` unless `--fusion-pon` is given. `filter` is `PASS` by default, `pon`
+when `--max-pon-samples` flags a PoN-recurrent call, `chimera` when
+`--max-breakpoint-std` rejects a call for lacking breakpoint consensus, or
+`samelocus` when `--min-breakpoint-distance` rejects a call whose breakpoints
+co-localize to one locus (single-locus paralog leakage).
 
 `--kmer-hits-output` columns: `fusion, sample_id, read_name, read_end, chrom, pos,
 gene_matched, kmer_pos_in_read, kmer_hash, kmer_seq`.
