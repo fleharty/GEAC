@@ -472,12 +472,39 @@ struct SpanningReadData {
     first_b: usize,
 }
 
+/// Positional data for a single-gene read approaching the fusion junction.
+///
+/// A read whose k-mers matched only one fusion partner — a concordant-pair mate.
+/// Used as a breakpoint-estimation fallback when spanning reads are too sparse
+/// (e.g. the breakpoint falls inside a repeat that is absent from the k-mer index,
+/// so no single read can carry k-mers from both partners across the gap).
+///
+/// The junction-facing *alignment* edge estimates where this gene's sequence meets
+/// the partner. We use the aligner's reference coordinates rather than k-mer offsets
+/// because the aligner places the read through the repeat using its full sequence,
+/// whereas the last/first matched k-mer stops at the edge of the indexed region and
+/// scatters with where k-mers happen to fall in each read.
+///   - gene-A reads: the alignment END   (gene-A sequence stops here)
+///   - gene-B reads: the alignment START (gene-B sequence begins here)
+struct SingleGeneReadData {
+    chrom: String,
+    aln_start: i64, // 0-based reference start
+    aln_end: i64,   // 0-based exclusive reference end
+}
+
 struct BreakpointAccumulator {
     gene_a_idx: u32,
     gene_b_idx: u32,
     gene_a_chrom_votes: HashMap<String, u32>,
     gene_b_chrom_votes: HashMap<String, u32>,
     spanning_reads: Vec<SpanningReadData>,
+    /// Single-gene gene-A reads: used as concordant-pair fallback when there
+    /// are too few spanning reads to satisfy the chimera filter (e.g. when the
+    /// breakpoint falls inside a repetitive element that is absent from the
+    /// k-mer index).
+    gene_a_single_reads: Vec<SingleGeneReadData>,
+    /// Single-gene gene-B reads (see gene_a_single_reads).
+    gene_b_single_reads: Vec<SingleGeneReadData>,
 }
 
 fn median_i64(values: &mut [i64]) -> Option<f64> {
@@ -504,6 +531,31 @@ fn std_dev_i64(values: &[i64]) -> Option<f64> {
         .sum::<f64>()
         / (values.len() - 1) as f64;
     Some(variance.sqrt())
+}
+
+/// Half-width (bp) of the window used to isolate the dominant breakpoint cluster
+/// before measuring consensus spread. A genuine junction concentrates read-edge
+/// estimates within a read-length or so; concordant mates deep in the gene body and
+/// paralog/chimera artifacts sit kilobases away. Trimming to this window around the
+/// median lets a few distant reads be ignored without masking a truly scattered
+/// (non-consensus) signal — that still fails the `--max-breakpoint-std` test, which
+/// is far tighter than this window.
+const BREAKPOINT_CLUSTER_WINDOW: i64 = 1000;
+
+/// Keep only the estimates within `window` bp of the median — the dominant cluster.
+/// Robust to a minority of far-off outliers because the median sits inside the
+/// cluster whenever it holds the majority of reads.
+fn cluster_around_median(estimates: &[i64], window: i64) -> Vec<i64> {
+    if estimates.is_empty() {
+        return Vec::new();
+    }
+    let mut sorted = estimates.to_vec();
+    sorted.sort_unstable();
+    let med = sorted[sorted.len() / 2];
+    sorted
+        .into_iter()
+        .filter(|&e| (e - med).abs() <= window)
+        .collect()
 }
 
 /// Per-fusion breakpoint consensus, derived from the spanning reads collected in a
@@ -576,13 +628,41 @@ fn compute_breakpoint_stats(
         }
     }
 
+    // Concordant-pair fallback: when spanning reads are too few to pin a breakpoint
+    // (e.g. it falls inside a repeat absent from the k-mer index, so no single read
+    // carries k-mers from both partners across the gap), supplement with single-gene
+    // mates. The junction-facing alignment edge estimates where each gene's sequence
+    // meets the partner: gene-A reads stop at the breakpoint (alignment END), gene-B
+    // reads start at it (alignment START). Off-modal-chromosome reads (a gene's native
+    // locus, or paralogs) are excluded by the chrom filter; deep-body mates kilobases
+    // away are trimmed by the clustering step below.
+    for sg in &acc.gene_a_single_reads {
+        if sg.chrom == chrom_a {
+            bp_a_estimates.push(sg.aln_end);
+        }
+    }
+    for sg in &acc.gene_b_single_reads {
+        if sg.chrom == chrom_b {
+            bp_b_estimates.push(sg.aln_start);
+        }
+    }
+
+    // Reduce to the dominant breakpoint cluster before measuring spread, so a few
+    // distant reads (deep-body concordant mates, paralog hits) cannot inflate the
+    // std of an otherwise tight, well-supported junction. A genuinely scattered
+    // (non-consensus) signal has no dominant cluster and still fails downstream.
+    let bp_a_estimates = cluster_around_median(&bp_a_estimates, BREAKPOINT_CLUSTER_WINDOW);
+    let bp_b_estimates = cluster_around_median(&bp_b_estimates, BREAKPOINT_CLUSTER_WINDOW);
+
     let n_spanning = acc.spanning_reads.len();
     let bp_a_std = std_dev_i64(&bp_a_estimates);
     let bp_b_std = std_dev_i64(&bp_b_estimates);
     let bp_a_n = bp_a_estimates.len();
     let bp_b_n = bp_b_estimates.len();
-    let bp_a = median_i64(&mut bp_a_estimates);
-    let bp_b = median_i64(&mut bp_b_estimates);
+    let mut bp_a_sorted = bp_a_estimates;
+    let mut bp_b_sorted = bp_b_estimates;
+    let bp_a = median_i64(&mut bp_a_sorted);
+    let bp_b = median_i64(&mut bp_b_sorted);
 
     BreakpointStats {
         gene_a_idx: acc.gene_a_idx,
@@ -1375,6 +1455,8 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                             gene_a_chrom_votes: HashMap::new(),
                             gene_b_chrom_votes: HashMap::new(),
                             spanning_reads: Vec::new(),
+                            gene_a_single_reads: Vec::new(),
+                            gene_b_single_reads: Vec::new(),
                         },
                     );
                 }
@@ -1475,10 +1557,28 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                         *acc.gene_a_chrom_votes
                             .entry(chrom_str.to_string())
                             .or_insert(0) += 1;
+                        // Supplementary alignments of chimeric reads appear as separate
+                        // BAM records with single-gene k-mers at off-junction positions.
+                        // Exclude them so only concordant-pair primary reads contribute
+                        // breakpoint estimates.
+                        if flags & 0x800 == 0 {
+                            acc.gene_a_single_reads.push(SingleGeneReadData {
+                                chrom: chrom_str.to_string(),
+                                aln_start: pos1 - 1, // convert to 0-based
+                                aln_end: record.cigar().end_pos(),
+                            });
+                        }
                     } else if a_positions.is_empty() && !b_positions.is_empty() {
                         *acc.gene_b_chrom_votes
                             .entry(chrom_str.to_string())
                             .or_insert(0) += 1;
+                        if flags & 0x800 == 0 {
+                            acc.gene_b_single_reads.push(SingleGeneReadData {
+                                chrom: chrom_str.to_string(),
+                                aln_start: pos1 - 1, // convert to 0-based
+                                aln_end: record.cigar().end_pos(),
+                            });
+                        }
                     } else if !a_positions.is_empty() && !b_positions.is_empty() {
                         // Spanning read.
                         let last_a = *a_positions.iter().max().unwrap();

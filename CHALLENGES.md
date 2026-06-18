@@ -186,6 +186,70 @@ come from one place, so the fake junction is tight. Two FP geometries need two f
 scatter (consensus) and co-location (adjacency). Co-location is diagnosable directly from
 the breakpoints TSV: `chrom_a == chrom_b` with small `|breakpoint_a − breakpoint_b|`.
 
+### `--max-breakpoint-std 10` was too tight — falsely rejected a real high-depth fusion
+**Symptom:** A second tumor carrying a canonical *EWSR1::FLI1* (Ewing sarcoma, chr11↔chr22)
+fusion was tagged `chimera` despite overwhelming, obviously-real support — >1300 spanning
+reads on **each** breakpoint. The depth test passed ~300×; only the std test failed.
+
+**Root cause:** The real junction's `bp_*_std` came in around the low **tens** of bp, not
+the ≈2 bp seen on the first validation sample, so it tripped the `10` ceiling. Real
+high-depth junctions are not single-base sharp: alternative splice isoforms immediately
+adjacent to the fusion boundary, plus k-mer transition-point estimation noise, smear the
+estimated breakpoint over tens of bp. The first sample's ~2 bp was unusually tight, not the
+norm — and calibrating the threshold on that one event over-fit it.
+
+**Why it was still safe to relax:** the artifact/real separation was enormous — every
+genuine chimera in the callset sat at `bp_*_std` of 10⁴–10⁷ bp (scattered across the gene
+body / chromosome), leaving a ~500× empty gap above the real event. Any cutoff from ~50 to
+~1000 separates them.
+
+**Fix:** Raised the recommended `--max-breakpoint-std` from `10` to **100** (docs/WDL
+recommendation; the flag itself is still caller-set). 100 sits well above real-junction
+spread and ~140× below the nearest artifact.
+
+**Lesson:** raw std is **outlier-sensitive** — a handful of stray reads among thousands
+inflate it even when the bulk converges. The huge real-vs-artifact gap makes a threshold
+bump sufficient now, but the principled metric is *fraction of spanning reads within ±W bp
+of the modal breakpoint* (robust to outliers) rather than std. Tracked in TODO. Also: never
+calibrate a tightness threshold on a single event — the second sample moved the real-call
+operating point by an order of magnitude.
+
+### Real fusion through an intronic Alu was rejected — needed concordant-pair support
+**Symptom:** A canonical *EWSR1::ERG* fusion was tagged `chimera` even though it had strong,
+specific support. Its breakpoint falls inside a ~300 bp Alu in an ERG intron. That Alu is
+(correctly) absent from the genome-unique k-mer index, so the gap between indexed k-mers on
+either side is wider than a single read — **no read can carry k-mers from both partners
+across it.** Only 2 chimeric (primary+supplementary) "spanning" records exist, far below
+`--min-breakpoint-reads`. The real evidence is ~90 + ~90 *concordant pairs* (one mate in
+each partner), which the spanning-only breakpoint logic ignored entirely.
+
+**Two failed attempts before the fix:**
+1. *Supplement spanning reads with single-gene mates, estimating the breakpoint from the
+   last/first matched **k-mer** offset.* The k-mer endpoint stops at the edge of the indexed
+   region (the Alu), and where k-mers land within each read varies, so estimates scattered
+   over hundreds of bp → `bp_*_std` ≈ 1000, still failed.
+2. *Keep only reads whose estimate is within one read-length of the **extreme** (max for
+   gene-A, min for gene-B).* The extreme is the worst outlier — a concordant mate deep in
+   the gene body, tens of kb away — so this anchored on the outlier and discarded the real
+   junction cluster, collapsing support to ~3 reads.
+
+**Fix (two parts):**
+- *Estimate from alignment coordinates, not k-mer offsets.* The aligner places concordant
+  mates **through** the repeat using their full sequence; the junction-facing alignment edge
+  (gene-A read END / gene-B read START) localizes the breakpoint, whereas the matched-k-mer
+  endpoint cannot see past the index gap.
+- *Anchor outlier trimming on the median, not the extreme* (`cluster_around_median`, ±1 kb).
+  The median sits inside the dominant cluster whenever it holds the majority, so deep-body
+  mates are dropped and the real junction survives.
+
+With both, the call converges to `bp_*_std` in the tens of bp on ~85 reads per side — a PASS.
+
+**Lesson:** breakpoints inside index-excluded repeats are invisible to spanning reads by
+construction; concordant pairs are the only evidence, and they must be summarized with
+**aligner coordinates** and **median-anchored** (not extreme-anchored) outlier rejection.
+The earlier extreme-anchor heuristic also silently encoded an orientation assumption
+(gene-A junction at its max coordinate) that does not hold for all fusions.
+
 ---
 
 ## DuckDB Query Engine

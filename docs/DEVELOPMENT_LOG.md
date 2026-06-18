@@ -1094,6 +1094,46 @@ std of *real* calls too, but the artifact/real gap (≈4 orders of magnitude) ab
 Base-pair-accurate, strand-correct breakpoints (Tier 3) would tighten the real-call std
 further.
 
+**Threshold recalibration: `--max-breakpoint-std 10 → 100` (2026-06-17).** A second tumor
+(a canonical *EWSR1::FLI1* Ewing sarcoma fusion, interchromosomal chr11↔chr22) exposed the
+original `10` cutoff as too tight. The real fusion had overwhelming, tightly-converging
+support — >1300 spanning reads on **each** breakpoint — yet `bp_*_std` came in around the
+low **tens** of bp, not the ≈2 bp seen for the first sample's call. So it was wrongly tagged
+`chimera` on the std test alone (the depth test passed by ~300×). The cause is benign
+junction spread: alternative splice isoforms immediately adjacent to the fusion boundary,
+plus k-mer transition-point estimation noise, smear a *real* high-depth junction over tens
+of bp. Crucially the artifact/real separation was still enormous — every genuine chimera in
+that callset sat at `bp_*_std` of 10⁴–10⁷ bp (scattered across the gene body / chromosome),
+leaving a ~500× empty gap above the real event. Raised the recommended `--max-breakpoint-std`
+to **100** (well above real-junction spread, ~140× below the nearest artifact). Two lessons:
+(1) the first sample's ~2 bp std was unusually tight, not the norm — real junctions spread
+to tens of bp; (2) raw std is **outlier-sensitive** (a few stray reads among thousands
+inflate it), so the principled long-term metric is *fraction of spanning reads within ±W bp
+of the modal breakpoint* rather than std — tracked in TODO. The huge real-vs-artifact gap
+means the simple threshold bump is sufficient for now.
+
+**Concordant-pair breakpoint fallback for repeat-buried junctions (2026-06-18).** A
+canonical *EWSR1::ERG* fusion whose breakpoint sits inside a ~300 bp intronic Alu was wrongly
+tagged `chimera`. The Alu is correctly excluded from the genome-unique k-mer index, so the
+indexed-k-mer gap is wider than a read and **no read spans the junction** — only 2 chimeric
+primary+supplementary records exist, below `--min-breakpoint-reads`. The real support is ~90
++ ~90 concordant pairs (one mate per partner). `compute_breakpoint_stats` now supplements the
+spanning-read estimates with these single-gene mates (`gene_a_single_reads` /
+`gene_b_single_reads` on the `BreakpointAccumulator`), using each read's junction-facing
+**alignment edge** — gene-A alignment END, gene-B alignment START — rather than a k-mer
+offset. Rationale: the aligner places the read through the repeat with its full sequence, so
+the alignment edge localizes the junction, whereas the last/first matched k-mer stops at the
+index gap and scatters. Supplementary records (0x800) are excluded so chimeric-read fragments
+don't double-count. Estimates are then reduced to the dominant cluster via
+`cluster_around_median` (±`BREAKPOINT_CLUSTER_WINDOW` = 1 kb) before computing std/median, so
+a few deep-body mates (tens of kb away) can't inflate the consensus spread — this also makes
+the std test outlier-robust, partially addressing the TODO item. Result: the call converges to
+`bp_*_std` in the tens of bp on ~85 reads/side and PASSes, while remaining the only PASS among
+900+ candidates in that sample (no new false positives). No CLI/schema/WDL change — the
+cluster window is an internal constant. *Rejected intermediate approaches* (see CHALLENGES.md):
+k-mer-offset estimates (scatter ≈1 kb) and extreme-anchored trimming (anchors on the outlier,
+collapses support to ~3 reads, and silently assumes a gene-A-at-max-coordinate orientation).
+
 ---
 
 ## `compute-uniqueness-map` command (2026-06-05)

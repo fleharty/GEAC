@@ -316,9 +316,29 @@ repeat).
   Root causes confirmed: chimeric molecules (scattered breakpoints) + unindexed-paralog
   leakage (GNA12; single-locus co-located breakpoints), *not* index k-mer leakage. Still
   open: (a) validate on more cell-line BAMs (raw/simplex/duplex) and read-types to confirm
-  the thresholds (`std 10`, `reads 5`, `distance 10000`) generalize; (b) decide whether to
-  make the filters **on-by-default** with those values vs. opt-in as now; (c) feed any
-  `diagnose-fusion --summary-tsv` sweep results back in. This gates benchmarking.
+  the thresholds (`std 100`, `reads 5`, `distance 10000`) generalize — a second tumor (a
+  canonical EWSR1::FLI1) showed the original `std 10` was too tight: a real high-depth
+  junction spreads over tens of bp, so the recommendation was raised to `100` (artifacts
+  still sit at 10⁴–10⁷ bp; see `docs/DEVELOPMENT_LOG.md` / `CHALLENGES.md` 2026-06-17);
+  (b) decide whether to make the filters **on-by-default** with those values vs. opt-in as
+  now; (c) feed any `diagnose-fusion --summary-tsv` sweep results back in. This gates
+  benchmarking.
+- [ ] **Robust breakpoint-tightness metric (replace raw std).** Raw `bp_*_std` is
+  outlier-sensitive: a handful of stray reads among thousands inflate it even when the bulk
+  converges, and the real-call operating point moved an order of magnitude between samples
+  (≈2 bp → tens of bp). *Partially addressed (2026-06-18):* breakpoint estimates are now
+  reduced to the dominant cluster (`cluster_around_median`, ±1 kb) before std/median, so a
+  few far-off reads no longer inflate the spread. Still open: a fully principled per-side
+  metric — e.g. *fraction of reads within ±W bp of the modal breakpoint*, or MAD instead of
+  std — and tuning/justifying the 1 kb cluster window across read-types and concentrations.
+- [ ] **Concordant-pair fallback: validate across concentrations & confirm no regression.**
+  The concordant-pair breakpoint fallback (alignment-edge estimates + median clustering,
+  2026-06-18) rescues real fusions whose junction sits in an index-excluded repeat (validated
+  on EWSR1::ERG). Confirm on the full Terra cohort (samples A–F across concentrations + the
+  controls) that (a) the previously-passing spanning-read fusions (PAX7::FOXO1, EWSR1::FLI1)
+  still PASS, (b) no new false positives appear in controls or low-concentration samples, and
+  (c) the fallback still fires at low VAF where concordant-pair counts drop toward
+  `--min-breakpoint-reads`.
 - [ ] **Benchmarking harness** — once FP rate is acceptable: ground truth manifest
   of known fusions per cell line sample (gene pairs, confidence tier, known
   complications); WDL runner on Terra against cell line BAMs in GCS; scoring script
