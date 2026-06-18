@@ -326,19 +326,18 @@ repeat).
 - [ ] **Robust breakpoint-tightness metric (replace raw std).** Raw `bp_*_std` is
   outlier-sensitive: a handful of stray reads among thousands inflate it even when the bulk
   converges, and the real-call operating point moved an order of magnitude between samples
-  (≈2 bp → tens of bp). *Partially addressed (2026-06-18):* breakpoint estimates are now
-  reduced to the dominant cluster (`cluster_around_median`, ±1 kb) before std/median, so a
-  few far-off reads no longer inflate the spread. Still open: a fully principled per-side
-  metric — e.g. *fraction of reads within ±W bp of the modal breakpoint*, or MAD instead of
-  std — and tuning/justifying the 1 kb cluster window across read-types and concentrations.
-- [ ] **Concordant-pair fallback: validate across concentrations & confirm no regression.**
-  The concordant-pair breakpoint fallback (alignment-edge estimates + median clustering,
-  2026-06-18) rescues real fusions whose junction sits in an index-excluded repeat (validated
-  on EWSR1::ERG). Confirm on the full Terra cohort (samples A–F across concentrations + the
-  controls) that (a) the previously-passing spanning-read fusions (PAX7::FOXO1, EWSR1::FLI1)
-  still PASS, (b) no new false positives appear in controls or low-concentration samples, and
-  (c) the fallback still fires at low VAF where concordant-pair counts drop toward
-  `--min-breakpoint-reads`.
+  (≈2 bp → tens of bp). *Largely addressed:* `cluster_around_median` (±1 kb) trims far-off
+  reads before std/median (v0.4.52), and the `strong_support` tier (v0.4.53) lets a
+  well-supported call exceed the std ceiling so a single threshold no longer splits real
+  junctions. Still open: a fully principled per-side metric — e.g. *fraction of reads within
+  ±W bp of the modal breakpoint*, or MAD instead of std — and justifying the 1 kb cluster
+  window and the 25-read / 250-bp tier constants across read-types (promote to flags?).
+- [ ] **Repeat-buried junctions at low input.** The concordant-pair fallback + strong-support
+  tier recover repeat-buried fusions (e.g. EWSR1::ERG) only at high input; at low input the
+  concordant support falls below the tier and they go undetected. The root-cause lever is the
+  index, not the breakpoint filter — a higher index edit distance recovers some single-locus
+  leakage at source (see the GNA12 case), so evaluate whether a higher-edit-distance index
+  also restores low-input sensitivity for repeat-buried junctions.
 - [ ] **Benchmarking harness** — once FP rate is acceptable: ground truth manifest
   of known fusions per cell line sample (gene pairs, confidence tier, known
   complications); WDL runner on Terra against cell line BAMs in GCS; scoring script

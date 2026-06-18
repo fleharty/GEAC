@@ -250,6 +250,39 @@ construction; concordant pairs are the only evidence, and they must be summarize
 The earlier extreme-anchor heuristic also silently encoded an orientation assumption
 (gene-A junction at its max coordinate) that does not hold for all fusions.
 
+### A single breakpoint threshold can't separate real fusions from artifacts — needed a "strong-support" tier
+**Symptom:** Across a dilution series, two failure modes recurred for *real* fusions:
+(1) high-depth junctions (e.g. EWSR1::FLI1, PAX7::FOXO1) tagged `chimera` despite 100+
+converging reads, because `bp_*_std` landed just over `--max-breakpoint-std` (≈100–210 bp);
+(2) a real translocation (EWSR1::ERG with its breakpoint in a repeat) tagged `samelocus`
+because its only evidence — concordant pairs — co-localized to one chromosome ~35 bp apart,
+the same geometry as paralog leakage.
+
+**Why the obvious fixes fail:** raising `--max-breakpoint-std` is *not* safe — off-target
+artifacts populate the same 100–460 bp std range as the lost real calls (no clean gap, contrary
+to the earlier "orders-of-magnitude gap" assumption). And exempting `samelocus` on total read
+support lets a *spanning-dominated* leakage call (e.g. FOXO1::PIK3CA, both breakpoints 1 bp
+apart, 27 of 29 reads spanning) slip through.
+
+**The discriminator that works is read SUPPORT and its COMPOSITION, not std magnitude:**
+- Every off-target artifact sits at the `--min-breakpoint-reads` floor (≤ ~8 reads); real
+  high-depth junctions have far more. So a **strong-support tier** — ≥25 reads on *both* sides,
+  std ≤250 bp — rescues the real chimera-tagged calls and admits zero artifacts.
+- Single-locus leakage is **spanning-read dominated** (one molecule carries both partners'
+  k-mers); a real repeat-buried junction has strong **independent concordant** support
+  (separate reads per partner, few spanning). So the samelocus exemption uses
+  `strong_concordant_support` = strong support *after subtracting spanning reads*, which
+  collapses leakage (FOXO1::PIK3CA → ~1 concordant) but not the real call (EWSR1::ERG → 90+).
+
+**Fix:** `BreakpointStats::strong_support` (chimera tier, counts all reads — real
+interchromosomal fusions are legitimately spanning-dominated) and
+`strong_concordant_support` (samelocus exemption, counts only non-spanning reads).
+
+**Lesson:** with a 2-orders-of-magnitude overlap in std between real and artifact, a scalar
+threshold can't separate them — but *read support* and *spanning-vs-concordant composition*
+can. Verify a filter change against known artifacts (paralog pairs like H3C3::H3C2, recurrent
+co-located pairs) on the same cohort, not just the target fusions.
+
 ---
 
 ## DuckDB Query Engine

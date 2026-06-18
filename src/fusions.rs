@@ -577,6 +577,47 @@ struct BreakpointStats {
     n_spanning: usize,
 }
 
+/// "Strong support" breakpoint tier. When BOTH partners are supported by this many
+/// converging reads, the call is high-confidence enough to (a) tolerate a looser
+/// breakpoint spread than `--max-breakpoint-std` — real high-depth junctions smear over
+/// tens-to->100 bp from splice isoforms and k-mer transition-point noise — and (b) be
+/// exempt from the same-locus filter. Single-locus paralog leakage is *spanning-read
+/// dominated* at one locus and never accumulates this many INDEPENDENT (concordant)
+/// reads on both partners, so this tier separates a real co-located junction (a true
+/// translocation observed only through concordant pairs, e.g. a breakpoint buried in a
+/// repeat) from leakage without weakening either artifact filter for low-support calls.
+const STRONG_BREAKPOINT_READS: usize = 25;
+const STRONG_BREAKPOINT_STD: f64 = 250.0;
+
+impl BreakpointStats {
+    /// Both sides have ≥ `STRONG_BREAKPOINT_READS` converging reads with spread within
+    /// `STRONG_BREAKPOINT_STD`. Used to rescue real high-depth junctions from the
+    /// `--max-breakpoint-std` ceiling. Counts ALL supporting reads (spanning included),
+    /// because a real interchromosomal fusion is legitimately spanning-read dominated.
+    fn strong_support(&self) -> bool {
+        self.bp_a_n >= STRONG_BREAKPOINT_READS
+            && self.bp_b_n >= STRONG_BREAKPOINT_READS
+            && self.bp_a_std.is_some_and(|v| v <= STRONG_BREAKPOINT_STD)
+            && self.bp_b_std.is_some_and(|v| v <= STRONG_BREAKPOINT_STD)
+    }
+
+    /// Like `strong_support`, but counts only INDEPENDENT (non-spanning) reads on each
+    /// side. Single-locus paralog leakage is spanning-read dominated at one locus —
+    /// the same molecule carries both partners' k-mers — so subtracting spanning reads
+    /// collapses it, while a real junction observed through concordant pairs (e.g. a
+    /// breakpoint buried in a repeat, where no read spans the gap) retains strong
+    /// support. Used to exempt such real co-located junctions from the same-locus filter
+    /// without weakening it for leakage.
+    fn strong_concordant_support(&self) -> bool {
+        let ca = self.bp_a_n.saturating_sub(self.n_spanning);
+        let cb = self.bp_b_n.saturating_sub(self.n_spanning);
+        ca >= STRONG_BREAKPOINT_READS
+            && cb >= STRONG_BREAKPOINT_READS
+            && self.bp_a_std.is_some_and(|v| v <= STRONG_BREAKPOINT_STD)
+            && self.bp_b_std.is_some_and(|v| v <= STRONG_BREAKPOINT_STD)
+    }
+}
+
 /// Estimate both breakpoints and their dispersion from one fusion's spanning reads.
 /// Each spanning read votes a position for whichever side(s) its alignment chromosome
 /// matches; the median is the breakpoint and the standard deviation is the consensus
@@ -1669,10 +1710,14 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             }
             let label = fusion_pair_label(r.pair_key, &index.gene_names);
             let passes = breakpoint_stats.get(&label).is_some_and(|s| {
-                s.bp_a_n >= min_n
+                let tight = s.bp_a_n >= min_n
                     && s.bp_b_n >= min_n
                     && s.bp_a_std.is_some_and(|v| v <= max_std)
-                    && s.bp_b_std.is_some_and(|v| v <= max_std)
+                    && s.bp_b_std.is_some_and(|v| v <= max_std);
+                // A real high-depth junction can exceed `max_std` (splice-isoform +
+                // transition-point spread); strong support on both sides rescues it
+                // without admitting low-support artifacts (which never reach this tier).
+                tight || s.strong_support()
             });
             if !passes {
                 r.filter = "chimera".to_string();
@@ -1700,12 +1745,21 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 continue;
             }
             let label = fusion_pair_label(r.pair_key, &index.gene_names);
-            let same_locus = breakpoint_stats
-                .get(&label)
-                .is_some_and(|s| match (s.bp_a, s.bp_b) {
+            let same_locus = breakpoint_stats.get(&label).is_some_and(|s| {
+                // Single-locus leakage is spanning-read dominated at one locus and never
+                // accrues strong INDEPENDENT (concordant) support on both partners. A
+                // co-located call with strong concordant support is a real junction seen
+                // through concordant pairs (e.g. a breakpoint buried in a repeat) — exempt
+                // it. Total-support strength is NOT enough here: a high-volume leakage
+                // locus can exceed the read threshold on spanning reads alone.
+                if s.strong_concordant_support() {
+                    return false;
+                }
+                match (s.bp_a, s.bp_b) {
                     (Some(a), Some(b)) => s.chrom_a == s.chrom_b && (a - b).abs() < min_dist as f64,
                     _ => false,
-                });
+                }
+            });
             if same_locus {
                 r.filter = "samelocus".to_string();
                 flagged += 1;

@@ -1134,6 +1134,24 @@ cluster window is an internal constant. *Rejected intermediate approaches* (see 
 k-mer-offset estimates (scatter ≈1 kb) and extreme-anchored trimming (anchors on the outlier,
 collapses support to ~3 reads, and silently assumes a gene-A-at-max-coordinate orientation).
 
+**Strong-support tier for the breakpoint filters (v0.4.53, 2026-06-18).** A dilution-series
+evaluation showed a single scalar `--max-breakpoint-std` can't separate real fusions from
+artifacts: real high-depth junctions tagged `chimera` had `bp_*_std` ≈100–210 bp (splice-isoform
++ transition-point spread), but off-target artifacts populate that same std range — there is no
+clean gap. What *does* separate them is read **support**: artifacts sit at the
+`--min-breakpoint-reads` floor (≤ ~8 reads), real high-depth junctions have far more. Added a
+`BreakpointStats::strong_support` tier (≥ `STRONG_BREAKPOINT_READS`=25 reads on both sides,
+std ≤ `STRONG_BREAKPOINT_STD`=250 bp) that also PASSes the chimera test — rescuing real calls
+with zero artifact admission. For the `samelocus` filter the analogue must exclude spanning
+reads: single-locus paralog leakage is spanning-read dominated at one locus (one molecule carries
+both partners' k-mers), whereas a real repeat-buried junction has strong INDEPENDENT concordant
+support. `strong_concordant_support` (strong support after subtracting `n_spanning`) exempts the
+real co-located junction from `--min-breakpoint-distance` while leakage — which collapses once
+spanning reads are removed — stays tagged. Both tier thresholds are internal constants; no CLI/
+schema/WDL-input change. The chimera tier counts *all* reads (real interchromosomal fusions are
+legitimately spanning-dominated); only the samelocus exemption subtracts spanning. Verified
+against paralog/co-located artifacts (e.g. H3C3::H3C2) which remain `samelocus`.
+
 ---
 
 ## `compute-uniqueness-map` command (2026-06-05)

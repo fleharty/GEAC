@@ -32,13 +32,19 @@ version 1.0
 ##   min_anchor_kmers      - minimum k-mer hits from each gene for a spanning read to count as anchored
 ##                           (default: 3; only relevant when min_coherent_fragments > 0)
 ##   max_breakpoint_std    - (optional) tag fusions with filter="chimera" unless BOTH breakpoints are
-##                           supported by >= min_breakpoint_reads spanning reads whose position estimates
-##                           have a standard deviation <= this many bp; rows are kept, not dropped
-##   min_breakpoint_reads  - minimum spanning reads converging on EACH breakpoint under the
+##                           supported by >= min_breakpoint_reads reads whose position estimates have a
+##                           standard deviation <= this many bp; rows are kept, not dropped. Recommended: 100.
+##                           A "strong support" tier (>= 25 reads per side, std <= 250 bp) also PASSes: real
+##                           high-depth junctions spread over tens-to->100 bp (splice isoforms + k-mer
+##                           transition-point noise), and low-support artifacts never reach that tier.
+##   min_breakpoint_reads  - minimum reads converging on EACH breakpoint under the
 ##                           max_breakpoint_std filter (default: 5; only consulted when max_breakpoint_std set)
 ##   min_breakpoint_distance - (optional) tag fusions with filter="samelocus" when both breakpoints fall on the
 ##                           same chromosome within this many bp (single-locus paralog leakage, e.g. unindexed
-##                           GNA12 reads split between GNA13/GNA11); rows are kept. Recommended: 10000
+##                           GNA12 reads split between GNA13/GNA11); rows are kept. Recommended: 10000.
+##                           Calls with strong INDEPENDENT (concordant, non-spanning) support on both partners
+##                           are exempt — leakage is spanning-read dominated at one locus, whereas a real
+##                           junction observed only through concordant pairs (breakpoint buried in a repeat) is not.
 ##   comment_text          - (optional) free-text note echoed straight to the data table (as the
 ##                           `comment` output); not processed by geac, never written to the Parquet/TSV
 ##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
