@@ -45,6 +45,13 @@ version 1.0
 ##                           Calls with strong INDEPENDENT (concordant, non-spanning) support on both partners
 ##                           are exempt — leakage is spanning-read dominated at one locus, whereas a real
 ##                           junction observed only through concordant pairs (breakpoint buried in a repeat) is not.
+##   asym_anchor_reads     - (optional) single-sample low-input rescue: also keep filter="PASS" when the
+##                           DOMINANT breakpoint has >= this many reads converging within asym_anchor_std bp,
+##                           the partner breakpoint has >= 1 read, and min_mapq >= asym_anchor_mapq. Recovers a
+##                           junction seen well on one side but by 1-2 reads on the other. Only consulted when
+##                           max_breakpoint_std is set. Suggested: 10.
+##   asym_anchor_std       - max breakpoint std (bp) on the dominant side for asym_anchor_reads (default: 25)
+##   asym_anchor_mapq      - min call min_mapq for asym_anchor_reads; excludes multi-mapper leakage (default: 20)
 ##   comment_text          - (optional) free-text note echoed straight to the data table (as the
 ##                           `comment` output); not processed by geac, never written to the Parquet/TSV
 ##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
@@ -87,6 +94,9 @@ workflow GeacFusions {
         Float?   max_breakpoint_std
         Int      min_breakpoint_reads   = 5
         Int?     min_breakpoint_distance
+        Int?     asym_anchor_reads
+        Float    asym_anchor_std        = 25.0
+        Int      asym_anchor_mapq       = 20
 
         String?  comment_text
 
@@ -119,6 +129,9 @@ workflow GeacFusions {
             max_breakpoint_std         = max_breakpoint_std,
             min_breakpoint_reads       = min_breakpoint_reads,
             min_breakpoint_distance    = min_breakpoint_distance,
+            asym_anchor_reads          = asym_anchor_reads,
+            asym_anchor_std            = asym_anchor_std,
+            asym_anchor_mapq           = asym_anchor_mapq,
             docker_image           = docker_image,
             memory_gb              = memory_gb,
             disk_gb                = disk_gb,
@@ -162,6 +175,9 @@ task Fusions {
         Float?   max_breakpoint_std
         Int      min_breakpoint_reads
         Int?     min_breakpoint_distance
+        Int?     asym_anchor_reads
+        Float    asym_anchor_std
+        Int      asym_anchor_mapq
 
         String docker_image
         Int    memory_gb
@@ -208,7 +224,10 @@ task Fusions {
             --min-anchor-kmers       ~{min_anchor_kmers} \
             ~{"--max-breakpoint-std "  + max_breakpoint_std} \
             --min-breakpoint-reads   ~{min_breakpoint_reads} \
-            ~{"--min-breakpoint-distance " + min_breakpoint_distance}
+            ~{"--min-breakpoint-distance " + min_breakpoint_distance} \
+            ~{"--asym-anchor-reads " + asym_anchor_reads} \
+            --asym-anchor-std        ~{asym_anchor_std} \
+            --asym-anchor-mapq       ~{asym_anchor_mapq}
     >>>
 
     output {

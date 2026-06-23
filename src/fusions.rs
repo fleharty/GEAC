@@ -601,6 +601,23 @@ impl BreakpointStats {
             && self.bp_b_std.is_some_and(|v| v <= STRONG_BREAKPOINT_STD)
     }
 
+    /// Asymmetric anchor tier (single-sample low-input rescue). The DOMINANT (better-covered)
+    /// breakpoint must be a tight, well-supported junction (≥ `min_hi` reads, std ≤ `max_std`)
+    /// and the partner breakpoint needs only ≥ 1 read. Recovers a real junction seen well on
+    /// one side but by 1–2 reads on the other — where the symmetric tight tier (≥ N reads on
+    /// BOTH sides) fails at low input. Requiring the *dominant* side to be tight (not just any
+    /// side) rejects paralog-leakage artifacts, whose high-count side is smeared (loose std)
+    /// while a minority side coincidentally converges. The caller additionally gates this on a
+    /// MAPQ floor, since leakage reads are multi-mappers.
+    fn asym_anchored(&self, min_hi: usize, max_std: f64) -> bool {
+        let (hi_n, hi_std, lo_n) = if self.bp_a_n >= self.bp_b_n {
+            (self.bp_a_n, self.bp_a_std, self.bp_b_n)
+        } else {
+            (self.bp_b_n, self.bp_b_std, self.bp_a_n)
+        };
+        hi_n >= min_hi && lo_n >= 1 && hi_std.is_some_and(|v| v <= max_std)
+    }
+
     /// Like `strong_support`, but counts only INDEPENDENT (non-spanning) reads on each
     /// side. Single-locus paralog leakage is spanning-read dominated at one locus —
     /// the same molecule carries both partners' k-mers — so subtracting spanning reads
@@ -1709,6 +1726,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 continue;
             }
             let label = fusion_pair_label(r.pair_key, &index.gene_names);
+            let rec_mapq = r.min_mapq;
             let passes = breakpoint_stats.get(&label).is_some_and(|s| {
                 let tight = s.bp_a_n >= min_n
                     && s.bp_b_n >= min_n
@@ -1717,7 +1735,14 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 // A real high-depth junction can exceed `max_std` (splice-isoform +
                 // transition-point spread); strong support on both sides rescues it
                 // without admitting low-support artifacts (which never reach this tier).
-                tight || s.strong_support()
+                // Asymmetric anchor: one side a tight well-covered junction, the partner
+                // seen by >=1 read — recovers low-input junctions captured well on only one
+                // side (single-sample; gated on MAPQ to exclude multi-mapper paralog leakage).
+                let asym = args.asym_anchor_reads.is_some_and(|n| {
+                    rec_mapq >= args.asym_anchor_mapq
+                        && s.asym_anchored(n as usize, args.asym_anchor_std)
+                });
+                tight || s.strong_support() || asym
             });
             if !passes {
                 r.filter = "chimera".to_string();

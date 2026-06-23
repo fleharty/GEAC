@@ -980,6 +980,26 @@ pub struct FusionsArgs {
     #[arg(long)]
     pub min_breakpoint_distance: Option<i64>,
 
+    /// Asymmetric breakpoint-anchor tier (single-sample low-input rescue). When set, a fusion
+    /// also keeps filter="PASS" if its DOMINANT (better-covered) breakpoint has at least this
+    /// many reads converging within --asym-anchor-std bp AND the partner breakpoint has >=1
+    /// read AND the call's min_mapq is >= --asym-anchor-mapq. Recovers a real junction seen
+    /// well on one side but by only 1-2 reads on the other, where the symmetric
+    /// --min-breakpoint-reads tier (that many reads on BOTH sides) fails at low input.
+    /// Requiring the *dominant* side to be tight + a MAPQ floor rejects paralog-leakage
+    /// artifacts (smeared high-count side, multi-mapper reads). Only consulted when
+    /// --max-breakpoint-std is set. Default: disabled.
+    #[arg(long)]
+    pub asym_anchor_reads: Option<u32>,
+
+    /// Max breakpoint std (bp) on the dominant side for the --asym-anchor-reads tier.
+    #[arg(long, default_value_t = 25.0)]
+    pub asym_anchor_std: f64,
+
+    /// Minimum call min_mapq for the --asym-anchor-reads tier (excludes multi-mapper leakage).
+    #[arg(long, default_value_t = 20)]
+    pub asym_anchor_mapq: u8,
+
     /// Optional k-mer blacklist Parquet produced by `geac experimental build-fusion-kmer-blacklist`.
     /// K-mers in this file are considered PoN-noisy: a read must have at least `--min-kmer-hits`
     /// *non-blacklisted* k-mer matches to contribute to fusion evidence. Blacklisted k-mers
