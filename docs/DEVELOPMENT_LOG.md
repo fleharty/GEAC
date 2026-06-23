@@ -1470,3 +1470,39 @@ behavior is exactly as before (single `CollectWhole` per sample). `fragments` st
 unsharded. Partial Parquets never reach `geac merge`.
 
 Pipeline change — gates a release when cut (not done here).
+
+## Fusion asymmetric breakpoint-anchor tier — shipped v0.4.54
+
+**Problem.** The `chimera` breakpoint-consensus filter PASSes a call only if BOTH breakpoints are
+"tight" (≥ `--min-breakpoint-reads` reads converging within `--max-breakpoint-std` bp) or the
+strong-support tier holds (≥25 reads/side). At low input a genuine junction is frequently captured
+well on **one** side (tens of reads converging on a single base) but seen by only 1–2 reads on the
+other — coverage / mappability asymmetry — so it fails the symmetric tier and is tagged `chimera`.
+Lowering the read threshold symmetrically is not viable: artifacts occupy the same low-read /
+tight-std space, so it admits orders of magnitude more false positives than it rescues.
+
+**Why a single-sample signal exists.** Would-be artifacts with a high-count side are dominated by
+recurrent paralog leakage: their well-covered side is **smeared** (std 40–220 bp — reads spread
+across the gene, not a junction) while a minority side coincidentally lands at one base, and their
+reads are **multi-mappers** (call `min_mapq` = 0). A real junction is the opposite — its dominant
+side is **tightly converged** (std ≈ 5–20 bp) and its reads map uniquely. Two within-sample
+features therefore separate them with no cohort context.
+
+**Filter.** `BreakpointStats::asym_anchored(min_hi, max_std)`: the side with more reads has
+≥ `min_hi` reads and std ≤ `max_std`, and the partner side has ≥ 1 read. The chimera filter adds
+`… || (args.asym_anchor_reads.is_some_and(|n| rec_mapq >= args.asym_anchor_mapq &&
+s.asym_anchored(n, args.asym_anchor_std)))`. Keying on the **dominant** side (not "either side")
+rejects leakage; the MAPQ floor drops multi-mapper leakage. Flags: `--asym-anchor-reads <N>`
+(Option, enables the tier), `--asym-anchor-std` (default 25.0), `--asym-anchor-mapq` (default 20).
+Default disabled; only consulted when `--max-breakpoint-std` is set.
+
+**Why single-sample (vs the cohort alternative).** A cross-sample "consensus anchor" — rescue a
+low-input call whose breakpoints match a junction confirmed strong+PASS in another replicate of the
+same lineage — also works and is zero-FP, but it is inherently cohort-level and cannot live in the
+per-sample filter; it would need a cohort pass (`geac merge` or a new subcommand). Deferred. The
+asymmetric tier delivers the low-input rescue with no cross-sample dependency.
+
+**Validation.** Cell-line dilution series: recovers additional low-input PASS calls on a
+hard-to-detect fusion with zero new false positives across every sample and control.
+
+Pipeline change — gated the v0.4.54 release.
