@@ -233,6 +233,11 @@ task Collect {
     String output_arg  = stem + ".parquet"
     String locus_name  = if reads_output then stem + ".locus.parquet" else stem + ".parquet"
 
+    # An empty `exclude_tag` makes `prefix(...)` yield an empty Array[Nothing], which
+    # Cromwell (WDL 1.0) refuses to interpolate through a `sep=` placeholder. Guard with
+    # a length check so the placeholder only ever sees a concrete Array[String].
+    Array[String] exclude_args = if length(exclude_tag) > 0 then prefix("--exclude-tag ", exclude_tag) else [""]
+
     command <<<
         set -euo pipefail
 
@@ -266,7 +271,7 @@ task Collect {
             ~{if include_duplicates    then "--include-duplicates"    else ""} \
             ~{if include_secondary     then "--include-secondary"     else ""} \
             ~{if include_supplementary then "--include-supplementary" else ""} \
-            ~{sep=" " prefix("--exclude-tag ", exclude_tag)} \
+            ~{sep=" " exclude_args} \
             ~{if input_checksum_sha256 then "--input-checksum-sha256" else ""} \
             ~{if reads_output then "--reads-output" else ""} \
             ~{"--bam-uri "      + bam_uri} \
