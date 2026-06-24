@@ -2014,7 +2014,10 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
     // — those stay index-ordered read-level evidence.
     for r in records.iter_mut() {
         let label = fusion_pair_label(r.pair_key, &index.gene_names);
-        match breakpoint_stats.get(&label).and_then(|s| s.gene_a_is_5prime) {
+        match breakpoint_stats
+            .get(&label)
+            .and_then(|s| s.gene_a_is_5prime)
+        {
             Some(true) => r.partner_order = "5to3".to_string(),
             Some(false) => {
                 std::mem::swap(&mut r.gene_a, &mut r.gene_b);
@@ -2215,7 +2218,10 @@ mod tests {
         let idx = mk_orient_index(&['+', '-'], &["chr1", "chr2"], true);
         let mut spans = mk_spans("chr1", 100, true, 10); // gene_a 5'
         spans.extend(mk_spans("chr1", 100, false, 2)); // gene_b 5'
-        assert_eq!(infer_five_prime(&mk_acc(spans), &idx, "chr1", "chr2"), Some(true));
+        assert_eq!(
+            infer_five_prime(&mk_acc(spans), &idx, "chr1", "chr2"),
+            Some(true)
+        );
     }
 
     #[test]

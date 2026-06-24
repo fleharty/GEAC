@@ -155,7 +155,11 @@ fn parse_gtf_gene_bodies(gtf_path: &Path) -> Result<Vec<GeneBody>> {
             None => continue,
         };
         // GTF column 7 (0-based index 6) is the strand.
-        let strand = fields[6].chars().next().filter(|c| *c == '+' || *c == '-').unwrap_or('.');
+        let strand = fields[6]
+            .chars()
+            .next()
+            .filter(|c| *c == '+' || *c == '-')
+            .unwrap_or('.');
         genes.push(GeneBody {
             gene_name,
             chrom: fields[0].to_string(),
