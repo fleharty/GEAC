@@ -77,6 +77,10 @@ pub(crate) struct GeneBody {
     pub(crate) chrom: String,
     pub(crate) start: usize, // 0-based inclusive
     pub(crate) end: usize,   // 0-based exclusive (half-open)
+    /// Transcription strand: '+' or '-' (from the annotation), or '.' when unknown.
+    /// Persisted to the index `genes` table so the scanner can report fusion partners
+    /// in biological 5'->3' order.
+    pub(crate) strand: char,
 }
 
 /// Dispatch to the correct parser based on file extension.
@@ -150,11 +154,14 @@ fn parse_gtf_gene_bodies(gtf_path: &Path) -> Result<Vec<GeneBody>> {
             Some(g) => g,
             None => continue,
         };
+        // GTF column 7 (0-based index 6) is the strand.
+        let strand = fields[6].chars().next().filter(|c| *c == '+' || *c == '-').unwrap_or('.');
         genes.push(GeneBody {
             gene_name,
             chrom: fields[0].to_string(),
             start,
             end,
+            strand,
         });
     }
     Ok(genes)
@@ -173,8 +180,8 @@ fn parse_genepred_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
         Box::new(BufReader::new(file))
     };
 
-    // Accumulate per (gene_name, chrom) → (min_start, max_end).
-    let mut gene_map: HashMap<(String, String), (usize, usize)> = HashMap::new();
+    // Accumulate per (gene_name, chrom) → (min_start, max_end, strand).
+    let mut gene_map: HashMap<(String, String), (usize, usize, char)> = HashMap::new();
 
     for line in reader.lines() {
         let line = line?;
@@ -187,12 +194,13 @@ fn parse_genepred_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
         //   col[0] parses as integer → genePredExt+bin (e.g. ncbiRefSeq.txt)
         //   col[0] looks like a transcript accession → genePredExt without bin
         //   otherwise → refFlat (gene name first)
-        let (gene_name, chrom, start_str, end_str) = if fields[0].parse::<u32>().is_ok() {
+        let (gene_name, chrom, strand_str, start_str, end_str) = if fields[0].parse::<u32>().is_ok()
+        {
             // genePredExt + bin: bin name chrom strand txStart txEnd … name2
             if fields.len() < 13 {
                 continue;
             }
-            (fields[12], fields[2], fields[4], fields[5])
+            (fields[12], fields[2], fields[3], fields[4], fields[5])
         } else if fields.len() >= 15
             && (fields[0].starts_with("NM_")
                 || fields[0].starts_with("NR_")
@@ -201,14 +209,19 @@ fn parse_genepred_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
                 || fields[0].starts_with("ENST"))
         {
             // genePredExt without bin: name chrom strand txStart txEnd … name2
-            (fields[11], fields[1], fields[3], fields[4])
+            (fields[11], fields[1], fields[2], fields[3], fields[4])
         } else {
             // refFlat: geneName name chrom strand txStart txEnd …
             if fields.len() < 6 {
                 continue;
             }
-            (fields[0], fields[2], fields[4], fields[5])
+            (fields[0], fields[2], fields[3], fields[4], fields[5])
         };
+        let strand = strand_str
+            .chars()
+            .next()
+            .filter(|c| *c == '+' || *c == '-')
+            .unwrap_or('.');
 
         // txStart / txEnd are already 0-based half-open in GenePred.
         let start: usize = match start_str.parse() {
@@ -225,18 +238,24 @@ fn parse_genepred_gene_bodies(path: &Path) -> Result<Vec<GeneBody>> {
 
         let entry = gene_map
             .entry((gene_name.to_string(), chrom.to_string()))
-            .or_insert((start, end));
+            .or_insert((start, end, strand));
         entry.0 = entry.0.min(start);
         entry.1 = entry.1.max(end);
+        // Strand is consistent across transcripts of a gene; keep the first
+        // definite strand seen, only upgrading away from unknown ('.').
+        if entry.2 == '.' {
+            entry.2 = strand;
+        }
     }
 
     let genes = gene_map
         .into_iter()
-        .map(|((gene_name, chrom), (start, end))| GeneBody {
+        .map(|((gene_name, chrom), (start, end, strand))| GeneBody {
             gene_name,
             chrom,
             start,
             end,
+            strand,
         })
         .collect();
     Ok(genes)
@@ -318,7 +337,7 @@ fn write_index(
     // only when --check-genome-uniqueness ran; NULL otherwise (count unknown).
     conn.execute_batch(
         "CREATE TABLE meta (key VARCHAR, value VARCHAR);
-         CREATE TABLE genes (gene_index UINTEGER, gene_name VARCHAR, chrom VARCHAR);
+         CREATE TABLE genes (gene_index UINTEGER, gene_name VARCHAR, chrom VARCHAR, strand VARCHAR, tx_start UBIGINT, tx_end UBIGINT);
          CREATE TABLE kmers (kmer_hash BIGINT, gene_index UINTEGER, genome_copies INTEGER);
          CREATE TABLE kmer_positions (kmer_hash BIGINT, chrom VARCHAR, pos INTEGER);",
     )?;
@@ -331,13 +350,26 @@ fn write_index(
         "INSERT INTO meta (key, value) VALUES ('geac_version', ?)",
         duckdb::params![env!("CARGO_PKG_VERSION")],
     )?;
+    // Signals that the genes table carries strand + tx coordinates, so the scanner
+    // can report fusion partners in biological 5'->3' order. Absent on legacy indexes.
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('gene_strand', '1')",
+        [],
+    )?;
 
     {
         let mut app = conn
             .appender("genes")
             .context("failed to create genes appender")?;
         for (i, gene) in genes.iter().enumerate() {
-            app.append_row(duckdb::params![i as u32, &gene.gene_name, &gene.chrom])?;
+            app.append_row(duckdb::params![
+                i as u32,
+                &gene.gene_name,
+                &gene.chrom,
+                gene.strand.to_string(),
+                gene.start as u64,
+                gene.end as u64
+            ])?;
         }
         app.flush()?;
     }

@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 
 
-GEAC_VERSION = "0.4.54"
+GEAC_VERSION = "0.4.55"
 
 
 @dataclass(frozen=True)

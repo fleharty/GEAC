@@ -23,6 +23,15 @@ struct FusionIndex {
     kmer_to_gene: HashMap<u64, u32>,
     gene_names: Vec<String>,
     gene_chroms: Vec<String>,
+    /// Per-gene transcription strand ('+'/'-'/'.'); all '.' when `has_strand` is false.
+    gene_strands: Vec<char>,
+    /// Per-gene 0-based half-open transcript body bounds (0 when `has_strand` is false).
+    gene_tx_start: Vec<i64>,
+    gene_tx_end: Vec<i64>,
+    /// True when the index carries strand + tx coords (meta `gene_strand=1`), enabling
+    /// biological 5'->3' fusion-partner ordering. Legacy indexes are false → the scanner
+    /// falls back to gene-index-order labels.
+    has_strand: bool,
 }
 
 /// Read a value from the index `meta` table by key.
@@ -116,18 +125,48 @@ fn load_index(
         }
     }
 
-    let mut stmt =
-        conn.prepare("SELECT gene_index, gene_name, chrom FROM genes ORDER BY gene_index")?;
+    // Indexes built with strand support carry a `gene_strand=1` meta flag and the
+    // extra genes-table columns. Legacy indexes lack both — load chrom/name only and
+    // leave strand unknown so the scanner falls back to gene-index-order labels.
+    let has_strand = index_meta_value(&conn, "gene_strand")?.as_deref() == Some("1");
     let mut gene_names: Vec<String> = Vec::new();
     let mut gene_chroms: Vec<String> = Vec::new();
+    let mut gene_strands: Vec<char> = Vec::new();
+    let mut gene_tx_start: Vec<i64> = Vec::new();
+    let mut gene_tx_end: Vec<i64> = Vec::new();
 
-    let mut rows = stmt.query([])?;
-    while let Some(row) = rows.next()? {
-        let _idx: u32 = row.get(0)?;
-        gene_names.push(row.get(1)?);
-        gene_chroms.push(row.get(2)?);
+    if has_strand {
+        let mut stmt = conn.prepare(
+            "SELECT gene_index, gene_name, chrom, strand, tx_start, tx_end \
+             FROM genes ORDER BY gene_index",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let _idx: u32 = row.get(0)?;
+            gene_names.push(row.get(1)?);
+            gene_chroms.push(row.get(2)?);
+            let s: String = row.get(3)?;
+            gene_strands.push(s.chars().next().unwrap_or('.'));
+            gene_tx_start.push(row.get::<_, u64>(4)? as i64);
+            gene_tx_end.push(row.get::<_, u64>(5)? as i64);
+        }
+    } else {
+        let mut stmt =
+            conn.prepare("SELECT gene_index, gene_name, chrom FROM genes ORDER BY gene_index")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let _idx: u32 = row.get(0)?;
+            gene_names.push(row.get(1)?);
+            gene_chroms.push(row.get(2)?);
+            gene_strands.push('.');
+            gene_tx_start.push(0);
+            gene_tx_end.push(0);
+        }
     }
-    info!(n_genes = gene_names.len(), "loaded genes from index");
+    info!(
+        n_genes = gene_names.len(),
+        has_strand, "loaded genes from index"
+    );
 
     // The k-mer table dominates memory on large indexes (tens-to-hundreds of
     // millions of entries). Reserve up front from the row count so the map is
@@ -200,6 +239,10 @@ fn load_index(
         kmer_to_gene,
         gene_names,
         gene_chroms,
+        gene_strands,
+        gene_tx_start,
+        gene_tx_end,
+        has_strand,
     })
 }
 
@@ -575,6 +618,11 @@ struct BreakpointStats {
     bp_b_n: usize,
     bp_b_std: Option<f64>,
     n_spanning: usize,
+    /// Biological 5'->3' orientation: Some(true) if gene_a (pair_key.0) is the 5'
+    /// (donor) partner, Some(false) if gene_b is, None when undetermined (index lacks
+    /// strand, unknown strands, ambiguous, or no read majority). Drives oriented
+    /// partner ordering in the fusions/breakpoints output; None falls back to index order.
+    gene_a_is_5prime: Option<bool>,
 }
 
 /// "Strong support" breakpoint tier. When BOTH partners are supported by this many
@@ -634,6 +682,131 @@ impl BreakpointStats {
             && self.bp_b_std.is_some_and(|v| v <= STRONG_BREAKPOINT_STD)
     }
 }
+
+/// Infer which partner is the biological 5' (donor) gene from spanning-read geometry.
+///
+/// Returns `Some(true)` when gene_a (`acc.gene_a_idx`, i.e. `pair_key.0`) is the 5'
+/// partner, `Some(false)` when gene_b is, and `None` when orientation cannot be
+/// determined: the index carries no strand (`has_strand == false`), the relevant
+/// strand is unknown (`'.'`), no spanning read is informative, or the vote ties.
+///
+/// For each spanning read we know `a_before_b` — gene_a's k-mer block precedes gene_b's
+/// in the read `SEQ`, which is stored reference-forward, so "before" means lower genomic
+/// coordinate at the aligned locus — and which gene the read aligns to (`chrom`/`pos`).
+/// The junction is the aligned gene's block edge; with that gene's transcription strand:
+///
+///   aligned gene is the 5' partner  iff  (its block is first)  ==  (its strand is '+')
+///
+/// because a '+'-strand gene whose retained block sits at the lower-coordinate side keeps
+/// its promoter-proximal 5' portion (donor), and the logic mirrors for '-' strand and for
+/// the gene-b-aligned case. Votes are tallied across informative reads; the majority wins.
+fn infer_five_prime(
+    acc: &BreakpointAccumulator,
+    index: &FusionIndex,
+    chrom_a: &str,
+    chrom_b: &str,
+) -> Option<bool> {
+    if !index.has_strand {
+        return None;
+    }
+    let ga = acc.gene_a_idx as usize;
+    let gb = acc.gene_b_idx as usize;
+    let strand_a = index.gene_strands[ga];
+    let strand_b = index.gene_strands[gb];
+    let same_chrom = chrom_a == chrom_b;
+
+    // Votes for "gene_a is the 5' partner" vs "gene_b is the 5' partner".
+    let mut a5_votes: i32 = 0;
+    let mut b5_votes: i32 = 0;
+
+    for sd in &acc.spanning_reads {
+        let a_before_b = sd.first_a < sd.first_b;
+        // Which partner does this read align to?
+        let aligns_a = if same_chrom {
+            // Same chromosome: disambiguate by which gene body the alignment start sits in.
+            let in_a = sd.pos >= index.gene_tx_start[ga] && sd.pos < index.gene_tx_end[ga];
+            let in_b = sd.pos >= index.gene_tx_start[gb] && sd.pos < index.gene_tx_end[gb];
+            match (in_a, in_b) {
+                (true, false) => true,
+                (false, true) => false,
+                _ => continue, // ambiguous (overlapping or neither) → skip
+            }
+        } else if sd.chrom == chrom_a {
+            true
+        } else if sd.chrom == chrom_b {
+            false
+        } else {
+            continue; // read on neither partner's chromosome → uninformative
+        };
+
+        if aligns_a {
+            // gene_a is 5' iff (a_before_b == strand_a is '+')
+            match strand_a {
+                '+' => {
+                    if a_before_b {
+                        a5_votes += 1
+                    } else {
+                        b5_votes += 1
+                    }
+                }
+                '-' => {
+                    if a_before_b {
+                        b5_votes += 1
+                    } else {
+                        a5_votes += 1
+                    }
+                }
+                _ => continue, // unknown strand → uninformative
+            }
+        } else {
+            // gene_b is 5' iff (!a_before_b == strand_b is '+')
+            match strand_b {
+                '+' => {
+                    if a_before_b {
+                        a5_votes += 1
+                    } else {
+                        b5_votes += 1
+                    }
+                }
+                '-' => {
+                    if a_before_b {
+                        b5_votes += 1
+                    } else {
+                        a5_votes += 1
+                    }
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    // Confidence gate. Orientation is decided by majority vote, but two guards prevent a
+    // misleading call:
+    //   * Minimum support — a handful of scattered reads in a capture-limited background
+    //     can vote the wrong way; require enough informative spanning reads that the
+    //     majority is meaningful. (Validated: real calls carry >=13 such votes; the only
+    //     misfires were 5-6-read chimera-filtered calls, which abstain here.)
+    //   * Minimum fraction — guards against a ~50/50 coin flip. A real interchromosomal
+    //     fusion legitimately yields a minority of reciprocal-derivative-junction reads
+    //     (e.g. ~24% for EWSR1::FLI1), so this floor is intentionally permissive; the
+    //     dominant orientation is the functional 5'->3' direction.
+    // Below either guard, return None and the caller keeps gene-index order.
+    let total = a5_votes + b5_votes;
+    if total < ORIENT_MIN_VOTES {
+        return None;
+    }
+    let winner = a5_votes.max(b5_votes);
+    if (winner as f64) / (total as f64) < ORIENT_MIN_FRACTION {
+        return None;
+    }
+    Some(a5_votes > b5_votes)
+}
+
+/// Minimum informative spanning-read votes before orientation is asserted.
+const ORIENT_MIN_VOTES: i32 = 10;
+/// Minimum share of votes the winning orientation must hold (else abstain). Permissive
+/// because reciprocal-derivative junction reads form a legitimate minority.
+const ORIENT_MIN_FRACTION: f64 = 0.6;
 
 /// Estimate both breakpoints and their dispersion from one fusion's spanning reads.
 /// Each spanning read votes a position for whichever side(s) its alignment chromosome
@@ -722,6 +895,8 @@ fn compute_breakpoint_stats(
     let bp_a = median_i64(&mut bp_a_sorted);
     let bp_b = median_i64(&mut bp_b_sorted);
 
+    let gene_a_is_5prime = infer_five_prime(acc, index, &chrom_a, &chrom_b);
+
     BreakpointStats {
         gene_a_idx: acc.gene_a_idx,
         gene_b_idx: acc.gene_b_idx,
@@ -734,6 +909,7 @@ fn compute_breakpoint_stats(
         bp_b_n,
         bp_b_std,
         n_spanning,
+        gene_a_is_5prime,
     }
 }
 
@@ -752,7 +928,7 @@ fn write_fusion_tsv(records: &[FusionRecord], output: &Path) -> Result<()> {
     let file = std::fs::File::create(output)
         .with_context(|| format!("failed to create TSV: {}", output.display()))?;
     let mut w = BufWriter::new(file);
-    writeln!(w, "sample_id\tgene_a\tgene_b\tchrom_a\tchrom_b\tsupporting_reads\tmin_mapq\tn_spanning_reads\tn_coherent_fragments\tn_pon_samples\tpon_total_samples\tmax_pon_supporting_reads\tfilter")?;
+    writeln!(w, "sample_id\tgene_a\tgene_b\tchrom_a\tchrom_b\tsupporting_reads\tmin_mapq\tn_spanning_reads\tn_coherent_fragments\tn_pon_samples\tpon_total_samples\tmax_pon_supporting_reads\tfilter\tpartner_order")?;
     for r in records {
         let max_pon = r
             .max_pon_supporting_reads
@@ -760,7 +936,7 @@ fn write_fusion_tsv(records: &[FusionRecord], output: &Path) -> Result<()> {
             .unwrap_or_else(|| "NA".to_string());
         writeln!(
             w,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             r.sample_id,
             r.gene_a,
             r.gene_b,
@@ -773,7 +949,8 @@ fn write_fusion_tsv(records: &[FusionRecord], output: &Path) -> Result<()> {
             r.n_pon_samples,
             r.pon_total_samples,
             max_pon,
-            r.filter
+            r.filter,
+            r.partner_order
         )?;
     }
     Ok(())
@@ -808,6 +985,11 @@ struct FusionRecord {
     // is set and the call appears in more PoN samples than the threshold. Rows are
     // never dropped — the label lets downstream tools include or exclude them.
     filter: String,
+    // How gene_a/gene_b are ordered: "5to3" when the biological 5'->3' orientation was
+    // inferred from read geometry (gene_a is the 5'/donor partner), or "index" when it
+    // could not be determined and partners fall back to gene-index order. Distinguishes a
+    // biologically meaningful order from an arbitrary one for downstream/clinical readers.
+    partner_order: String,
 }
 
 fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
@@ -825,6 +1007,7 @@ fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
         Field::new("pon_total_samples", DataType::Int32, false),
         Field::new("max_pon_supporting_reads", DataType::Int32, true),
         Field::new("filter", DataType::Utf8, false),
+        Field::new("partner_order", DataType::Utf8, false),
     ]));
 
     let file = std::fs::File::create(output)
@@ -908,6 +1091,12 @@ fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
                 records
                     .iter()
                     .map(|r| r.filter.as_str())
+                    .collect::<Vec<_>>(),
+            )) as ArrayRef,
+            Arc::new(StringArray::from(
+                records
+                    .iter()
+                    .map(|r| r.partner_order.as_str())
                     .collect::<Vec<_>>(),
             )) as ArrayRef,
         ],
@@ -1311,6 +1500,8 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             pon_total_samples: 0,
             max_pon_supporting_reads: None,
             filter: "PASS".to_string(),
+            // Set in the 5'->3' reorientation pass once breakpoint stats are known.
+            partner_order: "index".to_string(),
         })
         .collect();
 
@@ -1693,20 +1884,39 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 let s = &breakpoint_stats[label];
                 let gene_a = &index.gene_names[s.gene_a_idx as usize];
                 let gene_b = &index.gene_names[s.gene_b_idx as usize];
+                // Present the A/B columns (and the fusion label) in biological 5'->3'
+                // order when known, mirroring the fusions output; index order otherwise.
+                let flip = s.gene_a_is_5prime == Some(false);
+                let (g5, c5, b5, n5, s5, g3, c3, b3, n3, s3) = if flip {
+                    (
+                        gene_b, &s.chrom_b, s.bp_b, s.bp_b_n, s.bp_b_std, gene_a, &s.chrom_a,
+                        s.bp_a, s.bp_a_n, s.bp_a_std,
+                    )
+                } else {
+                    (
+                        gene_a, &s.chrom_a, s.bp_a, s.bp_a_n, s.bp_a_std, gene_b, &s.chrom_b,
+                        s.bp_b, s.bp_b_n, s.bp_b_std,
+                    )
+                };
+                let oriented_label = if flip {
+                    format!("{}::{}", gene_b, gene_a)
+                } else {
+                    label.clone()
+                };
                 writeln!(
                     w,
                     "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                    label,
-                    gene_a,
-                    s.chrom_a,
-                    fmt_opt_i64(s.bp_a),
-                    s.bp_a_n,
-                    fmt_opt_f64(s.bp_a_std),
-                    gene_b,
-                    s.chrom_b,
-                    fmt_opt_i64(s.bp_b),
-                    s.bp_b_n,
-                    fmt_opt_f64(s.bp_b_std),
+                    oriented_label,
+                    g5,
+                    c5,
+                    fmt_opt_i64(b5),
+                    n5,
+                    fmt_opt_f64(s5),
+                    g3,
+                    c3,
+                    fmt_opt_i64(b3),
+                    n3,
+                    fmt_opt_f64(s3),
                     s.n_spanning,
                 )?;
             }
@@ -1795,6 +2005,24 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             min_breakpoint_distance = min_dist,
             "tagged fusions whose breakpoints co-localize to one locus (filter=samelocus)"
         );
+    }
+
+    // Report partners in biological 5'->3' order. When orientation inference found that
+    // gene_b (pair_key.1) is the 5' partner, swap the displayed gene/chrom so gene_a is 5'
+    // and gene_b is 3'. Undetermined (legacy index, unknown strand, no read consensus)
+    // leaves gene-index order. The internal pair_key and per-read FX/FL tags are unchanged
+    // — those stay index-ordered read-level evidence.
+    for r in records.iter_mut() {
+        let label = fusion_pair_label(r.pair_key, &index.gene_names);
+        match breakpoint_stats.get(&label).and_then(|s| s.gene_a_is_5prime) {
+            Some(true) => r.partner_order = "5to3".to_string(),
+            Some(false) => {
+                std::mem::swap(&mut r.gene_a, &mut r.gene_b);
+                std::mem::swap(&mut r.chrom_a, &mut r.chrom_b);
+                r.partner_order = "5to3".to_string();
+            }
+            None => {} // undetermined → leave gene-index order, partner_order = "index"
+        }
     }
 
     info!(n_fusions = records.len(), "fusion candidates identified");
@@ -1902,6 +2130,117 @@ mod tests {
         let names = vec!["A".to_string(), "B".to_string(), "C".to_string()];
         assert_eq!(fusion_pair_label((0, 2), &names), "A::C");
         assert_eq!(fusion_pair_label((1, 2), &names), "B::C");
+    }
+
+    // ── 5'->3' orientation inference ─────────────────────────────────────────
+    fn mk_orient_index(strands: &[char], chroms: &[&str], has_strand: bool) -> FusionIndex {
+        let n = strands.len();
+        FusionIndex {
+            kmer_to_gene: HashMap::new(),
+            gene_names: (0..n).map(|i| format!("G{i}")).collect(),
+            gene_chroms: chroms.iter().map(|c| c.to_string()).collect(),
+            gene_strands: strands.to_vec(),
+            // Two well-separated bodies on each chrom for the same-chrom test.
+            gene_tx_start: (0..n).map(|i| (i as i64) * 1000).collect(),
+            gene_tx_end: (0..n).map(|i| (i as i64) * 1000 + 500).collect(),
+            has_strand,
+        }
+    }
+
+    fn mk_acc(spans: Vec<SpanningReadData>) -> BreakpointAccumulator {
+        BreakpointAccumulator {
+            gene_a_idx: 0,
+            gene_b_idx: 1,
+            gene_a_chrom_votes: HashMap::new(),
+            gene_b_chrom_votes: HashMap::new(),
+            spanning_reads: spans,
+            gene_a_single_reads: Vec::new(),
+            gene_b_single_reads: Vec::new(),
+        }
+    }
+
+    // a_before_b is set via first_a < first_b; chrom/pos pick the aligned gene.
+    fn mk_span(chrom: &str, pos: i64, a_before_b: bool) -> SpanningReadData {
+        let (first_a, first_b) = if a_before_b { (0, 30) } else { (30, 0) };
+        SpanningReadData {
+            chrom: chrom.to_string(),
+            pos,
+            first_a,
+            last_a: first_a + 5,
+            first_b,
+            last_b: first_b + 5,
+        }
+    }
+
+    // `n` identical spanning reads, to clear ORIENT_MIN_VOTES.
+    fn mk_spans(chrom: &str, pos: i64, a_before_b: bool, n: usize) -> Vec<SpanningReadData> {
+        (0..n).map(|_| mk_span(chrom, pos, a_before_b)).collect()
+    }
+
+    #[test]
+    fn orient_none_without_strand() {
+        let idx = mk_orient_index(&['+', '-'], &["chr1", "chr2"], false);
+        let acc = mk_acc(mk_spans("chr1", 100, true, 12));
+        assert_eq!(infer_five_prime(&acc, &idx, "chr1", "chr2"), None);
+    }
+
+    #[test]
+    fn orient_gene_a_aligned_plus_block_first_is_5prime() {
+        // gene_a on '+', its block first in SEQ → retains promoter-proximal 5' → gene_a is 5'.
+        let idx = mk_orient_index(&['+', '-'], &["chr1", "chr2"], true);
+        let acc = mk_acc(mk_spans("chr1", 100, true, 12));
+        assert_eq!(infer_five_prime(&acc, &idx, "chr1", "chr2"), Some(true));
+    }
+
+    #[test]
+    fn orient_gene_a_aligned_minus_block_first_is_3prime() {
+        // gene_a on '-', block first → its 3' portion is retained → gene_a is the 3' partner.
+        let idx = mk_orient_index(&['-', '+'], &["chr1", "chr2"], true);
+        let acc = mk_acc(mk_spans("chr1", 100, true, 12));
+        assert_eq!(infer_five_prime(&acc, &idx, "chr1", "chr2"), Some(false));
+    }
+
+    #[test]
+    fn orient_gene_b_aligned_vote() {
+        // Read aligns to gene_b (chr2), gene_b on '+', block NOT first (b before a in SEQ)
+        // → gene_b retains its 5' → gene_b is 5' → gene_a is not 5'.
+        let idx = mk_orient_index(&['+', '+'], &["chr1", "chr2"], true);
+        let acc = mk_acc(mk_spans("chr2", 1000, false, 12));
+        assert_eq!(infer_five_prime(&acc, &idx, "chr1", "chr2"), Some(false));
+    }
+
+    #[test]
+    fn orient_majority_wins_with_minority_present() {
+        // 10 gene_a-5' votes + 2 gene_b-5' votes (a reciprocal-junction-like minority).
+        let idx = mk_orient_index(&['+', '-'], &["chr1", "chr2"], true);
+        let mut spans = mk_spans("chr1", 100, true, 10); // gene_a 5'
+        spans.extend(mk_spans("chr1", 100, false, 2)); // gene_b 5'
+        assert_eq!(infer_five_prime(&mk_acc(spans), &idx, "chr1", "chr2"), Some(true));
+    }
+
+    #[test]
+    fn orient_abstains_below_min_votes() {
+        // A decisive but low-support vote (capture-limited call) must abstain.
+        let idx = mk_orient_index(&['+', '-'], &["chr1", "chr2"], true);
+        let acc = mk_acc(mk_spans("chr1", 100, true, 6));
+        assert_eq!(infer_five_prime(&acc, &idx, "chr1", "chr2"), None);
+    }
+
+    #[test]
+    fn orient_abstains_on_coin_flip() {
+        // Enough votes but split ~50/50 (below the fraction floor) → undetermined.
+        let idx = mk_orient_index(&['+', '-'], &["chr1", "chr2"], true);
+        let mut spans = mk_spans("chr1", 100, true, 6);
+        spans.extend(mk_spans("chr1", 100, false, 6));
+        assert_eq!(infer_five_prime(&mk_acc(spans), &idx, "chr1", "chr2"), None);
+    }
+
+    #[test]
+    fn orient_same_chrom_disambiguates_by_position() {
+        // Both genes on chr1; reads at pos in gene_a's body (0..500), gene_a '+', block first.
+        let idx = mk_orient_index(&['+', '+'], &["chr1", "chr1"], true);
+        let acc = mk_acc(mk_spans("chr1", 100, true, 12));
+        assert_eq!(infer_five_prime(&acc, &idx, "chr1", "chr1"), Some(true));
     }
 
     #[test]

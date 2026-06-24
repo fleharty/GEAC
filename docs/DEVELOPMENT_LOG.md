@@ -1506,3 +1506,43 @@ asymmetric tier delivers the low-input rescue with no cross-sample dependency.
 hard-to-detect fusion with zero new false positives across every sample and control.
 
 Pipeline change — gated the v0.4.54 release.
+
+## Fusion partner ordering in biological 5'->3' orientation
+
+**Problem.** Fusion partners were labelled by gene-index order (`fusion_pair_label`
+canonicalises a pair to `(min_index, max_index)`), so the reported `gene_a::gene_b` was an
+arbitrary internal order, not the biological 5'->3' direction. Orientation is clinically
+meaningful — the 5' (donor) partner contributes the promoter / N-terminus and defines the
+functional driver (e.g. EWSR1::FLI1 with EWSR1 5' is oncogenic; the reciprocal need not be).
+
+**Index format.** Orientation needs gene strand, which the build parsed but discarded.
+`GeneBody` now keeps `strand`; the index `genes` table gained `strand, tx_start, tx_end`; a
+`meta` flag `gene_strand=1` marks strand-bearing indexes. The runtime `FusionIndex` loads these
+when the flag is present and otherwise falls back (legacy indexes → orientation "unknown").
+
+**Inference (`infer_five_prime`).** Per spanning read we already know `a_before_b` (which
+partner's k-mer block comes first in the reference-forward `SEQ`) and which gene the read
+aligns to (`chrom`/`pos`; same-chromosome pairs disambiguated by tx-body position). The junction
+sits at the aligned gene's block edge, so with that gene's strand:
+`aligned gene is the 5' partner  iff  (its block is first) == (its strand is '+')`.
+Votes are tallied across informative spanning reads; the majority orientation wins.
+
+**Confidence gate.** A real interchromosomal fusion legitimately yields a minority of
+*reciprocal-derivative-junction* reads (observed ~24% for a high-depth EWSR1::FLI1), so the
+fraction floor is permissive (0.6). The decisive guard is a minimum vote count
+(`ORIENT_MIN_VOTES = 10`): a fraction threshold cannot separate a correct noisy call from a
+wrong one (a real low-input call and a capture-limited misfire both showed ~⅓ minority), but
+the misfires were all tiny (5–6 spanning reads) while every reliable call carried ≥13. Below
+either guard, orientation is undetermined and partners keep gene-index order.
+
+**Output.** Parquet/TSV `gene_a`/`gene_b`/`chrom_a`/`chrom_b` and the breakpoints TSV are
+emitted in 5'->3' order when determined; a new `partner_order` column records `5to3` vs `index`
+so a fallback is never mistaken for a biological order. The internal `pair_key` and the per-read
+`FX`/`FL` tags stay index-ordered (they are written mid-scan, before orientation is known, and
+`FL`'s A/B blocks must stay tied to `FX`'s gene_a/gene_b) — orientation is a call-level property.
+
+**Validation.** On a cell-line dilution series, every call that cleared the confidence gate
+matched the known 5'->3' truth (EWSR1::ERG, EWSR1::FLI1, PAX7::FOXO1); a capture-limited,
+few-read background correctly abstained (`partner_order=index`) rather than asserting a reversed
+order. Orientation is independent of index edit distance, so a lightweight exact-k-mer index
+sufficed to validate.

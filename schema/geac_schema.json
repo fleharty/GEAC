@@ -327,7 +327,8 @@
         "n_coherent_fragments",
         "n_pon_samples",
         "pon_total_samples",
-        "filter"
+        "filter",
+        "partner_order"
       ],
       "optional_columns": [
         "max_pon_supporting_reads"
