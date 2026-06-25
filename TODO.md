@@ -400,6 +400,17 @@ repeat).
   `strand`/`tx_start`/`tx_end` + `gene_strand=1` to an existing index's `genes` table from a
   gene annotation, keyed by gene_name+chrom, without re-extracting k-mers — so old indexes
   gain orientation without a full rebuild.)
+- [ ] **Build a fresh edit-distance-1 fusion index (with padding) and upload it to Terra.**
+  The index currently live on Terra was built with geac 0.4.44 — no strand → orientation
+  abstains cohort-wide (see the strand-warning item above). Rebuild the edit-distance-1 k-mer
+  list on a current geac (so the `genes` table carries `strand`/`tx_start`/`tx_end` +
+  `gene_strand=1`), with `--gene-padding` applied so junction-adjacent k-mers are captured.
+  **Encode the building geac version in the index filename** (e.g.
+  `brightseq_fusion_index_edit_1_v0.4.58.duckdb`) so a localized index is never ambiguous about
+  which version produced it — the same provenance lesson from the `cohort_v0.4.52`-vs-`0.4.58`
+  confusion. Upload to the Terra workspace and repoint the fusion configs at the versioned file.
+  Re-running the cohort against it should turn `partner_order` from `index` into real 5'->3'
+  labels with no change to detection/PASS counts (strand is label-only).
 - [ ] **Repeat-aware fusion detection for repeat-resident partners (e.g. DUX4).** Cell line E
   (CIC::DUX4) is detected 0/18 even at 100% input: DUX4 lives in the D4Z4 macrosatellite, so
   the genome-unique k-mer index has only sparse, mostly-non-unique k-mers there and can't
@@ -409,6 +420,14 @@ repeat).
   repeat-tolerant anchor mode that accepts multi-copy k-mers when the partner side is unique,
   or split-read/soft-clip evidence anchored only on the unique (CIC) side. Validate it recovers
   CIC::DUX4 without inflating FPs from the repeat.
+  - *Fast-iteration fixture:* before touching the detector, carve a tiny experimentation BAM
+    from a 100%-input CIC::DUX4 sample (cell line E) containing every read pair where **either**
+    mate matches **any** CIC or DUX4 k-mer — regardless of that k-mer's genome-uniqueness (i.e.
+    do *not* apply the genome-copy/edit-distance filters that the main index uses; we want the
+    repeat-buried reads that those filters would discard). Pad the gene intervals by **300 bp**
+    on each side so junction-spanning and soft-clipped reads aren't truncated. The result is a
+    small BAM holding all the reads any repeat-aware approach could possibly use, enabling the
+    ~5s evidence-BAM iteration loop instead of re-scanning the full BAM each experiment.
 
 ---
 
