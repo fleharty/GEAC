@@ -379,12 +379,36 @@ repeat).
     already human-facing; natural place to iterate on the visual and settle window-vs-base). Then
     decide whether to port to the cohort `FL` tag — which would likely want path (a), the shared-
     k-mers side table.
-- [ ] **Benchmarking harness** — once FP rate is acceptable: ground truth manifest
-  of known fusions per cell line sample (gene pairs, confidence tier, known
-  complications); WDL runner on Terra against cell line BAMs in GCS; scoring script
-  reporting TP/FP/FN per sample/read-type/confidence tier; GitHub Action to trigger
-  Terra workspace and post results as a workflow summary. Build in phases: local
-  scoring first, then Terra WDL, then GitHub integration.
+- [ ] **Benchmarking harness — phases 2 & 3.** Phase 1 (local scoring) shipped:
+  `experimental/fusion_benchmark/score_fusions.py` + `experimental/fusion_benchmark/README.md` score per-sample `*.fusions.tsv`
+  against a truth manifest → TP/FN/FP per sample, per-tier, recall-by-dilution, and 5'->3'
+  orientation accuracy (CI-tested via `app/tests/test_score_fusions.py`). Remaining:
+  - **Phase 2 — Terra WDL**: a workflow that scatters `GeacFusions` over a cell-line set and
+    runs the scorer as a gather step, emitting the rollup + per-call TSV as outputs (so a
+    cohort benchmark is one submission, not a manual localize + score).
+  - **Phase 3 — GitHub Action**: trigger the Terra benchmark on demand / on release tag and
+    post the rollup as a workflow summary, so "did this change move recall/precision?" is
+    visible in CI. (Truth manifests carry sample identifiers — keep them in a private location,
+    not this repo.)
+- [ ] **Warn loudly when the fusion index lacks strand (orientation silently abstains).**
+  `fusions` already logs `has_strand=false` at load, but a legacy index (built pre-0.4.55,
+  no `gene_strand` meta) makes `infer_five_prime` abstain on *every* call → `partner_order`
+  is `index` cohort-wide, which reads as "orientation broken" downstream. Emit an explicit
+  one-line WARNING at load ("index built without strand; all partner_order will be `index` —
+  rebuild or backfill strand to enable 5'->3' orientation"). Cheap; saves a confusing debug.
+  (Also worth: a `build-fusion-index`-independent **strand backfill** helper that adds
+  `strand`/`tx_start`/`tx_end` + `gene_strand=1` to an existing index's `genes` table from a
+  gene annotation, keyed by gene_name+chrom, without re-extracting k-mers — so old indexes
+  gain orientation without a full rebuild.)
+- [ ] **Repeat-aware fusion detection for repeat-resident partners (e.g. DUX4).** Cell line E
+  (CIC::DUX4) is detected 0/18 even at 100% input: DUX4 lives in the D4Z4 macrosatellite, so
+  the genome-unique k-mer index has only sparse, mostly-non-unique k-mers there and can't
+  anchor the partner. The genome-uniqueness/`--edit-distance-filter` passes that make the index
+  trustworthy elsewhere are exactly what starve a repeat-resident gene. Investigate a
+  repeat-aware path: e.g. allow a higher `--max-genome-copies` *per flagged gene*, a
+  repeat-tolerant anchor mode that accepts multi-copy k-mers when the partner side is unique,
+  or split-read/soft-clip evidence anchored only on the unique (CIC) side. Validate it recovers
+  CIC::DUX4 without inflating FPs from the repeat.
 
 ---
 

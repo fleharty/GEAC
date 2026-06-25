@@ -792,3 +792,17 @@ scripts/reconstruct_fusions.sh -b evidence.bam [-o outdir] [-r ref.fa] \
 ```
 
 Requires `samtools` (≥1.12) and `cap3`; `minimap2` is needed only when `-r` is given.
+
+---
+
+## Benchmarking the fusion caller
+
+`experimental/fusion_benchmark/` scores `fusions` calls against a known-truth manifest
+(TP/FN/FP per sample, per tier, recall-by-dilution, 5'->3' orientation accuracy) so changes to
+the experimental fusion caller can be measured rather than eyeballed. See
+[experimental/fusion_benchmark/README.md](../experimental/fusion_benchmark/README.md). Truth
+manifests carry sample identifiers and are kept outside this repo.
+
+```bash
+python3 experimental/fusion_benchmark/score_fusions.py --truth truth.tsv --results results/
+```

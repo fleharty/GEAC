@@ -1646,3 +1646,30 @@ EWSR1::ERG evidence BAM emits the lowercase-rescued runs in the layout column.
 Rendering/diagnostic only — no change to read→gene assignment, supporting-read counts,
 breakpoints, or any filter. Pipeline change (the `diagnose-fusion` layout output + `FL` split
 handling) gated the v0.4.58 release; no schema/CLI/WDL change.
+
+## Fusion benchmarking harness — phase 1 (local scorer) shipped
+
+`experimental/fusion_benchmark/score_fusions.py` + `experimental/fusion_benchmark/README.md`. Scores a directory of per-sample
+`*.fusions.tsv` against a truth manifest and reports TP/FN/FP per sample plus a cohort rollup:
+PASS recall, detect recall, PASS precision, 5'->3' orientation accuracy, and PASS recall
+stratified by dilution (the LoD curve). Makes "did this change help or hurt?" a one-command
+answer instead of an eyeball over per-sample TSVs — the validation-harness capability TAG is
+positioning around.
+
+Design choices:
+- **Truth manifest** is a TSV (`sample_id gene_a gene_b expected [dilution] [notes]`) with four
+  `expected` levels — `pass` (must reach filter==PASS; headline recall), `detect` (any matching
+  call, PASS or tagged), `present` (biologically present, a miss is reported but not a headline
+  FN — for trace dilutions below the detection limit), and `negative` (any PASS call is an FP).
+- **Detection match is unordered** (case-insensitive gene pair) so orientation labeling can't
+  affect TP/FN; **orientation accuracy is scored separately** over only the calls that asserted
+  an order (`partner_order==5to3`). Calls that abstain (`index`) are excluded from that metric.
+- **FP = filter==PASS** calls matching no truth pair; tagged calls are context, not FPs.
+- Scoring keys on the `sample_id` column *inside* each TSV (robust to filenames / layout).
+- Pure stdlib; logic covered by `app/tests/test_score_fusions.py` (CI-run) and a `--self-test`.
+
+Validated in use: scored a 110-sample BrightSeq v0.4.58 cohort rerun, surfacing the LoD curve,
+two capture-limited cell lines (A=PAX3::FOXO1, E=CIC::DUX4), low-input paralog FP artifacts, and
+the cohort-wide orientation abstention caused by a pre-strand (v0.4.44) index. Truth manifests
+carry sample identifiers, so they live outside this public repo. Phases 2 (Terra WDL) and 3
+(GitHub Action) remain — see TODO.
