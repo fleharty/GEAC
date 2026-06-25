@@ -1546,3 +1546,41 @@ matched the known 5'->3' truth (EWSR1::ERG, EWSR1::FLI1, PAX7::FOXO1); a capture
 few-read background correctly abstained (`partner_order=index`) rather than asserting a reversed
 order. Orientation is independent of index edit distance, so a lightweight exact-k-mer index
 sufficed to validate.
+
+## Fusion `FL` evidence-track edit-distance-1 rescue — shipped v0.4.56
+
+**Problem.** The `FL` per-read layout tag on the fusion evidence BAM rendered each k-mer
+window by an *exact* `kmer_to_gene` lookup (`A`/`B`/`N`/`.`). A single SNP under a read knocks
+out every window straddling it, so an otherwise solid gene block reads `AAAA....AAAA` — the
+`.` run is a sequencing/germline mismatch, not a true loss of homology, but the track can't
+say so. Masked (`N`) windows were likewise dead even when a single unknown base is the only
+obstacle to a match.
+
+**Approach.** A composable rescue layer, `kmer::rescue_layout_track`, post-processes the exact
+track in place; `render_layout_track` stays the pure exact-match renderer (so it remains the
+single source of the *exact* track behind both the `FL` tag and `diagnose-fusion`'s
+`layout_5to3`). `fusion_layout_track` (`src/fusions.rs`) renders then rescues; only the `FL`
+tag carries the rescued track.
+
+- `.` window (all-ACGT, matched neither gene): probe the read k-mer's `3·k` single-substitution
+  neighbors. Unique gene → lowercase `a`/`b`. A SNP-rescue *disagrees* at a known base, so it
+  stays lowercase even when unique — preserving the invariant "capital = unambiguous match,"
+  which is what makes the track trustworthy.
+- `N` window: rescued only when it contains *exactly one* non-ACGT base — its uncertainty is
+  then at a single known position, so the window is within edit distance 1 by construction.
+  Substitute that base with A/C/G/T; unique gene → CAPITAL `A`/`B` (the `N` does not disagree
+  with the gene, it is merely unknown, so a unique resolution is as good as exact).
+- Splits (a neighbor reaches *both* genes), multi-`N`, and no-match are left `.`/`N` — v1 is
+  conservative; resolving an ambiguous split by the flanking exact-match block is a documented
+  follow-up. The split case requires a k-mer one substitution from both a gene-A and a gene-B
+  k-mer (cross-gene shared k-mers — what `--edit-distance-filter`/`--max-genome-copies` already
+  suppress), so it should be rare on a well-built index.
+
+The `3·k` probes per `.` window are negligible: the `FL` pass runs only over fusion-supporting
+reads. Five unit tests in `kmer.rs` cover the SNP-gap bridge, single-`N` unique promotion,
+N-split and SNP-split ambiguity, and edit-distance≥2 non-rescue.
+
+**Scope.** Rendering/diagnostic only — does not touch read→gene assignment, supporting-read
+counts, breakpoints, or any filter. `diagnose-fusion`'s `layout_5to3` is intentionally left on
+the exact track for now (TODO: optionally apply the same rescue there for consistency).
+Pipeline change (the `FL` tag content) — gated the v0.4.56 release. No schema/CLI/WDL change.

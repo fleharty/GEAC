@@ -1,6 +1,6 @@
 [package]
 name = "geac"
-version = "0.4.55"
+version = "0.4.56"
 edition = "2021"
 # Minimum supported Rust version. Bumping this is a deliberate decision — CI
 # verifies the crate still builds on exactly this toolchain. 1.88 is required by

@@ -15,7 +15,7 @@ use rust_htslib::bam::Read;
 use tracing::info;
 
 use crate::cli::FusionsArgs;
-use crate::kmer::{kmer_iter, non_acgt_positions, render_layout_track};
+use crate::kmer::{kmer_iter, non_acgt_positions, render_layout_track, rescue_layout_track};
 
 // ─── Index loading ────────────────────────────────────────────────────────────
 
@@ -449,9 +449,15 @@ fn read_coherence(rh: &ReadHit, ga: u32, gb: u32, k: usize, min_anchor: u32) -> 
 /// One character per k-mer start position (reference 5'→3', the BAM `SEQ` orientation):
 /// `A`/`B` where the window's k-mer maps to gene ga/gb in the index, `N` for a window
 /// containing a non-ACGT base (no k-mer is emitted there), and `.` for a k-mer matching
-/// neither gene. Renders via the shared [`render_layout_track`], so it is byte-for-byte
-/// the string `diagnose-fusion` prints as `layout_5to3`; written to the `FL` BAM tag so
-/// each evidence read carries its own A→B layout for IGV / samtools inspection.
+/// neither gene. The exact-match track from [`render_layout_track`] is then passed through
+/// [`rescue_layout_track`], which upgrades `.`/`N` windows that are within edit distance 1
+/// of a gene k-mer: lowercase `a`/`b` for SNP-rescued windows (bridging the `.` gap a single
+/// SNP opens in an otherwise solid block), and CAPITAL `A`/`B` for single-`N` windows that
+/// resolve uniquely. Exact `A`/`B` are never altered. Written to the `FL` BAM tag so each
+/// evidence read carries its own A→B layout for IGV / samtools inspection.
+///
+/// NOTE: this is richer than `diagnose-fusion`'s `layout_5to3`, which renders the exact
+/// track only (no rescue layer) for now.
 fn fusion_layout_track(
     seq: &[u8],
     k: usize,
@@ -474,13 +480,16 @@ fn fusion_layout_track(
             }
         }
     }
-    render_layout_track(
+    let mut track = render_layout_track(
         n_windows,
         &a_positions,
         &b_positions,
         &non_acgt_positions(seq),
         k,
     )
+    .into_bytes();
+    rescue_layout_track(&mut track, seq, k, kmer_to_gene, ga, gb);
+    String::from_utf8(track).unwrap()
 }
 
 /// Per-fusion candidate statistics accumulated during fragment aggregation.
@@ -1608,7 +1617,9 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 // FL: per-k-mer-window layout of this read against the fusion pair —
                 // A=gene-A k-mer, B=gene-B k-mer (A/B = first/second gene in FX),
                 // N=window masked by a non-ACGT base, .=k-mer matching neither gene.
-                // Same string as the diagnose-fusion layout_5to3 column.
+                // Lowercase a/b mark windows rescued to a gene at edit distance 1 (a SNP
+                // under the window); a single-N window that resolves uniquely is promoted to
+                // a capital A/B. See fusion_layout_track / kmer::rescue_layout_track.
                 if let Some(&(ga, gb)) = fusion_pairs.get(record.qname()) {
                     let track = fusion_layout_track(
                         &record.seq().as_bytes(),

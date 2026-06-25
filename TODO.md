@@ -338,6 +338,33 @@ repeat).
   index, not the breakpoint filter — a higher index edit distance recovers some single-locus
   leakage at source (see the GNA12 case), so evaluate whether a higher-edit-distance index
   also restores low-input sensitivity for repeat-buried junctions.
+- [ ] **`build-fusion-index --gene-padding <BP>` — pad gene bodies by N bases.** Fusion
+  breakpoints frequently fall in flanking introns/UTRs or just outside the annotated
+  transcript bounds, so a junction read's partner-side bases land in sequence the index
+  doesn't cover and the read isn't recognized as spanning that gene. Add an opt-in flag to
+  extend each gene body by ±N bp (clamped to contig bounds) before k-mer extraction in
+  `parse_gene_bodies` / the extraction step, so near-gene breakpoints are captured. Trade-off:
+  larger padding raises cross-gene and repeat-k-mer collisions, so it interacts with the
+  cross-gene dedup, `--edit-distance-filter`, and `--max-genome-copies` (the genome-uniqueness
+  pass should still drop common k-mers); default 0 (current behavior). Validate that padding
+  recovers near-boundary fusions without inflating FPs.
+- [ ] **`FL` edit-distance-1 rescue — split-resolution follow-up.** v0.4.56 shipped the
+  edit-distance-1 rescue layer (`kmer::rescue_layout_track`): `.`→lowercase `a`/`b` on a
+  unique single-substitution match, single-`N`→capital `A`/`B` on a unique resolution. v1
+  leaves *ambiguous splits* (a neighbor reaches both genes) as `.`/`N`. Follow-up: resolve a
+  split by the flanking exact-match block (render lowercase to signal "inferred, not observed")
+  rather than abstaining, and consider a distinct ambiguity glyph. The split case requires
+  cross-gene shared k-mers — rare on a well-filtered index — so this is low priority; its
+  frequency is itself a useful signal of residual shared k-mers.
+- [ ] **Apply the `FL` edit-distance-1 rescue to `diagnose-fusion`'s `layout_5to3`.** The
+  rescue layer is wired only into the `FL` evidence-BAM tag (`fusion_layout_track`);
+  `diagnose-fusion` still renders the exact track. Wiring `rescue_layout_track` into
+  `DiagnoseFusion`'s layout (`src/diagnose_fusion.rs`) would make the two consistent. Decide
+  whether `layout_5to3` should always rescue or gate it behind a flag.
+- [ ] **(Stretch) Promote rescued `a`/`b` windows to genuine supporting evidence.** Today the
+  rescue is rendering-only. Counting edit-1 windows toward anchoring / spanning evidence could
+  improve sensitivity on SNP-dense reads, but it changes quantitative output and filters — a
+  separate, opt-in design with its own validation, NOT folded into the diagnostic track.
 - [ ] **Benchmarking harness** — once FP rate is acceptable: ground truth manifest
   of known fusions per cell line sample (gene pairs, confidence tier, known
   complications); WDL runner on Terra against cell line BAMs in GCS; scoring script

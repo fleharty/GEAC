@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 /// Rolling canonical k-mer iterator.
 ///
 /// Yields `(canonical_kmer, start_pos)` where `start_pos` is the 0-based index
@@ -81,8 +83,10 @@ pub fn non_acgt_positions(seq: &[u8]) -> Vec<usize> {
 ///
 /// `N` windows are painted first. Because `kmer_iter` never emits a k-mer for a masked
 /// window, `a_positions`/`b_positions` can't overlap them, so painting order is safe.
-/// This is the single source of truth for both `diagnose-fusion`'s `layout_5to3` column
-/// and the `FL` BAM tag written by `fusions --reads-output`.
+/// This renders the *exact* track behind both `diagnose-fusion`'s `layout_5to3` column and
+/// the `FL` BAM tag. The `FL` tag additionally runs [`rescue_layout_track`] on top to mark
+/// edit-distance-1 windows (lowercase `a`/`b`, and capital from single-`N`); `layout_5to3`
+/// uses the exact track only.
 pub fn render_layout_track(
     n_windows: usize,
     a_positions: &[usize],
@@ -109,6 +113,116 @@ pub fn render_layout_track(
         }
     }
     String::from_utf8(track).unwrap()
+}
+
+/// Canonical k-mer of an all-ACGT window of length exactly `k`. Returns `None` if the
+/// window contains a non-ACGT base (then [`kmer_iter`] yields nothing). Used by the
+/// edit-distance-1 rescue below to probe substitution variants against the gene index.
+fn window_canonical(window: &[u8], k: usize) -> Option<u64> {
+    debug_assert_eq!(window.len(), k);
+    kmer_iter(window, k).next().map(|(kmer, _)| kmer)
+}
+
+/// Edit-distance-1 rescue layer for an exact-match layout track produced by
+/// [`render_layout_track`]. Upgrades only `.` and `N` windows in place; exact `A`/`B`
+/// are never touched, preserving the invariant "capital = unambiguous match".
+///
+/// - `.` (a k-mer was emitted but matched neither gene): probe the `3·k` single-substitution
+///   neighbors of the window's k-mer. If every neighbor that matches anything matches the
+///   *same* gene, render lowercase `a`/`b` (a SNP-rescue *disagrees* at a known base, so it
+///   stays lowercase even when unique). Split across both genes, or no neighbor matches →
+///   left as `.` (v1: conservative; flanking-block tie-break is a documented follow-up).
+/// - `N` (window masked by a non-ACGT base): only rescued when the window contains *exactly
+///   one* non-ACGT base — its uncertainty is then at a single known position, so the window
+///   is within edit distance 1 by construction. Substitute that base with A/C/G/T and probe.
+///   Unique gene → CAPITAL `A`/`B` (the `N` does not disagree with the gene, it is merely
+///   unknown, so a unique resolution is as good as exact). Split / multi-`N` / none → `N`.
+///
+/// `seq` is the read sequence in the same orientation the track was rendered from; window `i`
+/// is `seq[i..i+k]`. The caller guarantees `track.len() == seq.len() - k + 1`.
+pub fn rescue_layout_track(
+    track: &mut [u8],
+    seq: &[u8],
+    k: usize,
+    kmer_to_gene: &HashMap<u64, u32>,
+    ga: u32,
+    gb: u32,
+) {
+    const BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
+    let is_acgt = |b: u8| matches!(b | 0x20, b'a' | b'c' | b'g' | b't');
+
+    for i in 0..track.len() {
+        match track[i] {
+            b'.' => {
+                // k-mer matched neither gene exactly; the window is all-ACGT.
+                let mut buf = seq[i..i + k].to_vec();
+                let (mut hit_a, mut hit_b) = (false, false);
+                'scan: for p in 0..k {
+                    let orig = buf[p];
+                    for &b in &BASES {
+                        if b == orig {
+                            continue;
+                        }
+                        buf[p] = b;
+                        if let Some(&g) =
+                            window_canonical(&buf, k).and_then(|km| kmer_to_gene.get(&km))
+                        {
+                            if g == ga {
+                                hit_a = true;
+                            } else if g == gb {
+                                hit_b = true;
+                            }
+                            if hit_a && hit_b {
+                                buf[p] = orig;
+                                break 'scan; // split — no need to keep scanning
+                            }
+                        }
+                    }
+                    buf[p] = orig;
+                }
+                track[i] = match (hit_a, hit_b) {
+                    (true, false) => b'a',
+                    (false, true) => b'b',
+                    _ => b'.',
+                };
+            }
+            b'N' => {
+                // Rescue only a single-unknown-base window.
+                let window = &seq[i..i + k];
+                let mut n_idx = None;
+                let mut n_count = 0usize;
+                for (j, &b) in window.iter().enumerate() {
+                    if !is_acgt(b) {
+                        n_count += 1;
+                        n_idx = Some(j);
+                    }
+                }
+                if n_count != 1 {
+                    continue;
+                }
+                let j = n_idx.unwrap();
+                let mut buf = window.to_vec();
+                let (mut hit_a, mut hit_b) = (false, false);
+                for &b in &BASES {
+                    buf[j] = b;
+                    if let Some(&g) = window_canonical(&buf, k).and_then(|km| kmer_to_gene.get(&km))
+                    {
+                        if g == ga {
+                            hit_a = true;
+                        } else if g == gb {
+                            hit_b = true;
+                        }
+                    }
+                }
+                track[i] = match (hit_a, hit_b) {
+                    (true, false) => b'A',
+                    (false, true) => b'B',
+                    _ => b'N',
+                };
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -219,5 +333,110 @@ mod tests {
         );
         assert!(!track.contains('N'));
         assert_eq!(&track[0..15], "AAAAAAAAAAAAAAA");
+    }
+
+    /// Index gene 0 with every k-mer of `gene_seq`; return (kmer_to_gene, k).
+    fn index_one_gene(gene_seq: &[u8], k: usize, gene: u32) -> HashMap<u64, u32> {
+        let mut m = HashMap::new();
+        for (kmer, _) in kmer_iter(gene_seq, k) {
+            m.insert(kmer, gene);
+        }
+        m
+    }
+
+    // Mirror of fusions::fusion_layout_track for unit-testing the rescue layer in isolation.
+    fn layout_with_rescue(seq: &[u8], k: usize, m: &HashMap<u64, u32>, ga: u32, gb: u32) -> String {
+        let n_windows = seq.len() - k + 1;
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        for (kmer, pos) in kmer_iter(seq, k) {
+            if let Some(&g) = m.get(&kmer) {
+                if g == ga {
+                    a.push(pos);
+                } else if g == gb {
+                    b.push(pos);
+                }
+            }
+        }
+        let mut track =
+            render_layout_track(n_windows, &a, &b, &non_acgt_positions(seq), k).into_bytes();
+        rescue_layout_track(&mut track, seq, k, m, ga, gb);
+        String::from_utf8(track).unwrap()
+    }
+
+    #[test]
+    fn rescue_snp_bridges_dot_run_with_lowercase() {
+        // Gene A = the read's reference; a single mismatch in the middle knocks out the
+        // exact match for every window covering it, but each is edit-distance 1 away.
+        let gene = b"ACGATCGTAGCTAGGTCATGCA"; // 22 bp, low internal repetition
+        let k = 6;
+        let m = index_one_gene(gene, k, 0);
+        let mut read = gene.to_vec();
+        let snp = 11; // middle base
+        read[snp] = if read[snp] == b'C' { b'A' } else { b'C' };
+        let track = layout_with_rescue(&read, k, &m, 0, 1);
+
+        // Windows covering the SNP (starts snp-k+1 ..= snp) miss exactly but rescue to 'a';
+        // all other windows are exact 'A'. No '.' or 'N' should remain.
+        assert!(!track.contains('.'), "no unbridged gaps: {track}");
+        assert!(!track.contains('N'), "{track}");
+        let lo = snp + 1 - k;
+        for (i, c) in track.chars().enumerate() {
+            if (lo..=snp).contains(&i) {
+                assert_eq!(c, 'a', "window {i} should be SNP-rescued: {track}");
+            } else {
+                assert_eq!(c, 'A', "window {i} should be exact: {track}");
+            }
+        }
+    }
+
+    #[test]
+    fn rescue_single_n_resolves_to_capital() {
+        // One N in the read: every covering window is masked ('N'); substituting the unknown
+        // base resolves uniquely to gene 0, so all are promoted to capital 'A'.
+        let gene = b"ACGATCGTAGCTAGGTCATGCA";
+        let k = 6;
+        let m = index_one_gene(gene, k, 0);
+        let mut read = gene.to_vec();
+        read[11] = b'N';
+        let track = layout_with_rescue(&read, k, &m, 0, 1);
+        assert!(
+            !track.contains('N'),
+            "single-N windows should resolve: {track}"
+        );
+        assert!(track.chars().all(|c| c == 'A'), "{track}");
+    }
+
+    #[test]
+    fn rescue_n_split_between_genes_stays_n() {
+        // Two gene k-mers differ only at position 0: NTTT -> ATTT (gene A) and CTTT (gene B).
+        // The single-N window cannot discriminate, so it must stay 'N'.
+        let k = 4;
+        let mut m = HashMap::new();
+        m.insert(kmer_iter(b"ATTT", k).next().unwrap().0, 0u32);
+        m.insert(kmer_iter(b"CTTT", k).next().unwrap().0, 1u32);
+        let track = layout_with_rescue(b"NTTT", k, &m, 0, 1);
+        assert_eq!(track, "N");
+    }
+
+    #[test]
+    fn rescue_snp_split_between_genes_stays_dot() {
+        // GTTT matches neither gene exactly; substituting position 0 reaches gene A (ATTT)
+        // and gene B (CTTT). Ambiguous -> left '.', not guessed.
+        let k = 4;
+        let mut m = HashMap::new();
+        m.insert(kmer_iter(b"ATTT", k).next().unwrap().0, 0u32);
+        m.insert(kmer_iter(b"CTTT", k).next().unwrap().0, 1u32);
+        let track = layout_with_rescue(b"GTTT", k, &m, 0, 1);
+        assert_eq!(track, ".");
+    }
+
+    #[test]
+    fn rescue_leaves_truly_unmatched_dot() {
+        // A window edit-distance >= 2 from any gene k-mer stays '.'.
+        let k = 4;
+        let m = index_one_gene(b"ATTT", k, 0);
+        let track = layout_with_rescue(b"GGGG", k, &m, 0, 1);
+        assert_eq!(track, ".");
     }
 }
