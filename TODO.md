@@ -342,6 +342,43 @@ repeat).
   rescue is rendering-only. Counting edit-1 windows toward anchoring / spanning evidence could
   improve sensitivity on SNP-dense reads, but it changes quantitative output and filters — a
   separate, opt-in design with its own validation, NOT folded into the diagnostic track.
+- [ ] **(Design — needs more thought) Layout track: "matches-both" marker + explicit breakpoint
+  boundaries.** Two requests that turn out to be one idea — characterizing the *ambiguous zone*
+  at the junction, which the current `A`/`B`/`a`/`b`/`N`/`.` track can't describe. Capturing the
+  design before building; representation question below must be settled first.
+  - **(1) "matches both A and B" marker** (e.g. `*`). A window whose k-mer is present in *both*
+    partners' reference (cross-gene homology / microhomology). The index can't answer this today:
+    shared k-mers are marked `MULTI_GENE` and **dropped** at build time, so such a window renders
+    `.` and the edit-1 rescue sees it as a *split*. To mark it honestly we need the shared k-mers
+    back. Two paths:
+    - **(a) Keep them at build time** — write dropped `MULTI_GENE` k-mers to a small side table
+      (`kmer_hash → set of gene indices`); shared k-mers are a small fraction on a good index, so
+      cheap, and FL/diagnose just look them up. Needed for the cohort `fusions` FL pass.
+    - **(b) Recompute at render time** — the index now stores each gene's `chrom`/`tx_start`/
+      `tx_end`, so for a *single* pair you can fetch both genes' reference windows from the FASTA,
+      build their full (non-deduped) k-mer sets, and intersect. Clean for `diagnose-fusion`; too
+      heavy per-pair across a 255-gene cohort scan.
+    This directly surfaces the homology that drove the ADVL1823 chr1q false pairs (NTRK1/BCAN).
+  - **(2) Explicit breakpoint boundaries** (`AAAA||BBBB`, always two — A's confident end and B's
+    confident start). The two ideas merge here: the bases *between* the pipes are either
+    microhomology (match both → the `*` marker) or inserted/novel (match neither → `.`), which
+    distinguishes blunt vs microhomology-mediated vs templated-insertion junctions. The current
+    `.` gap of width ~`k-1` between the A and B blocks already *is* the (k-mer-fuzzy) breakpoint
+    signature; pipes make it base-precise.
+  - **Key unresolved question — window-space vs base-space.** The FL track is window-indexed (one
+    char per k-mer start, so `k` shorter than the read and offset); a `|` is a *base-level* concept.
+    `||` likely pushes toward a **base-aligned** track (one char per read base), which would also be
+    easier to read in IGV than today's k-shifted track. Decide this deliberately before building —
+    it's the foundation for both markers. Don't wedge base-level pipes into a window-level string.
+  - **Other constraints.** Only junction-*spanning* reads have a breakpoint to mark (one-sided reads
+    just get their block). Diagnostic/rendering only — must not feed assignment/filters. Precise
+    per-read base-level breakpoint overlaps with what `breakpoints.tsv` already computes at the
+    fusion level, so much of the value is a better *per-read view*, not a new measurement — be
+    clear-eyed about that.
+  - **Recommended phasing.** Prototype in `diagnose-fusion` first (single pair; can afford path (b);
+    already human-facing; natural place to iterate on the visual and settle window-vs-base). Then
+    decide whether to port to the cohort `FL` tag — which would likely want path (a), the shared-
+    k-mers side table.
 - [ ] **Benchmarking harness** — once FP rate is acceptable: ground truth manifest
   of known fusions per cell line sample (gene pairs, confidence tier, known
   complications); WDL runner on Terra against cell line BAMs in GCS; scoring script
