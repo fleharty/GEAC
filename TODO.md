@@ -390,16 +390,14 @@ repeat).
     post the rollup as a workflow summary, so "did this change move recall/precision?" is
     visible in CI. (Truth manifests carry sample identifiers — keep them in a private location,
     not this repo.)
-- [ ] **Warn loudly when the fusion index lacks strand (orientation silently abstains).**
-  `fusions` already logs `has_strand=false` at load, but a legacy index (built pre-0.4.55,
-  no `gene_strand` meta) makes `infer_five_prime` abstain on *every* call → `partner_order`
-  is `index` cohort-wide, which reads as "orientation broken" downstream. Emit an explicit
-  one-line WARNING at load ("index built without strand; all partner_order will be `index` —
-  rebuild or backfill strand to enable 5'->3' orientation"). Cheap; saves a confusing debug.
-  (Also worth: a `build-fusion-index`-independent **strand backfill** helper that adds
-  `strand`/`tx_start`/`tx_end` + `gene_strand=1` to an existing index's `genes` table from a
-  gene annotation, keyed by gene_name+chrom, without re-extracting k-mers — so old indexes
-  gain orientation without a full rebuild.)
+- [ ] **(low priority) Strand-backfill helper for legacy indexes.** A
+  `build-fusion-index`-independent helper that adds `strand`/`tx_start`/`tx_end` +
+  `gene_strand=1` to an existing index's `genes` table from a gene annotation, keyed by
+  gene_name+chrom, without re-extracting k-mers — so a pre-0.4.55 index gains orientation
+  without a full rebuild. Low priority: new indexes are strand-aware, and the cohort indexes
+  are being rebuilt fresh, so legacy-index backfill mostly won't be needed. (The load-time
+  WARNING for strandless indexes already shipped — `fusions.rs` warns once at load that
+  orientation is disabled and `partner_order` will be `index` cohort-wide.)
 - [ ] **Build a fresh edit-distance-1 fusion index (with padding) and upload it to Terra.**
   The index currently live on Terra was built with geac 0.4.44 — no strand → orientation
   abstains cohort-wide (see the strand-warning item above). Rebuild the edit-distance-1 k-mer

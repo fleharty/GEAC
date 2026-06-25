@@ -167,6 +167,17 @@ fn load_index(
         n_genes = gene_names.len(),
         has_strand, "loaded genes from index"
     );
+    if !has_strand {
+        // A legacy index (built before gene_strand was recorded) makes
+        // `infer_five_prime` abstain on every call, so `partner_order` is `index`
+        // cohort-wide. That silently reads downstream as "orientation is broken"
+        // rather than "the index predates orientation support" — call it out once.
+        tracing::warn!(
+            "fusion index has no gene strand (gene_strand meta absent); 5'->3' \
+             orientation is disabled and every partner_order will be `index` — \
+             rebuild the index with a current geac to enable orientation"
+        );
+    }
 
     // The k-mer table dominates memory on large indexes (tens-to-hundreds of
     // millions of entries). Reserve up front from the row count so the map is
