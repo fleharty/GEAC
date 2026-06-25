@@ -1584,3 +1584,35 @@ N-split and SNP-split ambiguity, and edit-distance≥2 non-rescue.
 counts, breakpoints, or any filter. `diagnose-fusion`'s `layout_5to3` is intentionally left on
 the exact track for now (TODO: optionally apply the same rescue there for consistency).
 Pipeline change (the `FL` tag content) — gated the v0.4.56 release. No schema/CLI/WDL change.
+
+## `build-fusion-index --gene-padding <BP>` — shipped v0.4.57
+
+**Problem.** Fusion breakpoints frequently fall in flanking introns/UTRs or just outside the
+annotated transcript bounds. The index extracts k-mers only from `[tx_start, tx_end)`, so a
+junction read whose partner-side bases land in that flanking sequence carries no index k-mers
+for that gene and is not recognized as spanning it — the gene goes undetected at exactly the
+reads that matter.
+
+**Approach.** New opt-in `--gene-padding <BP>` symmetrically widens the *extraction* window
+only. `padded_extraction_interval(start, end, pad)` returns `(start.saturating_sub(pad),
+end + pad)`; the lower bound is clamped to 0 there and the upper bound is clamped to the contig
+length later at fetch time (`end.min(chrom_seq.len())`), where the length is known. The
+`GeneBody` and the `genes` table keep the **true** transcript bounds — so 5'->3' orientation,
+reporting coordinates, and any downstream "breakpoint in gene" logic stay honest — while only
+the k-mers pulled for the index come from the padded region. The padding is recorded in the
+index `meta` table (`gene_padding`) for provenance.
+
+**Interactions.** Padded flanks can make adjacent genes' windows overlap and introduce shared
+or repeat k-mers. These go through the unchanged downstream passes: cross-gene dedup marks
+shared k-mers `MULTI_GENE` and drops them, and `--edit-distance-filter` / genome-uniqueness
+(`--max-genome-copies`) still drop common k-mers. So padding trades a controlled rise in
+collisions for boundary coverage; default 0 preserves current behavior exactly.
+
+**Validation.** End-to-end on a synthetic contig with one gene at `[800, 1200)`, k=15:
+`--gene-padding 0` extracted 386 k-mers spanning positions 800–1185; `--gene-padding 100`
+extracted 586 (+200, the two 100 bp flanks) spanning 700–1285 — while the `genes` table read
+`(800, 1200)` in **both** builds and `meta.gene_padding` recorded 0 vs 100. Three unit tests
+cover the interval math (identity at 0, symmetric expansion, lower-bound clamp to 0).
+
+Exposed in `wdl/experimental/geac_build_fusion_index.wdl`. Pipeline change (index `meta` +
+extraction) gated the v0.4.57 release; no DuckDB schema or runtime change.

@@ -42,6 +42,9 @@ version 1.0
 ##   threads                 - CPU threads for the parallel genome scan (default: 8). Set to 0
 ##                             to use all logical CPUs on the machine. Has no effect when
 ##                             neither --check-genome-uniqueness nor --edit-distance-filter is set.
+##   gene_padding            - Symmetrically extend each gene body by N bp before k-mer extraction
+##                             (default: 0). Captures fusion breakpoints in flanking introns/UTRs
+##                             just outside the annotated transcript; the genes table keeps true bounds.
 ##   docker_image            - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
 ##   memory_gb               - Memory in GB (default: 64)
 ##   disk_gb                 - Disk space in GB (default: 100)
@@ -76,6 +79,7 @@ workflow GeacBuildFusionIndex {
         Boolean write_gene_stats     = false
         Int     edit_distance_filter  = 0
         Int     threads               = 8
+        Int     gene_padding          = 0
 
         String docker_image
         Int    memory_gb   = 64
@@ -100,6 +104,7 @@ workflow GeacBuildFusionIndex {
             write_gene_stats        = write_gene_stats,
             edit_distance_filter    = edit_distance_filter,
             threads                 = threads,
+            gene_padding            = gene_padding,
             docker_image            = docker_image,
             memory_gb               = memory_gb,
             disk_gb                 = disk_gb,
@@ -137,6 +142,7 @@ task BuildFusionIndex {
         Boolean write_gene_stats
         Int     edit_distance_filter
         Int     threads
+        Int     gene_padding
 
         String docker_image
         Int    memory_gb
@@ -171,6 +177,7 @@ task BuildFusionIndex {
             ~{if write_bed_by_copies  then "--bed-output-by-copies "   + bed_by_copies_prefix else ""} \
             ~{if write_gene_stats     then "--gene-stats-output "      + gene_stats_tsv     else ""} \
             ~{if edit_distance_filter > 0 then "--edit-distance-filter " + edit_distance_filter else ""} \
+            ~{if gene_padding > 0 then "--gene-padding " + gene_padding else ""} \
             ~{if threads > 0 then "--threads " + threads else ""}
     >>>
 

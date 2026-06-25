@@ -850,6 +850,19 @@ pub struct BuildFusionIndexArgs {
     /// CPUs on the machine. Has no effect when neither genome-scan flag is set.
     #[arg(long, default_value_t = 0)]
     pub threads: u32,
+
+    /// Symmetrically extend each gene body by N bp on both sides before k-mer
+    /// extraction (clamped to contig bounds). Fusion breakpoints often fall in
+    /// flanking introns/UTRs just outside the annotated transcript, so a junction
+    /// read's partner-side bases land in sequence the index doesn't cover and the
+    /// read is not recognized as spanning that gene; padding captures those.
+    /// Larger padding raises cross-gene / repeat-k-mer collisions, so it interacts
+    /// with the cross-gene dedup and the --edit-distance-filter / --max-genome-copies
+    /// uniqueness passes (which still drop the newly shared/common k-mers). The genes
+    /// table keeps the true transcript bounds; only the extraction window is widened.
+    /// Default 0 (no padding).
+    #[arg(long, default_value_t = 0)]
+    pub gene_padding: u64,
 }
 
 #[derive(Parser, Debug)]

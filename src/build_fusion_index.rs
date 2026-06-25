@@ -321,12 +321,21 @@ pub fn read_fai_sequences(fasta: &Path) -> Result<Vec<(String, usize)>> {
 
 // ─── DuckDB output ────────────────────────────────────────────────────────────
 
+/// Symmetric `--gene-padding` extraction window for a gene body `[start, end)`.
+/// The lower bound is clamped to 0 here; the upper bound is clamped to the contig
+/// length later, at fetch time (`end.min(chrom_seq.len())`), since the contig length
+/// isn't known at this point. `pad == 0` returns the interval unchanged.
+fn padded_extraction_interval(start: usize, end: usize, pad: usize) -> (usize, usize) {
+    (start.saturating_sub(pad), end + pad)
+}
+
 fn write_index(
     kmer_to_gene: &HashMap<u64, u32>,
     kmer_to_pos: &HashMap<u64, (String, u32)>,
     genes: &[GeneBody],
     genome_counts: Option<&HashMap<u64, u8>>,
     k: usize,
+    gene_padding: u64,
     output: &Path,
 ) -> Result<()> {
     if output.exists() {
@@ -359,6 +368,12 @@ fn write_index(
     conn.execute(
         "INSERT INTO meta (key, value) VALUES ('gene_strand', '1')",
         [],
+    )?;
+    // Provenance: bp each gene body was symmetrically padded by for k-mer extraction
+    // (0 = none). The genes table still records the true, unpadded transcript bounds.
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('gene_padding', ?)",
+        duckdb::params![gene_padding.to_string()],
     )?;
 
     {
@@ -995,13 +1010,25 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
     info!("extracting gene-body k-mers (one chromosome fetch per sequence)...");
 
     // Build a per-chromosome index: chrom → [(start, end, gene_idx)]
+    //
+    // --gene-padding symmetrically widens the *extraction* window: the lower bound is
+    // clamped to 0 here, and the upper bound is clamped to the contig length at fetch
+    // time (`end.min(chrom_seq.len())`). The genes table keeps the true transcript
+    // bounds (gene.start/end) — only the k-mers pulled here come from the padded region.
+    let pad = args.gene_padding as usize;
+    if pad > 0 {
+        info!(
+            gene_padding = pad,
+            "padding gene bodies for k-mer extraction"
+        );
+    }
     let mut genes_by_chrom: HashMap<String, Vec<(usize, usize, u32)>> = HashMap::new();
     for (gene_idx, gene) in genes.iter().enumerate() {
-        genes_by_chrom.entry(gene.chrom.clone()).or_default().push((
-            gene.start,
-            gene.end,
-            gene_idx as u32,
-        ));
+        let (pstart, pend) = padded_extraction_interval(gene.start, gene.end, pad);
+        genes_by_chrom
+            .entry(gene.chrom.clone())
+            .or_default()
+            .push((pstart, pend, gene_idx as u32));
     }
 
     // Process chromosomes in the order they appear in the FASTA index so that
@@ -1328,6 +1355,7 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
         &genes,
         genome_copies.as_ref(),
         k,
+        args.gene_padding,
         &args.output,
     )?;
 
@@ -1360,4 +1388,27 @@ pub fn build_fusion_index(args: &BuildFusionIndexArgs) -> Result<()> {
 
     info!("done");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gene_padding_zero_is_identity() {
+        assert_eq!(padded_extraction_interval(1000, 2000, 0), (1000, 2000));
+    }
+
+    #[test]
+    fn gene_padding_expands_symmetrically() {
+        assert_eq!(padded_extraction_interval(1000, 2000, 150), (850, 2150));
+    }
+
+    #[test]
+    fn gene_padding_lower_bound_clamps_to_zero() {
+        // Padding wider than the start saturates at 0 (contig start); the upper bound is
+        // clamped to the contig length later, at fetch time.
+        assert_eq!(padded_extraction_interval(50, 400, 100), (0, 500));
+        assert_eq!(padded_extraction_interval(0, 400, 100), (0, 500));
+    }
 }

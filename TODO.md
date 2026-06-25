@@ -338,16 +338,6 @@ repeat).
   index, not the breakpoint filter — a higher index edit distance recovers some single-locus
   leakage at source (see the GNA12 case), so evaluate whether a higher-edit-distance index
   also restores low-input sensitivity for repeat-buried junctions.
-- [ ] **`build-fusion-index --gene-padding <BP>` — pad gene bodies by N bases.** Fusion
-  breakpoints frequently fall in flanking introns/UTRs or just outside the annotated
-  transcript bounds, so a junction read's partner-side bases land in sequence the index
-  doesn't cover and the read isn't recognized as spanning that gene. Add an opt-in flag to
-  extend each gene body by ±N bp (clamped to contig bounds) before k-mer extraction in
-  `parse_gene_bodies` / the extraction step, so near-gene breakpoints are captured. Trade-off:
-  larger padding raises cross-gene and repeat-k-mer collisions, so it interacts with the
-  cross-gene dedup, `--edit-distance-filter`, and `--max-genome-copies` (the genome-uniqueness
-  pass should still drop common k-mers); default 0 (current behavior). Validate that padding
-  recovers near-boundary fusions without inflating FPs.
 - [ ] **`FL` edit-distance-1 rescue — split-resolution follow-up.** v0.4.56 shipped the
   edit-distance-1 rescue layer (`kmer::rescue_layout_track`): `.`→lowercase `a`/`b` on a
   unique single-substitution match, single-`N`→capital `A`/`B` on a unique resolution. v1
