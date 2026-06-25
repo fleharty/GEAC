@@ -454,10 +454,8 @@ fn read_coherence(rh: &ReadHit, ga: u32, gb: u32, k: usize, min_anchor: u32) -> 
 /// of a gene k-mer: lowercase `a`/`b` for SNP-rescued windows (bridging the `.` gap a single
 /// SNP opens in an otherwise solid block), and CAPITAL `A`/`B` for single-`N` windows that
 /// resolve uniquely. Exact `A`/`B` are never altered. Written to the `FL` BAM tag so each
-/// evidence read carries its own A→B layout for IGV / samtools inspection.
-///
-/// NOTE: this is richer than `diagnose-fusion`'s `layout_5to3`, which renders the exact
-/// track only (no rescue layer) for now.
+/// evidence read carries its own A→B layout for IGV / samtools inspection. `diagnose-fusion`'s
+/// `layout_5to3` applies the same render + rescue, so the two are byte-for-byte identical.
 fn fusion_layout_track(
     seq: &[u8],
     k: usize,

@@ -1616,3 +1616,33 @@ cover the interval math (identity at 0, symmetric expansion, lower-bound clamp t
 
 Exposed in `wdl/experimental/geac_build_fusion_index.wdl`. Pipeline change (index `meta` +
 extraction) gated the v0.4.57 release; no DuckDB schema or runtime change.
+
+## Fusion layout-track rescue: split-resolution + diagnose-fusion parity — shipped v0.4.58
+
+Two follow-ups to the v0.4.56 `FL` edit-distance-1 rescue (both were the deferred items the
+v0.4.56 entry flagged).
+
+**Flanking-block split-resolution.** v0.4.56 left an *ambiguous split* — a `.`/`N` window whose
+single-substitution neighbors reach *both* genes — unrescued. `kmer::flanking_letter` now
+resolves it by the nearest exact `A`/`B` block on each side: if both flanks agree (or only one
+exists) the window is rendered lowercase `a`/`b` ("inferred, not observed"); if the flanks
+disagree — an A-block on one side and a B-block on the other, i.e. the window sits at the true
+junction — it abstains (`.`/`N`). The resolver reads a snapshot of the *pre-rescue* track taken
+at the top of `rescue_layout_track`, so the outcome is independent of the left-to-right mutation
+order (it never anchors on a freshly-rescued lowercase/capital). Splits require cross-gene shared
+k-mers, which `--edit-distance-filter`/`--max-genome-copies` suppress, so this is rare on a
+well-built index; no new glyph was added (abstention stays `.`/`N`).
+
+**diagnose-fusion parity.** The rescue was wired only into the `FL` tag; `diagnose-fusion`'s
+`layout_5to3` rendered the exact track only. It now applies the same render + rescue, decided as
+"always rescue" (the command is a diagnostic, so the richer track is strictly better and keeping
+it identical to `FL` avoids a confusing discrepancy). Implementation: build a combined
+`kmer_to_gene` map once (gene A = 0, gene B = 1, A wins ties to mirror the per-window assignment
+loop), then render+rescue each read's track at `ReadEvidence` construction and store it
+(`layout_track`). The now-unused `n_base_positions`/`n_windows` struct fields were dropped (they
+were only consumed by the old lazy `layout(k)` method). Validated: `diagnose-fusion` on a real
+EWSR1::ERG evidence BAM emits the lowercase-rescued runs in the layout column.
+
+Rendering/diagnostic only — no change to read→gene assignment, supporting-read counts,
+breakpoints, or any filter. Pipeline change (the `diagnose-fusion` layout output + `FL` split
+handling) gated the v0.4.58 release; no schema/CLI/WDL change.

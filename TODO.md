@@ -338,19 +338,6 @@ repeat).
   index, not the breakpoint filter — a higher index edit distance recovers some single-locus
   leakage at source (see the GNA12 case), so evaluate whether a higher-edit-distance index
   also restores low-input sensitivity for repeat-buried junctions.
-- [ ] **`FL` edit-distance-1 rescue — split-resolution follow-up.** v0.4.56 shipped the
-  edit-distance-1 rescue layer (`kmer::rescue_layout_track`): `.`→lowercase `a`/`b` on a
-  unique single-substitution match, single-`N`→capital `A`/`B` on a unique resolution. v1
-  leaves *ambiguous splits* (a neighbor reaches both genes) as `.`/`N`. Follow-up: resolve a
-  split by the flanking exact-match block (render lowercase to signal "inferred, not observed")
-  rather than abstaining, and consider a distinct ambiguity glyph. The split case requires
-  cross-gene shared k-mers — rare on a well-filtered index — so this is low priority; its
-  frequency is itself a useful signal of residual shared k-mers.
-- [ ] **Apply the `FL` edit-distance-1 rescue to `diagnose-fusion`'s `layout_5to3`.** The
-  rescue layer is wired only into the `FL` evidence-BAM tag (`fusion_layout_track`);
-  `diagnose-fusion` still renders the exact track. Wiring `rescue_layout_track` into
-  `DiagnoseFusion`'s layout (`src/diagnose_fusion.rs`) would make the two consistent. Decide
-  whether `layout_5to3` should always rescue or gate it behind a flag.
 - [ ] **(Stretch) Promote rescued `a`/`b` windows to genuine supporting evidence.** Today the
   rescue is rendering-only. Counting edit-1 windows toward anchoring / spanning evidence could
   improve sensitivity on SNP-dense reads, but it changes quantitative output and filters — a

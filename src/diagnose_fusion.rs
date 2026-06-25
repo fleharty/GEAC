@@ -9,7 +9,7 @@ use tracing::info;
 
 use crate::build_fusion_index::hamming_neighbors_canonical;
 use crate::cli::DiagnoseFusionArgs;
-use crate::kmer::{kmer_iter, non_acgt_positions, render_layout_track};
+use crate::kmer::{kmer_iter, non_acgt_positions, render_layout_track, rescue_layout_track};
 
 /// Decode a 2-bit canonical k-mer hash to a DNA string (A=0 C=1 G=2 T=3, MSB =
 /// leftmost base). The string is the canonical orientation.
@@ -78,12 +78,11 @@ struct ReadEvidence {
     chrom: String, // "unmapped" when unplaced
     pos: i64,      // 0-based; -1 when unmapped
     mapq: u8,
-    a_positions: Vec<usize>,      // k-mer start positions matching gene A
-    b_positions: Vec<usize>,      // k-mer start positions matching gene B
-    a_hits: Vec<u64>,             // the actual gene-A k-mers hit (for error-path flagging)
-    b_hits: Vec<u64>,             // the actual gene-B k-mers hit
-    n_base_positions: Vec<usize>, // read positions of non-ACGT bases (N etc.)
-    n_windows: usize,             // read_len - k + 1
+    a_positions: Vec<usize>, // k-mer start positions matching gene A
+    b_positions: Vec<usize>, // k-mer start positions matching gene B
+    a_hits: Vec<u64>,        // the actual gene-A k-mers hit (for error-path flagging)
+    b_hits: Vec<u64>,        // the actual gene-B k-mers hit
+    layout_track: String,    // per-window A/B/N/. track + edit-distance-1 rescue (a/b)
 }
 
 impl ReadEvidence {
@@ -109,19 +108,14 @@ impl ReadEvidence {
         let b_max = *self.b_positions.iter().max().unwrap();
         (a_max + k <= b_min) || (b_max + k <= a_min)
     }
-    /// Per-window track of length n_windows showing where each gene's k-mers land:
-    /// `A`/`B` = a gene-A/gene-B k-mer matched; `N` = the window contains a non-ACGT
-    /// base so no k-mer could be emitted (masked); `.` = a k-mer was emitted but
-    /// matched neither gene (chimeric junction or non-indexed sequence). Shared with
-    /// the `fusions` `FL` BAM tag via [`render_layout_track`].
-    fn layout(&self, k: usize) -> String {
-        render_layout_track(
-            self.n_windows,
-            &self.a_positions,
-            &self.b_positions,
-            &self.n_base_positions,
-            k,
-        )
+    /// Per-window track of length n_windows: `A`/`B` = an exact gene-A/gene-B k-mer matched;
+    /// `N` = the window contains a non-ACGT base (masked); `.` = a k-mer was emitted but
+    /// matched neither gene. Lowercase `a`/`b` mark edit-distance-1-rescued windows and a
+    /// single-`N` window that resolves uniquely is promoted to a capital — identical to the
+    /// `fusions` `FL` BAM tag (rendered via [`render_layout_track`] + [`rescue_layout_track`]
+    /// at construction).
+    fn layout(&self) -> &str {
+        &self.layout_track
     }
 }
 
@@ -152,6 +146,17 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
         index_kmers_b = b_kmers.len(),
         "loaded index k-mer sets"
     );
+
+    // Combined gene map for the layout-track edit-distance-1 rescue (gene A = 0, gene B = 1).
+    // Insert B first, then A, so gene A wins ties — mirroring the a-before-b precedence of the
+    // per-window assignment loop below.
+    let mut kmer_to_gene: HashMap<u64, u32> = HashMap::with_capacity(a_kmers.len() + b_kmers.len());
+    for &kmer in b_kmers.keys() {
+        kmer_to_gene.insert(kmer, 1);
+    }
+    for &kmer in a_kmers.keys() {
+        kmer_to_gene.insert(kmer, 0);
+    }
 
     let mut reader = bam::Reader::from_path(&args.reads)
         .with_context(|| format!("failed to open evidence BAM/CRAM: {}", args.reads.display()))?;
@@ -216,6 +221,15 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
             ("unmapped".to_string(), -1)
         };
 
+        // Render the exact track, then apply the edit-distance-1 rescue so the diagnostic
+        // layout matches the `fusions` FL tag (lowercase a/b for SNP-rescued windows, capital
+        // from a uniquely-resolving single-N window).
+        let mut track =
+            render_layout_track(n_windows, &a_positions, &b_positions, &n_base_positions, k)
+                .into_bytes();
+        rescue_layout_track(&mut track, &seq, k, &kmer_to_gene, 0, 1);
+        let layout_track = String::from_utf8(track).expect("layout track is ASCII");
+
         evidence.push(ReadEvidence {
             qname: String::from_utf8_lossy(record.qname()).into_owned(),
             chrom,
@@ -223,10 +237,9 @@ pub fn diagnose_fusion(args: &DiagnoseFusionArgs) -> Result<()> {
             mapq: record.mapq(),
             a_positions,
             b_positions,
-            n_base_positions,
             a_hits,
             b_hits,
-            n_windows,
+            layout_track,
         });
     }
 
@@ -510,7 +523,7 @@ fn write_read_row(w: &mut impl Write, e: &ReadEvidence, k: usize, min_anchor: us
         e.b_count(),
         e.spanning(),
         e.coherent(k, min_anchor),
-        e.layout(k)
+        e.layout()
     )?;
     Ok(())
 }
@@ -569,6 +582,11 @@ mod tests {
         n_base_positions: Vec<usize>,
         n_windows: usize,
     ) -> ReadEvidence {
+        // These tests exercise the exact A/B/N/. rendering only (k=11). The edit-distance-1
+        // rescue layer is covered by the kmer.rs unit tests; here an empty gene map would
+        // leave the exact track unchanged anyway, so store the plain exact render.
+        let layout_track =
+            render_layout_track(n_windows, &a_positions, &b_positions, &n_base_positions, 11);
         ReadEvidence {
             qname: "r".to_string(),
             chrom: "chr1".to_string(),
@@ -576,10 +594,9 @@ mod tests {
             mapq: 60,
             a_positions,
             b_positions,
-            n_base_positions,
             a_hits: Vec::new(),
             b_hits: Vec::new(),
-            n_windows,
+            layout_track,
         }
     }
 
@@ -588,7 +605,7 @@ mod tests {
         // k=11, 50 bp read -> 40 windows. An N at read position 5 masks every window
         // whose [s, s+k) range contains position 5: starts 0..=5 (6 windows).
         let e = evidence((6..=14).collect(), (25..=39).collect(), vec![5], 40);
-        let track = e.layout(11);
+        let track = e.layout();
         assert_eq!(&track[0..6], "NNNNNN");
         assert_eq!(&track[6..15], "AAAAAAAAA");
         assert_eq!(&track[15..25], "..........");
@@ -598,7 +615,7 @@ mod tests {
     #[test]
     fn layout_clean_read_has_no_n() {
         let e = evidence((0..=14).collect(), (25..=39).collect(), vec![], 40);
-        let track = e.layout(11);
+        let track = e.layout();
         assert!(!track.contains('N'));
         assert_eq!(&track[0..15], "AAAAAAAAAAAAAAA");
     }

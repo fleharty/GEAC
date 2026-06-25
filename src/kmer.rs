@@ -83,10 +83,9 @@ pub fn non_acgt_positions(seq: &[u8]) -> Vec<usize> {
 ///
 /// `N` windows are painted first. Because `kmer_iter` never emits a k-mer for a masked
 /// window, `a_positions`/`b_positions` can't overlap them, so painting order is safe.
-/// This renders the *exact* track behind both `diagnose-fusion`'s `layout_5to3` column and
-/// the `FL` BAM tag. The `FL` tag additionally runs [`rescue_layout_track`] on top to mark
-/// edit-distance-1 windows (lowercase `a`/`b`, and capital from single-`N`); `layout_5to3`
-/// uses the exact track only.
+/// This renders the *exact* track; both the `FL` BAM tag and `diagnose-fusion`'s `layout_5to3`
+/// column then run [`rescue_layout_track`] on top to mark edit-distance-1 windows (lowercase
+/// `a`/`b`, and capital from a uniquely-resolving single-`N`).
 pub fn render_layout_track(
     n_windows: usize,
     a_positions: &[usize],
@@ -123,20 +122,43 @@ fn window_canonical(window: &[u8], k: usize) -> Option<u64> {
     kmer_iter(window, k).next().map(|(kmer, _)| kmer)
 }
 
+/// Resolve an ambiguous split window — one whose 1-edit neighbors reach *both* genes — by
+/// the flanking exact-match block, reading the pre-rescue track `anchors` (which holds only
+/// exact `A`/`B`/`N`/`.`). Returns the lowercase letter when the nearest exact anchors on
+/// both sides agree, or when only one side has an anchor ("inferred, not observed"). Returns
+/// `None` when the flanks disagree — the window sits at the junction between an A-block and a
+/// B-block, genuinely undeterminable — or when no exact anchor exists at all.
+fn flanking_letter(anchors: &[u8], i: usize) -> Option<u8> {
+    let is_ab = |c: u8| c == b'A' || c == b'B';
+    let left = anchors[..i].iter().rev().find(|&&c| is_ab(c)).copied();
+    let right = anchors[i + 1..].iter().find(|&&c| is_ab(c)).copied();
+    match (left, right) {
+        (Some(l), Some(r)) if l == r => Some(l.to_ascii_lowercase()),
+        (Some(l), None) => Some(l.to_ascii_lowercase()),
+        (None, Some(r)) => Some(r.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
 /// Edit-distance-1 rescue layer for an exact-match layout track produced by
 /// [`render_layout_track`]. Upgrades only `.` and `N` windows in place; exact `A`/`B`
 /// are never touched, preserving the invariant "capital = unambiguous match".
 ///
 /// - `.` (a k-mer was emitted but matched neither gene): probe the `3·k` single-substitution
-///   neighbors of the window's k-mer. If every neighbor that matches anything matches the
-///   *same* gene, render lowercase `a`/`b` (a SNP-rescue *disagrees* at a known base, so it
-///   stays lowercase even when unique). Split across both genes, or no neighbor matches →
-///   left as `.` (v1: conservative; flanking-block tie-break is a documented follow-up).
-/// - `N` (window masked by a non-ACGT base): only rescued when the window contains *exactly
+///   neighbors of the window's k-mer. Unique gene → lowercase `a`/`b` (a SNP-rescue
+///   *disagrees* at a known base, so it stays lowercase even when unique). No neighbor
+///   matches → left `.`.
+/// - `N` (window masked by a non-ACGT base): rescued only when the window contains *exactly
 ///   one* non-ACGT base — its uncertainty is then at a single known position, so the window
 ///   is within edit distance 1 by construction. Substitute that base with A/C/G/T and probe.
 ///   Unique gene → CAPITAL `A`/`B` (the `N` does not disagree with the gene, it is merely
-///   unknown, so a unique resolution is as good as exact). Split / multi-`N` / none → `N`.
+///   unknown, so a unique resolution is as good as exact). Multi-`N` / no match → `N`.
+/// - Split windows (a neighbor reaches *both* genes) are resolved by [`flanking_letter`]:
+///   the surrounding exact block decides the gene and the window is rendered lowercase
+///   ("inferred, not observed"); a window between an A-block and a B-block (the junction)
+///   has no agreeing flank and is left `.`/`N`. Splits require cross-gene shared k-mers,
+///   which the index `--edit-distance-filter`/`--max-genome-copies` passes suppress, so they
+///   are rare on a well-built index.
 ///
 /// `seq` is the read sequence in the same orientation the track was rendered from; window `i`
 /// is `seq[i..i+k]`. The caller guarantees `track.len() == seq.len() - k + 1`.
@@ -150,6 +172,11 @@ pub fn rescue_layout_track(
 ) {
     const BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
     let is_acgt = |b: u8| matches!(b | 0x20, b'a' | b'c' | b'g' | b't');
+
+    // Snapshot the exact (pre-rescue) track so flanking-block resolution always reads the
+    // original A/B anchors, never partially-rescued output — keeping the result independent
+    // of the left-to-right mutation order.
+    let anchors = track.to_vec();
 
     for i in 0..track.len() {
         match track[i] {
@@ -174,7 +201,7 @@ pub fn rescue_layout_track(
                             }
                             if hit_a && hit_b {
                                 buf[p] = orig;
-                                break 'scan; // split — no need to keep scanning
+                                break 'scan; // split — flanking block decides
                             }
                         }
                     }
@@ -183,7 +210,8 @@ pub fn rescue_layout_track(
                 track[i] = match (hit_a, hit_b) {
                     (true, false) => b'a',
                     (false, true) => b'b',
-                    _ => b'.',
+                    (true, true) => flanking_letter(&anchors, i).unwrap_or(b'.'),
+                    (false, false) => b'.',
                 };
             }
             b'N' => {
@@ -217,7 +245,8 @@ pub fn rescue_layout_track(
                 track[i] = match (hit_a, hit_b) {
                     (true, false) => b'A',
                     (false, true) => b'B',
-                    _ => b'N',
+                    (true, true) => flanking_letter(&anchors, i).unwrap_or(b'N'),
+                    (false, false) => b'N',
                 };
             }
             _ => {}
@@ -408,9 +437,10 @@ mod tests {
     }
 
     #[test]
-    fn rescue_n_split_between_genes_stays_n() {
+    fn rescue_n_split_with_no_flank_stays_n() {
         // Two gene k-mers differ only at position 0: NTTT -> ATTT (gene A) and CTTT (gene B).
-        // The single-N window cannot discriminate, so it must stay 'N'.
+        // The single-N window is a split, and this 1-window read has no flanking exact block
+        // to break the tie, so it stays 'N'.
         let k = 4;
         let mut m = HashMap::new();
         m.insert(kmer_iter(b"ATTT", k).next().unwrap().0, 0u32);
@@ -420,9 +450,9 @@ mod tests {
     }
 
     #[test]
-    fn rescue_snp_split_between_genes_stays_dot() {
+    fn rescue_snp_split_with_no_flank_stays_dot() {
         // GTTT matches neither gene exactly; substituting position 0 reaches gene A (ATTT)
-        // and gene B (CTTT). Ambiguous -> left '.', not guessed.
+        // and gene B (CTTT). Split with no flanking exact block -> left '.', not guessed.
         let k = 4;
         let mut m = HashMap::new();
         m.insert(kmer_iter(b"ATTT", k).next().unwrap().0, 0u32);
@@ -438,5 +468,23 @@ mod tests {
         let m = index_one_gene(b"ATTT", k, 0);
         let track = layout_with_rescue(b"GGGG", k, &m, 0, 1);
         assert_eq!(track, ".");
+    }
+
+    #[test]
+    fn flanking_letter_resolves_when_blocks_agree() {
+        // Split window at index 2 surrounded by exact A on both sides -> lowercase 'a'.
+        assert_eq!(flanking_letter(b"AA.AA", 2), Some(b'a'));
+        // Only one flank present (read end) -> use it.
+        assert_eq!(flanking_letter(b"..AAA", 0), Some(b'a'));
+        assert_eq!(flanking_letter(b"BBB..", 4), Some(b'b'));
+    }
+
+    #[test]
+    fn flanking_letter_abstains_at_junction_or_no_anchor() {
+        // A-block left, B-block right: the junction is undeterminable -> None.
+        assert_eq!(flanking_letter(b"AA.BB", 2), None);
+        // No exact anchor anywhere -> None.
+        assert_eq!(flanking_letter(b".....", 2), None);
+        assert_eq!(flanking_letter(b"NNNNN", 2), None);
     }
 }
