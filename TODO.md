@@ -426,7 +426,7 @@ repeat).
     on each side so junction-spanning and soft-clipped reads aren't truncated. The result is a
     small BAM holding all the reads any repeat-aware approach could possibly use, enabling the
     ~5s evidence-BAM iteration loop instead of re-scanning the full BAM each experiment.
-- [ ] **Copy-aware "unique-anchor" specificity filter — v1 shipped (opt-in), validation + defaults open.**
+- [ ] **Copy-aware "unique-anchor" specificity filter — v1 shipped + validated (opt-in); depth-relative threshold + soft-clip pairing open.**
   The complement to the repeat-aware item above: it buys *specificity* where repeat-tolerance buys
   *sensitivity*. For a repeat-resident partner (DUX4, and the other low-uniqueness panel genes —
   pseudogene/segdup families like PMS2, SDHA, NOTCH2, BRCA1, and the handful with ~zero unique
@@ -439,16 +439,28 @@ repeat).
     (asymmetric — chosen per call from per-gene unique totals). A call PASSes only if ≥ N fragments
     are unique-anchored, else `filter=no_unique_anchor` (tag, not drop; only touches calls still
     PASS). Requires `--check-genome-uniqueness` index. Unit-tested (`read_unique_anchored`).
+  - **Validated (evidence-BAM cohort, geac 0.4.59):** sweeping `N` on a repeat-partner cohort, a
+    sufficient threshold removes **all** repeat-partner false positives (100% precision) while the
+    surviving true calls are the **highest-input** replicates in proper **dose-order** — turning a
+    dose-blind, high-FP artifact into clean dose-ordered detection. N=1/2 did nothing (every sample
+    has a few unique-anchored fragments from normal expression of the unique partner paired with
+    promiscuous repeat k-mers); the discriminating signal is the *count* (true high-input has tens,
+    an FP a handful), so the threshold must sit above that noise floor.
   - **Still open:**
-    - **Validate** against the evidence-BAM cohort: confirm it clears the spurious repeat-partner
-      calls without harming fusions between two well-anchored (high-uniqueness) genes; pick a default
-      `N`; decide whether to make it on-by-default.
+    - **Depth-relative threshold.** A fixed absolute `N` is depth-dependent (which is *why* it gives
+      dose-response, but isn't portable across coverage). Add a relative variant — fraction of
+      supporting reads, or scale by local coverage — before considering on-by-default.
     - **Pair with the unique-side soft-clip** (repeat-aware item) for the *sensitivity* half — v1
-      gives specificity only; a repeat-partner fusion still needs soft-clip to be detected at all.
+      gives specificity only; low-input repeat-partner fusions still drop out (they need soft-clip
+      to be detected at all).
+    - **Full-panel safety check.** Validation so far is a 2-gene (CIC/DUX4) index; confirm the filter
+      doesn't harm fusions between two well-anchored (high-uniqueness) genes (expected safe — both
+      sides unique-anchor trivially — but unverified on the full panel).
     - **Alternative scoring** to evaluate: soft copy-weighting (weight a supporting read by
       `1/genome_copies`) vs the current hard gate; how many unique k-mers should constitute an anchor
       (currently ≥1); a per-gene uniqueness floor below which *neither* side can anchor (soft-clip-only).
-    - **Expose `n_unique_anchored`** as an output column (v1 keeps it internal to avoid a schema bump).
+    - **Expose `n_unique_anchored`** as an output column (v1 keeps it internal to avoid a schema bump)
+      — would also let a cohort sweep compute the whole precision/recall curve from a single run.
 - [ ] **`genome_copies` saturates at 255 (`u8`).** `build-fusion-index` counts genome-wide k-mer
   occurrences in a `HashMap<u64, u8>`, so any k-mer occurring ≥255× is right-censored at 255 (the
   `kmers.genome_copies` column and `gene_stats.tsv` copy tiers all cap there). The `==1` unique

@@ -1710,7 +1710,18 @@ Substrate is a keep-but-label index (`build-fusion-index --check-genome-uniquene
 **Scope of v1.** Specificity only. A repeat-partner fusion still needs a repeat-tolerant /
 unique-side soft-clip anchor to be *detected* at all (the sensitivity half, tracked in the
 repeat-aware TODO item). v1 keeps the hard gate (≥N, anchor = ≥1 unique k-mer) and keeps
-`n_unique_anchored` internal (no output-column / schema change). Still open (see TODO): cohort
-validation + default selection, soft copy-weighting as an alternative to the hard gate, a per-gene
-uniqueness floor, and promoting `n_unique_anchored` to an output column. Also filed: `genome_copies`
-saturates at `u8` (255) in `build-fusion-index` — widen to `u16`/`u32` for honest high-copy counts.
+`n_unique_anchored` internal (no output-column / schema change).
+
+**Validated** on a repeat-partner evidence-BAM cohort (geac 0.4.59): sweeping `N`, a sufficient
+threshold removes **all** repeat-partner false positives (100% precision) while the surviving true
+calls are the highest-input replicates in proper dose-order — converting a dose-blind, high-FP
+artifact into clean dose-ordered detection. Note: very low `N` (1–2) does nothing — every sample
+carries a few unique-anchored fragments (normal expression of the unique partner paired with
+promiscuous repeat k-mers), so the threshold must clear that noise floor; the discriminating signal
+is the *count*, which scales with depth (hence the dose-response, and hence a depth-relative
+threshold is the right next step).
+
+Still open (see TODO): a depth-relative threshold variant, pairing with unique-side soft-clip for
+low-input sensitivity, a full-panel safety check (validation so far is a 2-gene index), soft
+copy-weighting vs the hard gate, and promoting `n_unique_anchored` to an output column. Also filed:
+`genome_copies` saturates at `u8` (255) in `build-fusion-index` — widen to `u16`/`u32`.
