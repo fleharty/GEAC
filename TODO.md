@@ -426,6 +426,42 @@ repeat).
     on each side so junction-spanning and soft-clipped reads aren't truncated. The result is a
     small BAM holding all the reads any repeat-aware approach could possibly use, enabling the
     ~5s evidence-BAM iteration loop instead of re-scanning the full BAM each experiment.
+- [ ] **(Design) Copy-aware "unique-anchor" specificity filter.** The complement to the repeat-aware
+  item above: it buys *specificity* where repeat-tolerance buys *sensitivity*. Today the runtime
+  index is `kmer_to_gene: HashMap<u64,u32>` and `genome_copies` is used only as a load-time drop
+  filter (`--max-kmer-copies`). After load every surviving k-mer is trusted equally, so a read that
+  merely *contains* a high-copy repeat k-mer "supports" that gene even though it could come from any
+  of the gene's genome-wide repeat copies. For a repeat-resident partner (DUX4, and the other
+  low-uniqueness panel genes — pseudogene/segdup families like PMS2, SDHA, NOTCH2, BRCA1, and the
+  handful with ~zero unique k-mers) this manufactures a high-support fusion call in essentially
+  *every* sample, regardless of whether the fusion is present.
+  - **Mechanism.** Keep all k-mers (so the repeat partner stays visible) but **gate the
+    junction-spanning evidence by genome uniqueness**: a spanning read's anchor block on a gene
+    counts as a genuine anchor only if it contains `genome_copies==1` k-mers. Requires retaining a
+    per-k-mer copy count (or an is-unique bit) in the runtime index instead of discarding it after
+    load, then checking it inside `read_coherence` / the breakpoint accounting in `src/fusions.rs`.
+  - **Asymmetric by necessity.** A repeat partner has too few unique k-mers to anchor, so do NOT
+    require unique anchoring on both sides — require it on the **higher-uniqueness partner** (chosen
+    per call from the index's per-gene uniqueness, which `build-fusion-index --gene-stats-output`
+    already computes), and let the repeat side be carried by the spanning/soft-clip relationship to
+    those unique-anchored reads. Pairs directly with the unique-side soft-clip idea in the
+    repeat-aware item: unique-anchor provides specificity, soft-clip provides the sensitivity.
+  - **vs. `--max-kmer-copies`.** That *drops* high-copy k-mers globally at load (set it strict and
+    the repeat partner vanishes; set it loose and it floods). Unique-anchor *keeps* them but won't
+    let a call exist without a unique anchor on the trustworthy side. The keep-but-label index
+    (`--check-genome-uniqueness` + high `--max-genome-copies`) is the substrate.
+  - **Open knobs.** Hard gate (≥N unique-anchored spanning reads) vs soft copy-weighting (weight a
+    supporting read by `1/genome_copies`); how many unique k-mers constitute an anchor; a per-gene
+    uniqueness floor below which *neither* side can anchor (those genes are soft-clip-only).
+  - **Validation.** Confirm it removes the spurious repeat-partner calls across a cohort while not
+    harming detection of fusions between two well-anchored (high-uniqueness) genes. Prototype
+    against an evidence-BAM cohort before wiring into `fusions` defaults.
+- [ ] **`genome_copies` saturates at 255 (`u8`).** `build-fusion-index` counts genome-wide k-mer
+  occurrences in a `HashMap<u64, u8>`, so any k-mer occurring ≥255× is right-censored at 255 (the
+  `kmers.genome_copies` column and `gene_stats.tsv` copy tiers all cap there). The `==1` unique
+  count is unaffected, but true copy numbers for high-repeat k-mers (DUX4/D4Z4, satellite, etc.) are
+  lost — which matters for copy-weighted anchoring and for honest per-gene copy reporting. Widen the
+  counter to `u16`/`u32` (saturating), and the column accordingly.
 
 ---
 
