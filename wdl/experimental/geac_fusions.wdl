@@ -52,6 +52,11 @@ version 1.0
 ##                           max_breakpoint_std is set. Suggested: 10.
 ##   asym_anchor_std       - max breakpoint std (bp) on the dominant side for asym_anchor_reads (default: 25)
 ##   asym_anchor_mapq      - min call min_mapq for asym_anchor_reads; excludes multi-mapper leakage (default: 20)
+##   min_unique_anchor_reads - (optional) copy-aware specificity filter: keep filter="PASS" only when at least
+##                           this many supporting fragments are anchored by a genome-unique k-mer on the
+##                           higher-uniqueness partner; else tag filter="no_unique_anchor". Suppresses
+##                           repeat/segdup/pseudogene-partner artifacts. Requires an index built with
+##                           --check-genome-uniqueness (genome_copies column). Default: 0 (disabled).
 ##   comment_text          - (optional) free-text note echoed straight to the data table (as the
 ##                           `comment` output); not processed by geac, never written to the Parquet/TSV
 ##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
@@ -97,6 +102,7 @@ workflow GeacFusions {
         Int?     asym_anchor_reads
         Float    asym_anchor_std        = 25.0
         Int      asym_anchor_mapq       = 20
+        Int      min_unique_anchor_reads = 0
 
         String?  comment_text
 
@@ -132,6 +138,7 @@ workflow GeacFusions {
             asym_anchor_reads          = asym_anchor_reads,
             asym_anchor_std            = asym_anchor_std,
             asym_anchor_mapq           = asym_anchor_mapq,
+            min_unique_anchor_reads    = min_unique_anchor_reads,
             docker_image           = docker_image,
             memory_gb              = memory_gb,
             disk_gb                = disk_gb,
@@ -178,6 +185,7 @@ task Fusions {
         Int?     asym_anchor_reads
         Float    asym_anchor_std
         Int      asym_anchor_mapq
+        Int      min_unique_anchor_reads
 
         String docker_image
         Int    memory_gb
@@ -227,7 +235,8 @@ task Fusions {
             ~{"--min-breakpoint-distance " + min_breakpoint_distance} \
             ~{"--asym-anchor-reads " + asym_anchor_reads} \
             --asym-anchor-std        ~{asym_anchor_std} \
-            --asym-anchor-mapq       ~{asym_anchor_mapq}
+            --asym-anchor-mapq       ~{asym_anchor_mapq} \
+            --min-unique-anchor-reads ~{min_unique_anchor_reads}
     >>>
 
     output {

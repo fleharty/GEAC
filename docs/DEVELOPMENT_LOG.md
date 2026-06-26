@@ -1673,3 +1673,44 @@ two capture-limited cell lines (A=PAX3::FOXO1, E=CIC::DUX4), low-input paralog F
 the cohort-wide orientation abstention caused by a pre-strand (v0.4.44) index. Truth manifests
 carry sample identifiers, so they live outside this public repo. Phases 2 (Terra WDL) and 3
 (GitHub Action) remain — see TODO.
+
+---
+
+## Fusion copy-aware unique-anchor specificity filter — v1 (opt-in)
+
+Added `geac experimental fusions --min-unique-anchor-reads N` (default 0 = disabled), a
+specificity filter for fusions whose partner is repeat-resident / segmentally-duplicated /
+pseudogene-bearing (a macrosatellite gene being the extreme case). Such a partner has few-to-no
+genome-unique k-mers, so its multi-copy k-mers match reads genome-wide and fabricate a
+high-support call in nearly every sample regardless of whether the fusion is present — a
+near-universal false positive that no support/coherence/breakpoint threshold separates from a
+real call (the fabricated calls are just as well-supported).
+
+**Mechanism.** When the flag is set, the runtime index retains (a) a `HashSet<u64>` of
+genome-unique (`genome_copies==1`) k-mer hashes and (b) a per-gene count of unique k-mers — both
+built only when the flag is on, so the default hot path is unchanged. `assign_gene` tracks, per
+read, how many of each gene's matched k-mers are unique (`gene1_unique_count`/`gene2_unique_count`
+on `ReadHit`). During fragment aggregation, the **higher-uniqueness partner** of the pair is
+chosen from the per-gene unique totals, and a fragment is "unique-anchored" if any of its reads
+carries a unique k-mer on that partner (`read_unique_anchored`). A call keeps `filter=PASS` only
+if ≥ N fragments are unique-anchored; otherwise it is tagged `filter=no_unique_anchor` (kept, not
+dropped; applied last so prior `pon`/`chimera`/`samelocus` tags win).
+
+**Why asymmetric.** A repeat partner cannot be unique-anchored by construction, so requiring
+uniqueness on *both* sides would reject every real repeat-partner fusion. Requiring it only on the
+trustworthy (higher-uniqueness) side removes the all-repeat-noise calls while leaving a genuine
+junction — whose unique side is real — able to pass.
+
+**Relationship to `--max-kmer-copies`.** That flag *drops* high-copy k-mers globally at load
+(strict → the repeat partner vanishes; loose → it floods). Unique-anchor *keeps* them (the repeat
+partner stays visible) but won't let a call exist without a unique anchor on the trustworthy side.
+Substrate is a keep-but-label index (`build-fusion-index --check-genome-uniqueness` with a high
+`--max-genome-copies`).
+
+**Scope of v1.** Specificity only. A repeat-partner fusion still needs a repeat-tolerant /
+unique-side soft-clip anchor to be *detected* at all (the sensitivity half, tracked in the
+repeat-aware TODO item). v1 keeps the hard gate (≥N, anchor = ≥1 unique k-mer) and keeps
+`n_unique_anchored` internal (no output-column / schema change). Still open (see TODO): cohort
+validation + default selection, soft copy-weighting as an alternative to the hard gate, a per-gene
+uniqueness floor, and promoting `n_unique_anchored` to an output column. Also filed: `genome_copies`
+saturates at `u8` (255) in `build-fusion-index` — widen to `u16`/`u32` for honest high-copy counts.

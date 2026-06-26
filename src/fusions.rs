@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -32,6 +33,15 @@ struct FusionIndex {
     /// biological 5'->3' fusion-partner ordering. Legacy indexes are false → the scanner
     /// falls back to gene-index-order labels.
     has_strand: bool,
+    /// Genome-unique (genome_copies==1) k-mer hashes, populated only when the unique-anchor
+    /// filter is active (`--min-unique-anchor-reads > 0`) and the index carries copy counts.
+    /// Used to tell a genuine "this read is from gene X" anchor from a multi-copy repeat hit.
+    /// `None` when the filter is disabled, so the default hot path is unchanged.
+    unique_kmers: Option<HashSet<u64>>,
+    /// Per-gene count of genome-unique k-mers (parallel to `gene_names`); used to pick the
+    /// higher-uniqueness partner of a pair as the side that must be unique-anchored. Populated
+    /// alongside `unique_kmers`.
+    gene_unique_total: Option<Vec<u32>>,
 }
 
 /// Read a value from the index `meta` table by key.
@@ -97,6 +107,7 @@ fn load_index(
     index_path: &Path,
     k: usize,
     max_kmer_copies: Option<u32>,
+    track_unique: bool,
     skip_version_check: bool,
 ) -> Result<FusionIndex> {
     let conn = Connection::open(index_path)
@@ -186,13 +197,17 @@ fn load_index(
     // size, which is enough to OOM a job that otherwise fits.
     let n_total: i64 = conn.query_row("SELECT count(*) FROM kmers", [], |r| r.get(0))?;
 
-    // Only read genome_copies when a copy filter is active. This keeps the default
-    // path identical (and compatible with indexes built before the column existed).
-    if max_kmer_copies.is_some() {
+    // Read genome_copies when either a copy filter (--max-kmer-copies) or the
+    // unique-anchor filter (--min-unique-anchor-reads) is active. Both need per-k-mer
+    // copy counts; without one of them the default path stays identical (and compatible
+    // with indexes built before the column existed).
+    let need_copies = max_kmer_copies.is_some() || track_unique;
+    if need_copies {
         anyhow::ensure!(
             kmers_has_copies_column(&conn)?,
-            "--max-kmer-copies requires an index built with --check-genome-uniqueness \
-             (the index has no genome_copies column); rebuild the index or drop the flag"
+            "this run needs per-k-mer genome copy counts (from --max-kmer-copies or \
+             --min-unique-anchor-reads), but the index has no genome_copies column; \
+             rebuild it with --check-genome-uniqueness or drop the flag"
         );
         // Fail fast on indexes whose genome_copies are all NULL (column present but
         // the genome pass never ran) before loading the whole kmers table into RAM.
@@ -200,19 +215,23 @@ fn load_index(
             conn.query_row("SELECT count(genome_copies) FROM kmers", [], |r| r.get(0))?;
         anyhow::ensure!(
             n_total == 0 || n_with_copies > 0,
-            "--max-kmer-copies requires per-k-mer genome copy counts, but the index has \
-             none (genome_copies is NULL for every k-mer); rebuild with --check-genome-uniqueness"
+            "this run needs per-k-mer genome copy counts, but the index has none \
+             (genome_copies is NULL for every k-mer); rebuild with --check-genome-uniqueness"
         );
     }
 
     let mut kmer_to_gene: HashMap<u64, u32> = HashMap::new();
+    // Genome-unique k-mer set + per-gene unique totals, built only for the unique-anchor
+    // filter. `unique_kmers` lets a per-read scan tell a genuine anchor from a repeat hit;
+    // `gene_unique_total` picks the higher-uniqueness partner of a pair.
+    let mut unique_kmers: Option<HashSet<u64>> = track_unique.then(HashSet::new);
+    let mut gene_unique_total: Option<Vec<u32>> =
+        track_unique.then(|| vec![0u32; gene_names.len()]);
 
-    if let Some(max) = max_kmer_copies {
-        // Apply the copy filter at load time and store only k-mers that pass.
-        // Excluded k-mers (copies > max, or NULL/unknown) never enter the map, so
-        // we avoid keeping a second copies HashMap of identical size and the
-        // per-read lookup that went with it. Semantics are unchanged: filtered
-        // k-mers simply never match a read.
+    if need_copies {
+        // Apply the optional copy filter at load time and store only k-mers that pass.
+        // Excluded k-mers (copies > max, or NULL/unknown) never enter the map. When the
+        // unique-anchor filter is on, also record which kept k-mers are genome-unique.
         let mut stmt = conn.prepare("SELECT kmer_hash, gene_index, genome_copies FROM kmers")?;
         let mut rows = stmt.query([])?;
         let mut n_excluded: u64 = 0;
@@ -220,17 +239,32 @@ fn load_index(
             let kmer_i64: i64 = row.get(0)?;
             let gene_idx: u32 = row.get(1)?;
             let copies: Option<i32> = row.get(2)?;
-            match copies {
-                Some(c) if c >= 0 && (c as u32) <= max => {
-                    kmer_to_gene.insert(kmer_i64 as u64, gene_idx);
+            // Keep the k-mer unless a max-copies filter excludes it (copies above the
+            // ceiling, or copy count unknown when a ceiling is set).
+            let keep = match (max_kmer_copies, copies) {
+                (Some(max), Some(c)) => c >= 0 && (c as u32) <= max,
+                (Some(_), None) => false,
+                (None, _) => true,
+            };
+            if !keep {
+                n_excluded += 1;
+                continue;
+            }
+            let kmer = kmer_i64 as u64;
+            kmer_to_gene.insert(kmer, gene_idx);
+            if track_unique && copies == Some(1) {
+                unique_kmers.as_mut().unwrap().insert(kmer);
+                if let Some(v) = gene_unique_total.as_mut() {
+                    if let Some(slot) = v.get_mut(gene_idx as usize) {
+                        *slot += 1;
+                    }
                 }
-                _ => n_excluded += 1,
             }
         }
         if n_excluded > 0 {
             info!(
                 n_excluded,
-                max_kmer_copies = max,
+                ?max_kmer_copies,
                 "k-mers excluded by the genome-copy filter (too common or copy count unknown)"
             );
         }
@@ -244,7 +278,15 @@ fn load_index(
             kmer_to_gene.insert(kmer_i64 as u64, gene_idx);
         }
     }
-    info!(n_kmers = kmer_to_gene.len(), "loaded k-mer index");
+    if let Some(uk) = unique_kmers.as_ref() {
+        info!(
+            n_kmers = kmer_to_gene.len(),
+            n_unique_kmers = uk.len(),
+            "loaded k-mer index (unique-anchor tracking on)"
+        );
+    } else {
+        info!(n_kmers = kmer_to_gene.len(), "loaded k-mer index");
+    }
 
     Ok(FusionIndex {
         kmer_to_gene,
@@ -254,6 +296,8 @@ fn load_index(
         gene_tx_start,
         gene_tx_end,
         has_strand,
+        unique_kmers,
+        gene_unique_total,
     })
 }
 
@@ -264,12 +308,17 @@ struct ReadHit {
     gene1_kmer_count: u32,
     gene1_kmer_min: u32,
     gene1_kmer_max: u32,
+    /// Count of this read's gene1 k-mers that are genome-unique (genome_copies==1).
+    /// 0 unless the unique-anchor filter is active (`index.unique_kmers.is_some()`).
+    gene1_unique_count: u32,
     // Second-best gene on this read (if any k-mer hit a different gene).
     // Used by the junction-coherence filter to detect spanning reads.
     gene2_idx: Option<u32>,
     gene2_kmer_count: u32,
     gene2_kmer_min: u32,
     gene2_kmer_max: u32,
+    /// Genome-unique k-mer count for gene2 (see `gene1_unique_count`).
+    gene2_unique_count: u32,
     mapq: u8,
     // kmer_hits is populated only during the second BAM pass for kmer-hits-output;
     // empty during the first pass to avoid gigabytes of per-read detail on deep BAMs.
@@ -284,26 +333,33 @@ fn assign_gene(
     collect_detail: bool,
     kmer_blacklist: Option<&std::collections::HashSet<u64>>,
 ) -> Option<ReadHit> {
-    // gene_idx → (total_count, clean_count, min_pos, max_pos)
-    // total_count: all matching k-mers; clean_count: non-blacklisted k-mers only.
-    // Gene winner selection uses total_count for stability; the min_hits gate uses
-    // clean_count so blacklisted k-mers alone cannot qualify a read.
-    let mut gene_hits: HashMap<u32, (u32, u32, usize, usize)> = HashMap::new();
+    // gene_idx → (total_count, clean_count, unique_count, min_pos, max_pos)
+    // total_count: all matching k-mers; clean_count: non-blacklisted k-mers only;
+    // unique_count: matching k-mers that are genome-unique (only tracked when the
+    // unique-anchor filter is active). Gene winner selection uses total_count for
+    // stability; the min_hits gate uses clean_count so blacklisted k-mers alone
+    // cannot qualify a read.
+    let mut gene_hits: HashMap<u32, (u32, u32, u32, usize, usize)> = HashMap::new();
     let mut kmer_hits: Vec<(u64, u32, usize)> = Vec::new();
+    let unique_kmers = index.unique_kmers.as_ref();
     // The genome-copy filter (--max-kmer-copies) is applied at index load time:
     // excluded k-mers are absent from kmer_to_gene, so a plain lookup is correct.
     for (kmer, pos_in_read) in kmer_iter(seq, k) {
         if let Some(&gene_idx) = index.kmer_to_gene.get(&kmer) {
             let e = gene_hits
                 .entry(gene_idx)
-                .or_insert((0, 0, pos_in_read, pos_in_read));
+                .or_insert((0, 0, 0, pos_in_read, pos_in_read));
             e.0 += 1;
             let is_clean = kmer_blacklist.is_none_or(|bl| !bl.contains(&kmer));
             if is_clean {
                 e.1 += 1;
             }
-            e.2 = e.2.min(pos_in_read);
-            e.3 = e.3.max(pos_in_read);
+            // Unique lookup only happens when the filter is on (unique_kmers is Some).
+            if unique_kmers.is_some_and(|u| u.contains(&kmer)) {
+                e.2 += 1;
+            }
+            e.3 = e.3.min(pos_in_read);
+            e.4 = e.4.max(pos_in_read);
             // Retaining every matching k-mer for every assigned read costs
             // gigabytes on deep BAMs; only do it when the detail TSV is requested.
             if collect_detail {
@@ -314,13 +370,13 @@ fn assign_gene(
 
     // Sort by total_count desc, then gene_idx asc so the result is deterministic
     // (HashMap iteration order must not influence the winner choice).
-    let mut sorted: Vec<(u32, u32, u32, usize, usize)> = gene_hits
+    let mut sorted: Vec<(u32, u32, u32, u32, usize, usize)> = gene_hits
         .into_iter()
-        .map(|(gi, (total, clean, mn, mx))| (gi, total, clean, mn, mx))
+        .map(|(gi, (total, clean, uniq, mn, mx))| (gi, total, clean, uniq, mn, mx))
         .collect();
     sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-    let (winning_gene, count, clean_count, g1_min, g1_max) = *sorted.first()?;
+    let (winning_gene, count, clean_count, g1_unique, g1_min, g1_max) = *sorted.first()?;
     // Gate on clean (non-blacklisted) k-mer count: blacklisted k-mers alone cannot
     // qualify a read, but they still contribute once clean evidence is sufficient.
     if clean_count < min_hits {
@@ -334,11 +390,11 @@ fn assign_gene(
     // is gated on min_hits. Setting gene2_idx at the 1-k-mer level means
     // n_spanning_reads correctly reflects all reads that cross the junction,
     // even when the anchor on one side is short (asymmetric junction coverage).
-    let (gene2_idx, gene2_kmer_count, g2_min, g2_max) = if sorted.len() >= 2 {
-        let (g2, c2, _clean2, mn2, mx2) = sorted[1];
-        (Some(g2), c2, mn2, mx2)
+    let (gene2_idx, gene2_kmer_count, g2_unique, g2_min, g2_max) = if sorted.len() >= 2 {
+        let (g2, c2, _clean2, u2, mn2, mx2) = sorted[1];
+        (Some(g2), c2, u2, mn2, mx2)
     } else {
-        (None, 0, 0, 0)
+        (None, 0, 0, 0, 0)
     };
 
     Some(ReadHit {
@@ -346,10 +402,12 @@ fn assign_gene(
         gene1_kmer_count: count,
         gene1_kmer_min: g1_min as u32,
         gene1_kmer_max: g1_max as u32,
+        gene1_unique_count: g1_unique,
         gene2_idx,
         gene2_kmer_count,
         gene2_kmer_min: g2_min as u32,
         gene2_kmer_max: g2_max as u32,
+        gene2_unique_count: g2_unique,
         mapq: 0,
         kmer_hits,
     })
@@ -509,6 +567,22 @@ struct FusionStats {
     /// Number of fragments (qnames) where at least one read showed a coherent
     /// A-block→B-block k-mer partition. Incremented once per fragment, not per read.
     n_coherent_fragments: u32,
+    /// Number of fragments with a genome-unique k-mer anchor on the higher-uniqueness
+    /// partner (the unique-anchor specificity filter). 0 unless that filter is active.
+    n_unique_anchored: u32,
+}
+
+/// Whether a read is anchored to `anchor_gene` by at least one genome-unique k-mer,
+/// i.e. the read genuinely contains that gene's unique sequence rather than merely a
+/// multi-copy repeat k-mer that also appears there. Drives the unique-anchor filter.
+fn read_unique_anchored(rh: &ReadHit, anchor_gene: u32) -> bool {
+    if rh.gene_idx == anchor_gene {
+        rh.gene1_unique_count >= 1
+    } else if rh.gene2_idx == Some(anchor_gene) {
+        rh.gene2_unique_count >= 1
+    } else {
+        false
+    }
 }
 
 /// Canonical `GENE_A::GENE_B` label for a normalized `(min_index, max_index)` pair.
@@ -1295,6 +1369,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         &args.index,
         k,
         args.max_kmer_copies,
+        args.min_unique_anchor_reads > 0,
         args.skip_version_check,
     )?;
 
@@ -1486,11 +1561,31 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             }
         }
 
+        // Unique-anchor filter: is this fragment anchored by a genome-unique k-mer on
+        // the higher-uniqueness partner? The anchor side is the gene of the pair with
+        // more genome-unique k-mers (a repeat partner cannot anchor, so we require it
+        // only on the side that can). Only evaluated when the filter is active.
+        let fragment_unique_anchored = index
+            .gene_unique_total
+            .as_ref()
+            .map(|tot| {
+                let anchor = if tot.get(ga as usize).copied().unwrap_or(0)
+                    >= tot.get(gb as usize).copied().unwrap_or(0)
+                {
+                    ga
+                } else {
+                    gb
+                };
+                read_hits.iter().any(|rh| read_unique_anchored(rh, anchor))
+            })
+            .unwrap_or(false);
+
         let entry = fusion_counts.entry(key).or_insert(FusionStats {
             count: 0,
             min_mapq: 255,
             n_spanning_reads: 0,
             n_coherent_fragments: 0,
+            n_unique_anchored: 0,
         });
         entry.count += 1;
         entry.min_mapq = entry.min_mapq.min(min_mq);
@@ -1498,7 +1593,18 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         if fragment_coherent {
             entry.n_coherent_fragments += 1;
         }
+        if fragment_unique_anchored {
+            entry.n_unique_anchored += 1;
+        }
     }
+
+    // Per-pair unique-anchored fragment counts, kept in a side map so the unique-anchor
+    // filter can tag records without adding an output column (v1). Empty when the filter
+    // is off (no gene_unique_total).
+    let unique_anchored_by_pair: HashMap<(u32, u32), u32> = fusion_counts
+        .iter()
+        .map(|(k, s)| (*k, s.n_unique_anchored))
+        .collect();
 
     let mut records: Vec<FusionRecord> = fusion_counts
         .into_iter()
@@ -2048,6 +2154,33 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         }
     }
 
+    // Unique-anchor specificity filter (applied last): a call stays filter="PASS" only if
+    // enough of its supporting fragments are anchored by a genome-unique k-mer on the
+    // higher-uniqueness partner. Repeat/segdup/pseudogene partners fabricate high-support
+    // calls in nearly every sample, but those lack a unique-anchored junction. Only touches
+    // calls still PASS (prior pon/chimera/samelocus tags win); tags, never drops.
+    if args.min_unique_anchor_reads > 0 {
+        let mut flagged = 0usize;
+        for r in records.iter_mut() {
+            if r.filter != "PASS" {
+                continue;
+            }
+            let n = unique_anchored_by_pair
+                .get(&r.pair_key)
+                .copied()
+                .unwrap_or(0);
+            if n < args.min_unique_anchor_reads {
+                r.filter = "no_unique_anchor".to_string();
+                flagged += 1;
+            }
+        }
+        info!(
+            flagged,
+            min_unique_anchor_reads = args.min_unique_anchor_reads,
+            "tagged fusions lacking a genome-unique anchor (filter=no_unique_anchor)"
+        );
+    }
+
     info!(n_fusions = records.len(), "fusion candidates identified");
     write_fusion_parquet(&records, &args.output)?;
     info!(output = %args.output.display(), "fusion candidates written");
@@ -2114,10 +2247,12 @@ mod tests {
             gene1_kmer_count: g1.0,
             gene1_kmer_min: g1.1,
             gene1_kmer_max: g1.2,
+            gene1_unique_count: 0,
             gene2_idx: g2_idx,
             gene2_kmer_count: g2_count,
             gene2_kmer_min: g2_min,
             gene2_kmer_max: g2_max,
+            gene2_unique_count: 0,
             mapq: 60,
             kmer_hits: Vec::new(),
         }
@@ -2155,6 +2290,55 @@ mod tests {
         assert_eq!(fusion_pair_label((1, 2), &names), "B::C");
     }
 
+    // ── unique-anchor filter predicate ──────────────────────────────────────
+    /// ReadHit with explicit unique counts on each side (gene1 = primary).
+    fn mk_read_uniq(g1: u32, g1_uniq: u32, g2: Option<u32>, g2_uniq: u32) -> ReadHit {
+        ReadHit {
+            gene_idx: g1,
+            gene1_kmer_count: 5,
+            gene1_kmer_min: 0,
+            gene1_kmer_max: 4,
+            gene1_unique_count: g1_uniq,
+            gene2_idx: g2,
+            gene2_kmer_count: if g2.is_some() { 5 } else { 0 },
+            gene2_kmer_min: 0,
+            gene2_kmer_max: 0,
+            gene2_unique_count: g2_uniq,
+            mapq: 60,
+            kmer_hits: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn unique_anchor_true_on_primary_side() {
+        // anchor gene 0 sits on gene1 with a unique k-mer → anchored.
+        let rh = mk_read_uniq(0, 2, Some(1), 0);
+        assert!(read_unique_anchored(&rh, 0));
+    }
+
+    #[test]
+    fn unique_anchor_false_when_zero_unique_kmers() {
+        // gene 0 is present but only via multi-copy (repeat) k-mers → not anchored.
+        let rh = mk_read_uniq(0, 0, Some(1), 0);
+        assert!(!read_unique_anchored(&rh, 0));
+    }
+
+    #[test]
+    fn unique_anchor_checks_the_gene2_side() {
+        // anchor gene 1 sits on the gene2 side with a unique k-mer → anchored.
+        let rh = mk_read_uniq(0, 0, Some(1), 3);
+        assert!(read_unique_anchored(&rh, 1));
+        // ...but gene 0 (primary) has no unique k-mers → not anchored on that side.
+        assert!(!read_unique_anchored(&rh, 0));
+    }
+
+    #[test]
+    fn unique_anchor_false_when_anchor_gene_absent() {
+        // anchor gene 7 is on neither side of the read.
+        let rh = mk_read_uniq(0, 5, Some(1), 5);
+        assert!(!read_unique_anchored(&rh, 7));
+    }
+
     // ── 5'->3' orientation inference ─────────────────────────────────────────
     fn mk_orient_index(strands: &[char], chroms: &[&str], has_strand: bool) -> FusionIndex {
         let n = strands.len();
@@ -2167,6 +2351,8 @@ mod tests {
             gene_tx_start: (0..n).map(|i| (i as i64) * 1000).collect(),
             gene_tx_end: (0..n).map(|i| (i as i64) * 1000 + 500).collect(),
             has_strand,
+            unique_kmers: None,
+            gene_unique_total: None,
         }
     }
 

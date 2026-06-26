@@ -1013,6 +1013,20 @@ pub struct FusionsArgs {
     #[arg(long, default_value_t = 20)]
     pub asym_anchor_mapq: u8,
 
+    /// Copy-aware unique-anchor specificity filter. When > 0, a fusion keeps filter="PASS"
+    /// only if at least this many supporting fragments are anchored by a GENOME-UNIQUE
+    /// (genome_copies==1) k-mer on the higher-uniqueness partner; otherwise it is tagged
+    /// filter="no_unique_anchor" (kept, not dropped). Targets repeat/segdup/pseudogene
+    /// partners (e.g. a gene in a macrosatellite): their multi-copy k-mers match reads
+    /// genome-wide and fabricate a high-support call in nearly every sample, but those
+    /// fabricated calls have no unique-anchored junction. The check is asymmetric — only the
+    /// higher-uniqueness partner (chosen per call from the index's per-gene unique-k-mer
+    /// counts) must be unique-anchored, since a repeat partner cannot be. Requires an index
+    /// built with --check-genome-uniqueness (a genome_copies column); errors otherwise.
+    /// Default: 0 (disabled).
+    #[arg(long, default_value_t = 0)]
+    pub min_unique_anchor_reads: u32,
+
     /// Optional k-mer blacklist Parquet produced by `geac experimental build-fusion-kmer-blacklist`.
     /// K-mers in this file are considered PoN-noisy: a read must have at least `--min-kmer-hits`
     /// *non-blacklisted* k-mer matches to contribute to fusion evidence. Blacklisted k-mers
