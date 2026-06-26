@@ -1719,9 +1719,41 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         let mut writer = bam::Writer::from_path(reads_output, &header, bam::Format::Bam)
             .with_context(|| format!("failed to create output BAM: {}", reads_output.display()))?;
 
+        // Progress + ETA for the second pass. It re-reads the whole BAM, so the
+        // total record count from pass 1 (`reads_processed`) is the denominator.
+        let pass2_total = reads_processed;
+        let pass2_start = std::time::Instant::now();
         let mut reads_written: u64 = 0;
+        let mut records_scanned: u64 = 0;
         for result in reader2.records() {
             let mut record = result.context("error reading BAM record in second pass")?;
+            records_scanned += 1;
+            if records_scanned.is_multiple_of(5_000_000) {
+                let secs = pass2_start.elapsed().as_secs_f64();
+                let frac = if pass2_total > 0 {
+                    (records_scanned as f64 / pass2_total as f64).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let eta_secs = if frac > 0.0 {
+                    secs * (1.0 - frac) / frac
+                } else {
+                    f64::INFINITY
+                };
+                let reads_per_sec = if secs > 0.0 {
+                    (records_scanned as f64 / secs) as u64
+                } else {
+                    0
+                };
+                info!(
+                    records_scanned,
+                    reads_written,
+                    percent = format!("{:.1}", frac * 100.0),
+                    eta = %format_duration(eta_secs),
+                    reads_per_sec,
+                    "second BAM pass progress (writing fusion reads)"
+                );
+            }
             if let Some(label) = fusion_qnames.get(record.qname()) {
                 // Tag the read with the fusion it supports, e.g. FX:Z:EWSR1::FLI1.
                 // Remove any pre-existing FX so re-runs don't duplicate the tag.
@@ -1840,13 +1872,32 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
                 None
             };
 
+        let detail_total = reads_processed;
+        let detail_start = std::time::Instant::now();
         let mut rows_written: u64 = 0;
         let mut detail_reads_processed: u64 = 0;
         for result in reader2.records() {
             let record = result.context("error reading BAM record in detail pass")?;
             detail_reads_processed += 1;
             if detail_reads_processed.is_multiple_of(5_000_000) {
-                info!(detail_reads_processed, rows_written, "detail pass progress");
+                let secs = detail_start.elapsed().as_secs_f64();
+                let frac = if detail_total > 0 {
+                    (detail_reads_processed as f64 / detail_total as f64).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let eta_secs = if frac > 0.0 {
+                    secs * (1.0 - frac) / frac
+                } else {
+                    f64::INFINITY
+                };
+                info!(
+                    detail_reads_processed,
+                    rows_written,
+                    percent = format!("{:.1}", frac * 100.0),
+                    eta = %format_duration(eta_secs),
+                    "detail pass progress"
+                );
             }
             let Some(fusion_label_str) = fusion_qnames.get(record.qname()) else {
                 continue;
