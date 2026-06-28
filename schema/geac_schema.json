@@ -331,7 +331,8 @@
         "partner_order"
       ],
       "optional_columns": [
-        "max_pon_supporting_reads"
+        "max_pon_supporting_reads",
+        "n_unique_anchored"
       ]
     }
   }

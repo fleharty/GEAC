@@ -459,8 +459,10 @@ repeat).
     - **Alternative scoring** to evaluate: soft copy-weighting (weight a supporting read by
       `1/genome_copies`) vs the current hard gate; how many unique k-mers should constitute an anchor
       (currently ≥1); a per-gene uniqueness floor below which *neither* side can anchor (soft-clip-only).
-    - **Expose `n_unique_anchored`** as an output column (v1 keeps it internal to avoid a schema bump)
-      — would also let a cohort sweep compute the whole precision/recall curve from a single run.
+    - **DONE — `n_unique_anchored` is now an output column** (`--emit-unique-anchor`, or implied by
+      `--min-unique-anchor-reads > 0`). A single run records the raw count so the whole
+      precision/recall curve is recoverable offline as `n_unique_anchored / supporting_reads`.
+      See `docs/DEVELOPMENT_LOG.md`.
 - [ ] **`genome_copies` saturates at 255 (`u8`).** `build-fusion-index` counts genome-wide k-mer
   occurrences in a `HashMap<u64, u8>`, so any k-mer occurring ≥255× is right-censored at 255 (the
   `kmers.genome_copies` column and `gene_stats.tsv` copy tiers all cap there). The `==1` unique

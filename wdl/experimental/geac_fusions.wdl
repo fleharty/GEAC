@@ -57,6 +57,10 @@ version 1.0
 ##                           higher-uniqueness partner; else tag filter="no_unique_anchor". Suppresses
 ##                           repeat/segdup/pseudogene-partner artifacts. Requires an index built with
 ##                           --check-genome-uniqueness (genome_copies column). Default: 0 (disabled).
+##   emit_unique_anchor    - (optional) emit the per-call n_unique_anchored count without filtering, so any
+##                           unique-anchor threshold can be applied offline (n_unique_anchored /
+##                           supporting_reads) from a single run. Implied when min_unique_anchor_reads > 0.
+##                           Requires a --check-genome-uniqueness index. Default: false.
 ##   comment_text          - (optional) free-text note echoed straight to the data table (as the
 ##                           `comment` output); not processed by geac, never written to the Parquet/TSV
 ##   docker_image          - geac Docker image, e.g. ghcr.io/fleharty/geac:latest
@@ -103,6 +107,7 @@ workflow GeacFusions {
         Float    asym_anchor_std        = 25.0
         Int      asym_anchor_mapq       = 20
         Int      min_unique_anchor_reads = 0
+        Boolean  emit_unique_anchor      = false
 
         String?  comment_text
 
@@ -139,6 +144,7 @@ workflow GeacFusions {
             asym_anchor_std            = asym_anchor_std,
             asym_anchor_mapq           = asym_anchor_mapq,
             min_unique_anchor_reads    = min_unique_anchor_reads,
+            emit_unique_anchor         = emit_unique_anchor,
             docker_image           = docker_image,
             memory_gb              = memory_gb,
             disk_gb                = disk_gb,
@@ -186,6 +192,7 @@ task Fusions {
         Float    asym_anchor_std
         Int      asym_anchor_mapq
         Int      min_unique_anchor_reads
+        Boolean  emit_unique_anchor
 
         String docker_image
         Int    memory_gb
@@ -236,7 +243,8 @@ task Fusions {
             ~{"--asym-anchor-reads " + asym_anchor_reads} \
             --asym-anchor-std        ~{asym_anchor_std} \
             --asym-anchor-mapq       ~{asym_anchor_mapq} \
-            --min-unique-anchor-reads ~{min_unique_anchor_reads}
+            --min-unique-anchor-reads ~{min_unique_anchor_reads} \
+            ~{true="--emit-unique-anchor" false="" emit_unique_anchor}
     >>>
 
     output {

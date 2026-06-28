@@ -1020,15 +1020,19 @@ fn write_fusion_tsv(records: &[FusionRecord], output: &Path) -> Result<()> {
     let file = std::fs::File::create(output)
         .with_context(|| format!("failed to create TSV: {}", output.display()))?;
     let mut w = BufWriter::new(file);
-    writeln!(w, "sample_id\tgene_a\tgene_b\tchrom_a\tchrom_b\tsupporting_reads\tmin_mapq\tn_spanning_reads\tn_coherent_fragments\tn_pon_samples\tpon_total_samples\tmax_pon_supporting_reads\tfilter\tpartner_order")?;
+    writeln!(w, "sample_id\tgene_a\tgene_b\tchrom_a\tchrom_b\tsupporting_reads\tmin_mapq\tn_spanning_reads\tn_coherent_fragments\tn_pon_samples\tpon_total_samples\tmax_pon_supporting_reads\tfilter\tpartner_order\tn_unique_anchored")?;
     for r in records {
         let max_pon = r
             .max_pon_supporting_reads
             .map(|v| v.to_string())
             .unwrap_or_else(|| "NA".to_string());
+        let n_unique = r
+            .n_unique_anchored
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "NA".to_string());
         writeln!(
             w,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             r.sample_id,
             r.gene_a,
             r.gene_b,
@@ -1042,7 +1046,8 @@ fn write_fusion_tsv(records: &[FusionRecord], output: &Path) -> Result<()> {
             r.pon_total_samples,
             max_pon,
             r.filter,
-            r.partner_order
+            r.partner_order,
+            n_unique
         )?;
     }
     Ok(())
@@ -1082,6 +1087,14 @@ struct FusionRecord {
     // could not be determined and partners fall back to gene-index order. Distinguishes a
     // biologically meaningful order from an arbitrary one for downstream/clinical readers.
     partner_order: String,
+    // Supporting fragments anchored by a genome-unique (genome_copies==1) k-mer on the
+    // higher-uniqueness partner — the raw evidence behind the unique-anchor filter. The
+    // denominator is `supporting_reads`, so n_unique_anchored / supporting_reads is the
+    // unique-anchored fraction; any threshold can be applied offline without re-running.
+    // Some(_) only when uniqueness tracking ran (--min-unique-anchor-reads > 0 or
+    // --emit-unique-anchor with a --check-genome-uniqueness index); None ("NA") otherwise,
+    // so a strict/untracked run is not misread as "0 unique anchors".
+    n_unique_anchored: Option<i32>,
 }
 
 fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
@@ -1100,6 +1113,7 @@ fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
         Field::new("max_pon_supporting_reads", DataType::Int32, true),
         Field::new("filter", DataType::Utf8, false),
         Field::new("partner_order", DataType::Utf8, false),
+        Field::new("n_unique_anchored", DataType::Int32, true),
     ]));
 
     let file = std::fs::File::create(output)
@@ -1189,6 +1203,12 @@ fn write_fusion_parquet(records: &[FusionRecord], output: &Path) -> Result<()> {
                 records
                     .iter()
                     .map(|r| r.partner_order.as_str())
+                    .collect::<Vec<_>>(),
+            )) as ArrayRef,
+            Arc::new(Int32Array::from(
+                records
+                    .iter()
+                    .map(|r| r.n_unique_anchored)
                     .collect::<Vec<_>>(),
             )) as ArrayRef,
         ],
@@ -1369,7 +1389,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         &args.index,
         k,
         args.max_kmer_copies,
-        args.min_unique_anchor_reads > 0,
+        args.min_unique_anchor_reads > 0 || args.emit_unique_anchor,
         args.skip_version_check,
     )?;
 
@@ -1598,13 +1618,9 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
         }
     }
 
-    // Per-pair unique-anchored fragment counts, kept in a side map so the unique-anchor
-    // filter can tag records without adding an output column (v1). Empty when the filter
-    // is off (no gene_unique_total).
-    let unique_anchored_by_pair: HashMap<(u32, u32), u32> = fusion_counts
-        .iter()
-        .map(|(k, s)| (*k, s.n_unique_anchored))
-        .collect();
+    // Was unique-anchor tracking active this run? Drives whether n_unique_anchored is a
+    // real count or NA (the index carries genome_copies and we built per-gene unique totals).
+    let unique_tracked = index.gene_unique_total.is_some();
 
     let mut records: Vec<FusionRecord> = fusion_counts
         .into_iter()
@@ -1626,6 +1642,7 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             filter: "PASS".to_string(),
             // Set in the 5'->3' reorientation pass once breakpoint stats are known.
             partner_order: "index".to_string(),
+            n_unique_anchored: unique_tracked.then_some(s.n_unique_anchored as i32),
         })
         .collect();
 
@@ -2216,10 +2233,8 @@ pub fn detect_fusions(args: &FusionsArgs) -> Result<()> {
             if r.filter != "PASS" {
                 continue;
             }
-            let n = unique_anchored_by_pair
-                .get(&r.pair_key)
-                .copied()
-                .unwrap_or(0);
+            // unique_tracked is guaranteed here (min_unique_anchor_reads > 0 enables it).
+            let n = r.n_unique_anchored.unwrap_or(0).max(0) as u32;
             if n < args.min_unique_anchor_reads {
                 r.filter = "no_unique_anchor".to_string();
                 flagged += 1;

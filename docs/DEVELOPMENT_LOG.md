@@ -1722,6 +1722,28 @@ is the *count*, which scales with depth (hence the dose-response, and hence a de
 threshold is the right next step).
 
 Still open (see TODO): a depth-relative threshold variant, pairing with unique-side soft-clip for
-low-input sensitivity, a full-panel safety check (validation so far is a 2-gene index), soft
-copy-weighting vs the hard gate, and promoting `n_unique_anchored` to an output column. Also filed:
-`genome_copies` saturates at `u8` (255) in `build-fusion-index` — widen to `u16`/`u32`.
+low-input sensitivity, a full-panel safety check (validation so far is a 2-gene index), and soft
+copy-weighting vs the hard gate. Also filed: `genome_copies` saturates at `u8` (255) in
+`build-fusion-index` — widen to `u16`/`u32`.
+
+### `n_unique_anchored` output column + `--emit-unique-anchor` (follow-up)
+
+Promoted the previously-internal per-call unique-anchored fragment count to an output column
+(`n_unique_anchored`, appended to the fusions TSV/Parquet). v1 kept it in a side map to avoid a
+schema bump; this exposes it so the **raw evidence is recorded once** and any unique-anchor
+threshold is recoverable offline as `n_unique_anchored / supporting_reads` — no need to re-run the
+caller once per candidate threshold. That turns a cohort N-sweep from N runs into one, which also
+means a filter sweep can run on **existing evidence BAMs** instead of re-processing full input BAMs.
+
+- New flag `--emit-unique-anchor` (default false) turns on the same per-k-mer uniqueness tracking as
+  the filter and populates the column **without tagging anything**; it's implied when
+  `--min-unique-anchor-reads > 0`. Both still require a `--check-genome-uniqueness` index.
+- The column is `Option<i32>`: a real count when tracking ran, else **NULL/`NA`** — so a strict or
+  untracked run is never misread as "0 unique anchors". Denominator is `supporting_reads`.
+- The v1 side map (`unique_anchored_by_pair`) was removed; the tag pass now reads the record field.
+- Additive schema: `n_unique_anchored` is an *optional* column in `geac_schema.json`, so pre-0.4.60
+  fusion Parquets still validate. WDL passthrough (`emit_unique_anchor`) added; `EXPERIMENTAL.md`
+  updated (also corrected the documented column list, which had omitted `partner_order`).
+- Verified end-to-end on a copy-labeled CIC/DUX4 index + E evidence BAM: the column populates within
+  `[0, supporting_reads]` with the flag, and is `NA` without it even when the index is copy-labeled
+  (confirming tracking is gated on the flag, not on the index).

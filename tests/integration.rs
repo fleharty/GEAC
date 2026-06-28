@@ -2930,6 +2930,15 @@ fn fusions_label_ordering_consistent_across_outputs() {
     let gene_b = parquet_query_str(&out, "gene_b", "supporting_reads >= 1");
     assert_eq!((gene_a.as_str(), gene_b.as_str()), ("BCR", "ABL1"));
 
+    // n_unique_anchored column is always present (additive schema) but NULL/NA when
+    // uniqueness tracking is off (no --min-unique-anchor-reads / --emit-unique-anchor,
+    // and this index has no genome_copies) — never a misleading 0.
+    assert_eq!(
+        parquet_query_i64(&out, "count(*)", "n_unique_anchored IS NULL"),
+        1,
+        "n_unique_anchored must be NULL when uniqueness tracking is off"
+    );
+
     // Every FX tag in the reads BAM must equal "gene_a::gene_b" from the Parquet —
     // the cross-file consistency guarantee.
     let expected_fx = format!("{gene_a}::{gene_b}");

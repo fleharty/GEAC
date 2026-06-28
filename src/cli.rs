@@ -1027,6 +1027,17 @@ pub struct FusionsArgs {
     #[arg(long, default_value_t = 0)]
     pub min_unique_anchor_reads: u32,
 
+    /// Emit the per-call `n_unique_anchored` count (fragments anchored by a genome-unique
+    /// k-mer on the higher-uniqueness partner) without applying the unique-anchor filter.
+    /// Turns on the same per-k-mer uniqueness tracking as --min-unique-anchor-reads (so it
+    /// also requires an index built with --check-genome-uniqueness), populates the
+    /// `n_unique_anchored` output column, but tags nothing. Lets a single run record the raw
+    /// evidence so any unique-anchor threshold can be applied offline (n_unique_anchored /
+    /// supporting_reads), instead of re-running the caller once per candidate threshold.
+    /// Implied when --min-unique-anchor-reads > 0. Default: false.
+    #[arg(long, default_value_t = false)]
+    pub emit_unique_anchor: bool,
+
     /// Optional k-mer blacklist Parquet produced by `geac experimental build-fusion-kmer-blacklist`.
     /// K-mers in this file are considered PoN-noisy: a read must have at least `--min-kmer-hits`
     /// *non-blacklisted* k-mer matches to contribute to fusion evidence. Blacklisted k-mers
